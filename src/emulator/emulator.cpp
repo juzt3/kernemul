@@ -42,7 +42,16 @@ emulator_err_t emulator_t::run_at(const address_type start_address, const addres
 
 emulator_err_t emulator_t::map_memory(const address_type address, const size_type size, const protection_type protection) const
 {
-	return uc_mem_map(engine_, address, size, protection);
+	const size_type aligned_size = align_memory_map_size(size);
+
+	return uc_mem_map(engine_, address, aligned_size, protection);
+}
+
+emulator_err_t emulator_t::unmap_memory(const address_type address, const size_type size) const
+{
+	const size_type aligned_size = align_memory_map_size(size);
+
+	return uc_mem_unmap(engine_, address, aligned_size);
 }
 
 emulator_err_t emulator_t::read_memory(const address_type address, void* const buffer, const size_type size) const
@@ -58,6 +67,26 @@ emulator_err_t emulator_t::write_memory(const address_type address, const void* 
 emulator_err_t emulator_t::write_memory(const address_type address, const std::span<const std::uint8_t> buffer) const
 {
 	return write_memory(address, buffer.data(), buffer.size());
+}
+
+emulator_err_t emulator_t::load_memory(const address_type address, const std::span<const std::uint8_t> buffer,
+                                       const protection_type protection) const
+{
+	emulator_err_t error = map_memory(address, buffer.size(), protection);
+
+	if (!error)
+	{
+		return error;
+	}
+
+	error = write_memory(address, buffer);
+
+	if (!error)
+	{
+		(void)unmap_memory(address, buffer.size());
+	}
+
+	return error;
 }
 
 emulator_err_t emulator_t::read_register(const emulator_reg_t reg, void* const value) const
