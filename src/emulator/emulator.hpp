@@ -1,6 +1,8 @@
 #pragma once
 #include <unicorn/unicorn.h>
-#include <cstdint>
+#include <functional>
+#include <expected>
+#include <memory>
 #include <string>
 #include <span>
 
@@ -21,6 +23,23 @@ protected:
 	value_type reg_ = 0;
 };
 
+class emulator_instruction_t
+{
+public:
+	using value_type = std::int32_t;
+
+	constexpr explicit emulator_instruction_t(const value_type instruction)
+			:	instruction_(instruction) { }
+
+	[[nodiscard]] constexpr value_type value() const
+	{
+		return instruction_;
+	}
+
+protected:
+	value_type instruction_ = 0;
+};
+
 class emulator_err_t
 {
 public:
@@ -34,7 +53,7 @@ public:
 
 	explicit operator bool() const
 	{
-		return code_ == UC_ERR_OK;
+		return code_ != UC_ERR_OK;
 	}
 
 	void throw_if(std::string_view info) const;
@@ -50,6 +69,7 @@ public:
 	using size_type = std::size_t;
 	using protection_type = std::int32_t;
 
+	static constexpr address_type thread_return_address = 0xF0000;
 	static constexpr size_type memory_mapping_alignment = 0x1000;
 
 	emulator_t();
@@ -81,7 +101,10 @@ protected:
 	uc_engine* engine_ = nullptr;
 };
 
-namespace x86::reg
+namespace x86
 {
-	constexpr emulator_reg_t rsp(UC_X86_REG_RSP);
+	namespace reg
+	{
+		constexpr emulator_reg_t rsp(UC_X86_REG_RSP);
+	}
 }

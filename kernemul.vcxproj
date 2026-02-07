@@ -70,6 +70,12 @@
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <IncludePath>$(ProjectDir)ext;$(IncludePath)</IncludePath>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <IncludePath>$(ProjectDir)ext;$(IncludePath)</IncludePath>
+  </PropertyGroup>
   <PropertyGroup Label="Vcpkg">
     <VcpkgEnableManifest>true</VcpkgEnableManifest>
   </PropertyGroup>
@@ -111,9 +117,9 @@
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>_DEBUG;_CONSOLE;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <LanguageStandard>stdcpp20</LanguageStandard>
+      <LanguageStandard>stdcpplatest</LanguageStandard>
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
@@ -128,7 +134,7 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>NDEBUG;_CONSOLE;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
@@ -142,10 +148,33 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="ext\portable_executable\data_directory.cpp" />
+    <ClCompile Include="ext\portable_executable\dos_header.cpp" />
+    <ClCompile Include="ext\portable_executable\exception_directory.cpp" />
+    <ClCompile Include="ext\portable_executable\export_directory.cpp" />
+    <ClCompile Include="ext\portable_executable\file.cpp" />
+    <ClCompile Include="ext\portable_executable\image.cpp" />
+    <ClCompile Include="ext\portable_executable\imports_directory.cpp" />
+    <ClCompile Include="ext\portable_executable\nt_headers.cpp" />
+    <ClCompile Include="ext\portable_executable\relocations_directory.cpp" />
+    <ClCompile Include="ext\portable_executable\section_header.cpp" />
     <ClCompile Include="src\emulator\emulator.cpp" />
     <ClCompile Include="src\main.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="ext\portable_executable\data_directory.hpp" />
+    <ClInclude Include="ext\portable_executable\debug_directory.hpp" />
+    <ClInclude Include="ext\portable_executable\dos_header.hpp" />
+    <ClInclude Include="ext\portable_executable\exception_directory.hpp" />
+    <ClInclude Include="ext\portable_executable\export_directory.hpp" />
+    <ClInclude Include="ext\portable_executable\file.hpp" />
+    <ClInclude Include="ext\portable_executable\file_header.hpp" />
+    <ClInclude Include="ext\portable_executable\image.hpp" />
+    <ClInclude Include="ext\portable_executable\imports_directory.hpp" />
+    <ClInclude Include="ext\portable_executable\nt_headers.hpp" />
+    <ClInclude Include="ext\portable_executable\optional_header.hpp" />
+    <ClInclude Include="ext\portable_executable\relocations_directory.hpp" />
+    <ClInclude Include="ext\portable_executable\section_header.hpp" />
     <ClInclude Include="src\emulator\emulator.hpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

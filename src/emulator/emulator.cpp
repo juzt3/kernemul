@@ -4,7 +4,7 @@
 
 void emulator_err_t::throw_if(std::string_view info) const
 {
-	if (!*this)
+	if (*this)
 	{
 		throw std::runtime_error(std::format("{}: '{}'", info, to_string()));
 	}
@@ -19,7 +19,7 @@ emulator_t::emulator_t()
 	constexpr address_type stack_base_address = 0x10000;
 	constexpr size_type stack_size = 0x10000;
 
-	constexpr address_type starting_rsp_value = stack_base_address + stack_size;
+	constexpr address_type starting_rsp_value = stack_base_address + stack_size - 8;
 
 	error = map_memory(stack_base_address, stack_size, UC_PROT_READ | UC_PROT_WRITE);
 
@@ -28,6 +28,10 @@ emulator_t::emulator_t()
 	error = write_register(x86::reg::rsp, &starting_rsp_value);
 
 	error.throw_if("unable to set stack pointer");
+
+	error = write_memory(starting_rsp_value, &thread_return_address, sizeof(thread_return_address));
+
+	error.throw_if("unable to set return address");
 }
 
 emulator_t::~emulator_t()
@@ -74,14 +78,14 @@ emulator_err_t emulator_t::load_memory(const address_type address, const std::sp
 {
 	emulator_err_t error = map_memory(address, buffer.size(), protection);
 
-	if (!error)
+	if (error)
 	{
 		return error;
 	}
 
 	error = write_memory(address, buffer);
 
-	if (!error)
+	if (error)
 	{
 		(void)unmap_memory(address, buffer.size());
 	}
