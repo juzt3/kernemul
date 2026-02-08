@@ -29,7 +29,7 @@ std::int32_t main()
 
 		const emulator_t::address_type code_address = nt_headers->optional_header.image_base;
 		const emulator_t::address_type entry_point_address = code_address + nt_headers->optional_header.address_of_entry_point;
-	
+
 		const auto image_start = pe_image->as<const std::uint8_t*>();
 		const std::span image_buffer(image_start, image_start + nt_headers->optional_header.size_of_image);
 
@@ -48,7 +48,37 @@ std::int32_t main()
 			}
 		);
 
-		error.throw_if("hook attach");
+		error.throw_if("instruction hook attach");
+
+		error = emulator->hook_basic_block(
+			[](const emulator_t& ee)
+			{
+				std::uint64_t rip = 0;
+
+				(void)ee.read_program_counter(&rip);
+
+				spdlog::info("basic block executed at 0x{:X}", rip);
+			}
+		);
+
+		error.throw_if("basic block hook attach");
+
+		error = emulator->hook_code(
+			[](const emulator_t& ee)
+			{
+				std::uint64_t rax = 0;
+				std::uint64_t rip = 0;
+
+				(void)ee.read_register(x86::reg::rax, &rax);
+				(void)ee.read_program_counter(&rip);
+
+				spdlog::info("rax: 0x{:X} at 0x{:X}", rax, rip);
+			},
+			0x140001000,
+			0x14000103D
+		);
+
+		error.throw_if("code hook attach");
 
 		error = emulator->run_at(entry_point_address, emulator_t::thread_return_address);
 

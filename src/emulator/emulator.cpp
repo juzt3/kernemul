@@ -108,7 +108,32 @@ emulator_err_t emulator_t::read_program_counter(void* const value) const
 	return read_register(x86::reg::rip, value);
 }
 
-static std::int32_t uc_wrapper_insn_hook([[maybe_unused]] const uc_engine* const engine, const emulator_hook_t::info_t* const hook_info)
+static std::int32_t uc_wrapper_insn_hook([[maybe_unused]] const uc_engine* const engine,
+                                         const emulator_hook_t::info_t* const hook_info)
+{
+	emulator_t& emulator = *hook_info->emulator;
+
+	hook_info->callback(emulator);
+
+	return 0;
+}
+
+static std::int32_t uc_wrapper_bb_hook([[maybe_unused]] const uc_engine* const engine,
+                                       [[maybe_unused]] const std::uint64_t address,
+                                       [[maybe_unused]] const std::size_t size,
+                                       const emulator_hook_t::info_t* const hook_info)
+{
+	emulator_t& emulator = *hook_info->emulator;
+
+	hook_info->callback(emulator);
+
+	return 0;
+}
+
+static std::int32_t uc_wrapper_code_hook([[maybe_unused]] const uc_engine* const engine,
+                                         [[maybe_unused]] const std::uint64_t address,
+                                         [[maybe_unused]] const std::size_t size,
+                                         const emulator_hook_t::info_t* const hook_info)
 {
 	emulator_t& emulator = *hook_info->emulator;
 
@@ -118,21 +143,20 @@ static std::int32_t uc_wrapper_insn_hook([[maybe_unused]] const uc_engine* const
 }
 
 emulator_err_t emulator_t::hook_instruction(const emulator_instruction_t instruction,
-                                            const emulator_hook_t::callback_type& callback)
+                                            const emulator_hook_t::callback_type& callback,
+                                            const address_type start_address, const address_type end_address)
 {
-	uc_hook hook = 0;
+	return place_uc_hook(UC_HOOK_INSN, callback, uc_wrapper_insn_hook, start_address, end_address, instruction.value());
+}
 
-	constexpr address_type begin = 0;
-	constexpr address_type end = std::numeric_limits<address_type>::max();
+emulator_err_t emulator_t::hook_basic_block(const emulator_hook_t::callback_type& callback,
+                                            const address_type start_address, const address_type end_address)
+{
+	return place_uc_hook(UC_HOOK_BLOCK, callback, uc_wrapper_bb_hook, start_address, end_address);
+}
 
-	auto hook_info = std::make_unique<emulator_hook_t::info_t>(shared_from_this(), callback);
-	
-	const emulator_err_t error = uc_hook_add(engine_, &hook, UC_HOOK_INSN, reinterpret_cast<void*>(uc_wrapper_insn_hook), hook_info.get(), begin, end, instruction.value());
-
-	if (!error)
-	{
-		hooks_.emplace_back(hook, std::move(hook_info));
-	}
-
-	return error;
+emulator_err_t emulator_t::hook_code(const emulator_hook_t::callback_type& callback,
+                                           const address_type start_address, const address_type end_address)
+{
+	return place_uc_hook(UC_HOOK_CODE, callback, uc_wrapper_code_hook, start_address, end_address);
 }

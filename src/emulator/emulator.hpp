@@ -91,6 +91,9 @@ public:
 	using size_type = std::size_t;
 	using protection_type = std::int32_t;
 
+	static constexpr address_type default_start_address = 0;
+	static constexpr address_type default_end_address = std::numeric_limits<address_type>::max();
+
 	static constexpr address_type thread_return_address = 0xF0000;
 	static constexpr size_type memory_mapping_alignment = 0x1000;
 
@@ -114,9 +117,41 @@ public:
 
 	[[nodiscard]] emulator_err_t read_program_counter(void* value) const;
 
-	[[nodiscard]] emulator_err_t hook_instruction(emulator_instruction_t instruction, const emulator_hook_t::callback_type& callback);
+	[[nodiscard]] emulator_err_t hook_instruction(emulator_instruction_t instruction,
+	                                              const emulator_hook_t::callback_type& callback,
+	                                              address_type start_address = default_start_address,
+	                                              address_type end_address = default_end_address);
+
+	[[nodiscard]] emulator_err_t hook_basic_block(const emulator_hook_t::callback_type& callback,
+	                                              address_type start_address = default_start_address,
+	                                              address_type end_address = default_end_address);
+
+	[[nodiscard]] emulator_err_t hook_code(const emulator_hook_t::callback_type& callback,
+	                                       address_type start_address = default_start_address,
+	                                       address_type end_address = default_end_address);
 
 protected:
+	template <class ...Args>
+	[[nodiscard]] emulator_err_t place_uc_hook(const uc_hook_type hook_type,
+	                                           const emulator_hook_t::callback_type& callback, void* const uc_wrapper,
+	                                           const address_type start_address, const address_type end_address,
+	                                           Args... arguments)
+	{
+		uc_hook hook = 0;
+
+		auto hook_info = std::make_unique<emulator_hook_t::info_t>(shared_from_this(), callback);
+
+		const emulator_err_t error = uc_hook_add(engine_, &hook, hook_type, uc_wrapper, hook_info.get(), start_address,
+		                                         end_address, arguments...);
+
+		if (!error)
+		{
+			hooks_.emplace_back(hook, std::move(hook_info));
+		}
+
+		return error;
+	}
+
 	static size_type align_memory_map_size(const size_type size)
 	{
 		const size_type excess = size % memory_mapping_alignment;
@@ -135,14 +170,21 @@ namespace x86
 	{
 		constexpr emulator_reg_t rsp(UC_X86_REG_RSP);
 		constexpr emulator_reg_t rip(UC_X86_REG_RIP);
+
+		constexpr emulator_reg_t rax(UC_X86_REG_RAX);
 	}
 
 	namespace instruction
 	{
 		constexpr emulator_instruction_t mov(UC_X86_INS_MOV);
 		constexpr emulator_instruction_t add(UC_X86_INS_ADD);
+
 		constexpr emulator_instruction_t syscall(UC_X86_INS_SYSCALL);
+		constexpr emulator_instruction_t sysenter(UC_X86_INS_SYSENTER);
+
 		constexpr emulator_instruction_t cpuid(UC_X86_INS_CPUID);
+
 		constexpr emulator_instruction_t rdtsc(UC_X86_INS_RDTSC);
+		constexpr emulator_instruction_t rdtscp(UC_X86_INS_RDTSCP);
 	}
 }
