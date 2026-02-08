@@ -113,33 +113,27 @@ static std::int32_t uc_wrapper_insn_hook([[maybe_unused]] const uc_engine* const
 {
 	emulator_t& emulator = *hook_info->emulator;
 
-	hook_info->callback(emulator);
-
-	return 0;
+	return std::get<emulator_hook_t::instruction_callback>(hook_info->callback)(emulator);
 }
 
-static std::int32_t uc_wrapper_bb_hook([[maybe_unused]] const uc_engine* const engine,
-                                       [[maybe_unused]] const std::uint64_t address,
-                                       [[maybe_unused]] const std::size_t size,
-                                       const emulator_hook_t::info_t* const hook_info)
+static void uc_wrapper_bb_hook([[maybe_unused]] const uc_engine* const engine,
+                               const std::uint64_t address,
+                               [[maybe_unused]] const std::size_t size,
+                               const emulator_hook_t::info_t* const hook_info)
 {
 	emulator_t& emulator = *hook_info->emulator;
 
-	hook_info->callback(emulator);
-
-	return 0;
+	std::get<emulator_hook_t::basic_block_callback>(hook_info->callback)(emulator, address);
 }
 
-static std::int32_t uc_wrapper_code_hook([[maybe_unused]] const uc_engine* const engine,
-                                         [[maybe_unused]] const std::uint64_t address,
-                                         [[maybe_unused]] const std::size_t size,
-                                         const emulator_hook_t::info_t* const hook_info)
+static void uc_wrapper_code_hook([[maybe_unused]] const uc_engine* const engine,
+                                 [[maybe_unused]] const std::uint64_t address,
+                                 [[maybe_unused]] const std::size_t size,
+                                 const emulator_hook_t::info_t* const hook_info)
 {
 	emulator_t& emulator = *hook_info->emulator;
 
-	hook_info->callback(emulator);
-
-	return 0;
+	std::get<emulator_hook_t::code_callback>(hook_info->callback)(emulator, address);
 }
 
 emulator_err_t emulator_t::hook_instruction(const emulator_instruction_t instruction,

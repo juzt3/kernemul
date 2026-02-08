@@ -2,6 +2,7 @@
 #include <unicorn/unicorn.h>
 #include <functional>
 #include <expected>
+#include <variant>
 #include <memory>
 #include <string>
 #include <span>
@@ -11,7 +12,11 @@ class emulator_t;
 class emulator_hook_t
 {
 public:
-	using callback_type = std::function<void(emulator_t&)>;
+	using basic_block_callback = std::function<void(emulator_t&, std::uint64_t)>;
+	using code_callback = std::function<void(emulator_t&, std::uint64_t)>;
+	using instruction_callback = std::function<bool(emulator_t&)>;
+
+	using callback_type = std::variant<basic_block_callback, instruction_callback>;
 	using native_type = uc_hook;
 
 	struct info_t

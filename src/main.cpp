@@ -38,41 +38,39 @@ std::int32_t main()
 		error.throw_if("memory loading");
 
 		error = emulator->hook_instruction(x86::instruction::cpuid,
-			[](const emulator_t& ee)
+			[](const emulator_t& ee) -> bool
 			{
 				std::uint64_t rip = 0;
+				constexpr std::uint64_t new_rax = 0x1337;
 
 				(void)ee.read_program_counter(&rip);
+				(void)ee.write_register(x86::reg::rax, &new_rax);
 
 				spdlog::info("cpuid executed at 0x{:X}", rip);
+
+				return true;
 			}
 		);
 
 		error.throw_if("instruction hook attach");
 
 		error = emulator->hook_basic_block(
-			[](const emulator_t& ee)
+			[]([[maybe_unused]] const emulator_t& ee, const std::uint64_t address)
 			{
-				std::uint64_t rip = 0;
-
-				(void)ee.read_program_counter(&rip);
-
-				spdlog::info("basic block executed at 0x{:X}", rip);
+				spdlog::info("basic block executed at 0x{:X}", address);
 			}
 		);
 
 		error.throw_if("basic block hook attach");
 
 		error = emulator->hook_code(
-			[](const emulator_t& ee)
+			[](const emulator_t& ee, const std::uint64_t address)
 			{
 				std::uint64_t rax = 0;
-				std::uint64_t rip = 0;
 
 				(void)ee.read_register(x86::reg::rax, &rax);
-				(void)ee.read_program_counter(&rip);
 
-				spdlog::info("rax: 0x{:X} at 0x{:X}", rax, rip);
+				spdlog::info("rax: 0x{:X} at 0x{:X}", rax, address);
 			},
 			0x140001000,
 			0x14000103D
