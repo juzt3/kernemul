@@ -102,3 +102,37 @@ emulator_err_t emulator_t::write_register(const emulator_reg_t reg, const void* 
 {
 	return uc_reg_write(engine_, reg.value(), value);
 }
+
+emulator_err_t emulator_t::read_program_counter(void* const value) const
+{
+	return read_register(x86::reg::rip, value);
+}
+
+static std::int32_t uc_wrapper_insn_hook([[maybe_unused]] const uc_engine* const engine, const emulator_hook_t::info_t* const hook_info)
+{
+	emulator_t& emulator = *hook_info->emulator;
+
+	hook_info->callback(emulator);
+
+	return 0;
+}
+
+emulator_err_t emulator_t::hook_instruction(const emulator_instruction_t instruction,
+                                            const emulator_hook_t::callback_type& callback)
+{
+	uc_hook hook = 0;
+
+	constexpr address_type begin = 0;
+	constexpr address_type end = std::numeric_limits<address_type>::max();
+
+	auto hook_info = std::make_unique<emulator_hook_t::info_t>(shared_from_this(), callback);
+	
+	const emulator_err_t error = uc_hook_add(engine_, &hook, UC_HOOK_INSN, reinterpret_cast<void*>(uc_wrapper_insn_hook), hook_info.get(), begin, end, instruction.value());
+
+	if (!error)
+	{
+		hooks_.emplace_back(hook, std::move(hook_info));
+	}
+
+	return error;
+}

@@ -6,6 +6,28 @@
 #include <string>
 #include <span>
 
+class emulator_t;
+
+class emulator_hook_t
+{
+public:
+	using callback_type = std::function<void(emulator_t&)>;
+	using native_type = uc_hook;
+
+	struct info_t
+	{
+		std::shared_ptr<emulator_t> emulator;
+		callback_type callback;
+	};
+
+	explicit emulator_hook_t(const native_type hook, std::unique_ptr<info_t> info)
+			:	hook_(hook), info_(std::move(info)) { }
+
+protected:
+	native_type hook_ = 0;
+	std::unique_ptr<info_t> info_ = { };
+};
+
 class emulator_reg_t
 {
 public:
@@ -62,7 +84,7 @@ protected:
 	uc_err code_ = UC_ERR_OK;
 };
 
-class emulator_t
+class emulator_t : public std::enable_shared_from_this<emulator_t>
 {
 public:
 	using address_type = std::uintptr_t;
@@ -90,6 +112,10 @@ public:
 	[[nodiscard]] emulator_err_t read_register(emulator_reg_t reg, void* value) const;
 	[[nodiscard]] emulator_err_t write_register(emulator_reg_t reg, const void* value) const;
 
+	[[nodiscard]] emulator_err_t read_program_counter(void* value) const;
+
+	[[nodiscard]] emulator_err_t hook_instruction(emulator_instruction_t instruction, const emulator_hook_t::callback_type& callback);
+
 protected:
 	static size_type align_memory_map_size(const size_type size)
 	{
@@ -99,6 +125,8 @@ protected:
 	}
 
 	uc_engine* engine_ = nullptr;
+
+	std::vector<emulator_hook_t> hooks_;
 };
 
 namespace x86
@@ -106,5 +134,15 @@ namespace x86
 	namespace reg
 	{
 		constexpr emulator_reg_t rsp(UC_X86_REG_RSP);
+		constexpr emulator_reg_t rip(UC_X86_REG_RIP);
+	}
+
+	namespace instruction
+	{
+		constexpr emulator_instruction_t mov(UC_X86_INS_MOV);
+		constexpr emulator_instruction_t add(UC_X86_INS_ADD);
+		constexpr emulator_instruction_t syscall(UC_X86_INS_SYSCALL);
+		constexpr emulator_instruction_t cpuid(UC_X86_INS_CPUID);
+		constexpr emulator_instruction_t rdtsc(UC_X86_INS_RDTSC);
 	}
 }
