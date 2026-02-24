@@ -126,6 +126,7 @@
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalDependencies>WinHvPlatform.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -145,9 +146,16 @@
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalDependencies>WinHvPlatform.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="ext\hypermulator\arch\decoder.cpp" />
+    <ClCompile Include="ext\hypermulator\emulator\emulator.cpp" />
+    <ClCompile Include="ext\hypermulator\emulator\mode_setup.cpp" />
+    <ClCompile Include="ext\hypermulator\guest\guest_partition.cpp" />
+    <ClCompile Include="ext\hypermulator\guest\guest_virtual_processor.cpp" />
+    <ClCompile Include="ext\hypermulator\guest\guest_vmexit.cpp" />
     <ClCompile Include="ext\portable_executable\data_directory.cpp" />
     <ClCompile Include="ext\portable_executable\dos_header.cpp" />
     <ClCompile Include="ext\portable_executable\exception_directory.cpp" />
@@ -158,10 +166,19 @@
     <ClCompile Include="ext\portable_executable\nt_headers.cpp" />
     <ClCompile Include="ext\portable_executable\relocations_directory.cpp" />
     <ClCompile Include="ext\portable_executable\section_header.cpp" />
+    <ClCompile Include="src\emulator\backend\hypermulator_backend.cpp" />
     <ClCompile Include="src\emulator\backend\unicorn_backend.cpp" />
     <ClCompile Include="src\main.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="ext\hypermulator\arch\decoder.hpp" />
+    <ClInclude Include="ext\hypermulator\arch\instruction.hpp" />
+    <ClInclude Include="ext\hypermulator\emulator\emulator.hpp" />
+    <ClInclude Include="ext\hypermulator\guest\guest_memory.hpp" />
+    <ClInclude Include="ext\hypermulator\guest\guest_partition.hpp" />
+    <ClInclude Include="ext\hypermulator\guest\guest_register.hpp" />
+    <ClInclude Include="ext\hypermulator\guest\guest_virtual_processor.hpp" />
+    <ClInclude Include="ext\hypermulator\guest\guest_vmexit.hpp" />
     <ClInclude Include="ext\portable_executable\data_directory.hpp" />
     <ClInclude Include="ext\portable_executable\debug_directory.hpp" />
     <ClInclude Include="ext\portable_executable\dos_header.hpp" />
@@ -175,6 +192,7 @@
     <ClInclude Include="ext\portable_executable\optional_header.hpp" />
     <ClInclude Include="ext\portable_executable\relocations_directory.hpp" />
     <ClInclude Include="ext\portable_executable\section_header.hpp" />
+    <ClInclude Include="src\emulator\backend\hypermulator_backend.hpp" />
     <ClInclude Include="src\emulator\backend\unicorn_backend.hpp" />
     <ClInclude Include="src\emulator\emulator.hpp" />
   </ItemGroup>
