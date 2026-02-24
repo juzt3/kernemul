@@ -158,7 +158,7 @@
     <ClCompile Include="ext\portable_executable\nt_headers.cpp" />
     <ClCompile Include="ext\portable_executable\relocations_directory.cpp" />
     <ClCompile Include="ext\portable_executable\section_header.cpp" />
-    <ClCompile Include="src\emulator\emulator.cpp" />
+    <ClCompile Include="src\emulator\backend\unicorn_backend.cpp" />
     <ClCompile Include="src\main.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -175,6 +175,7 @@
     <ClInclude Include="ext\portable_executable\optional_header.hpp" />
     <ClInclude Include="ext\portable_executable\relocations_directory.hpp" />
     <ClInclude Include="ext\portable_executable\section_header.hpp" />
+    <ClInclude Include="src\emulator\backend\unicorn_backend.hpp" />
     <ClInclude Include="src\emulator\emulator.hpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
