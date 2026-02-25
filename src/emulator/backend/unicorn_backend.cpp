@@ -125,6 +125,42 @@
 	return { };
 }
 
+static void enable_ia32e_mode(unicorn_emulator_t& emulator)
+{
+	ia32_efer_register efer = { .flags = emulator.read_msr(x86::msr::efer) };
+
+	efer.ia32e_mode_enable = 1;
+
+	emulator.write_msr(x86::msr::efer, efer.flags);
+}
+
+static void enable_protected_mode(emulator_t& emulator)
+{
+	cr0 current_cr0 = emulator.read_register<x86::reg::cr0, cr0>();
+
+	current_cr0.protection_enable = 1;
+
+	emulator.write_register<x86::reg::cr0>(current_cr0);
+}
+
+static void enable_paging(emulator_t& emulator)
+{
+	cr0 current_cr0 = emulator.read_register<x86::reg::cr0, cr0>();
+
+	current_cr0.paging_enable = 1;
+
+	emulator.write_register<x86::reg::cr0>(current_cr0);
+}
+
+static void enable_physical_address_extension(emulator_t& emulator)
+{
+	cr4 current_cr4 = emulator.read_register<x86::reg::cr4, cr4>();
+
+	current_cr4.physical_address_extension = 1;
+
+	emulator.write_register<x86::reg::cr4>(current_cr4);
+}
+
 unicorn_hook_t::~unicorn_hook_t()
 {
 	if (!owning_emulator_ || !native_hook_)
@@ -147,6 +183,13 @@ unicorn_emulator_t::unicorn_emulator_t()
 	auto error = emulator_err_t{ uc_open(UC_ARCH_X86, UC_MODE_64, &backend_) };
 
 	error.throw_if("unable to create backend engine");
+
+	enable_protected_mode(*this);
+
+	enable_paging(*this);
+	enable_physical_address_extension(*this);
+
+	enable_ia32e_mode(*this);
 }
 
 unicorn_emulator_t::~unicorn_emulator_t()
@@ -292,6 +335,48 @@ std::expected<emulator_t::hook_type, emulator_err_t> unicorn_emulator_t::hook_me
 	const uc_hook_type hook_type = convert_prot_to_mem_access_hook(monitored_protection);
 
 	return add_native_hook(hook_type, uc_wrapper_mem_access_hook, callback, start_address, end_address);
+}
+
+unicorn_emulator_t::msr_value_type unicorn_emulator_t::read_msr(const x86::msr msr) const
+{
+	msr_value_type value = { };
+
+	const emulator_err_t error = read_msr_safe(msr, &value);
+
+	error.throw_if("read msr");
+
+	return value;
+}
+
+void unicorn_emulator_t::write_msr(const x86::msr msr, const msr_value_type value)
+{
+	const emulator_err_t error = write_msr_safe(msr, value);
+
+	error.throw_if("write msr");
+}
+
+emulator_err_t unicorn_emulator_t::read_msr_safe(const x86::msr msr, msr_value_type* const value) const
+{
+	uc_x86_msr uc_msr = {
+		.rid = static_cast<std::uint32_t>(msr),
+		.value = 0
+	};
+
+	const emulator_err_t error(uc_reg_read(backend_, UC_X86_REG_MSR, &uc_msr));
+
+	*value = uc_msr.value;
+
+	return error;
+}
+
+emulator_err_t unicorn_emulator_t::write_msr_safe(const x86::msr msr, const msr_value_type value)
+{
+	const uc_x86_msr uc_msr = {
+		.rid = static_cast<std::uint32_t>(msr),
+		.value = value
+	};
+
+	return emulator_err_t{ uc_reg_write(backend_, UC_X86_REG_MSR, &uc_msr) };
 }
 
 unicorn_emulator_t::backend_type unicorn_emulator_t::native_backend() const

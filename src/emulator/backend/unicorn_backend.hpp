@@ -34,6 +34,7 @@ class unicorn_emulator_t : public emulator_t
 {
 public:
 	using backend_type = uc_engine*;
+	using msr_value_type = std::uint64_t;
 
 	unicorn_emulator_t();
 	~unicorn_emulator_t();
@@ -67,9 +68,16 @@ public:
 	                                                     protection_type monitored_protection,
 	                                                     address_type start_address, address_type end_address) override;
 
+
+	[[nodiscard]] msr_value_type read_msr(x86::msr msr) const;
+	void write_msr(x86::msr msr, msr_value_type value);
+
 	[[nodiscard]] backend_type native_backend() const;
 
 protected:
+	[[nodiscard]] emulator_err_t read_msr_safe(x86::msr msr, msr_value_type* value) const;
+	emulator_err_t write_msr_safe(x86::msr msr, msr_value_type value);
+
 	template <class ...Args>
 	[[nodiscard]] std::expected<hook_type, emulator_err_t> add_native_hook(
 		const std::int32_t hook_type, void* const uc_callback_wrapper, const emulator_hook_t::callback_type& callback,

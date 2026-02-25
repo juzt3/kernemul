@@ -87,6 +87,11 @@ namespace x86
 		DEF_REG_64(r15);
 	}
 
+	enum class msr : std::uint32_t
+	{
+		efer = 0xC0000080
+	};
+
 	enum class insn : std::uint8_t
 	{
 		cpuid,
