@@ -1,4 +1,7 @@
 #include "unicorn_backend.hpp"
+#include "../emulator.hpp"
+
+#include <ia32-doc/ia32.hpp>
 
 [[nodiscard]] static constexpr uc_prot convert_prot(const emulator_t::protection_type protection)
 {
@@ -86,25 +89,37 @@
 	return { };
 }
 
-[[nodiscard]] static constexpr uc_x86_reg convert_reg(const x86::reg reg)
+[[nodiscard]] static constexpr uc_x86_reg convert_reg(const x86::register_t reg)
 {
-	switch (reg)
+#define CASE_REG(id_name, uc_name) case x86::register_t::id_type::id_name: return UC_X86_REG_##uc_name;
+
+	switch (reg.id)
 	{
-	case x86::reg::rax:
-		return UC_X86_REG_RAX;
-	case x86::reg::rbx:
-		return UC_X86_REG_RBX;
-	case x86::reg::rcx:
-		return UC_X86_REG_RCX;
-	case x86::reg::rdx:
-		return UC_X86_REG_RDX;
-	case x86::reg::rip:
-		return UC_X86_REG_RIP;
-	case x86::reg::rsp:
-		return UC_X86_REG_RSP;
-	case x86::reg::rflags:
-		return UC_X86_REG_RFLAGS;
-	default:;
+		CASE_REG(cr0, CR0)
+		CASE_REG(cr2, CR2)
+		CASE_REG(cr3, CR3)
+		CASE_REG(cr4, CR4)
+		//
+		CASE_REG(rip, RIP)
+		CASE_REG(rflags, RFLAGS)
+		//
+		CASE_REG(rax, RAX)
+		CASE_REG(rcx, RCX)
+		CASE_REG(rdx, RDX)
+		CASE_REG(rbx, RBX)
+		CASE_REG(rsp, RSP)
+		CASE_REG(rbp, RBP)
+		CASE_REG(rsi, RSI)
+		CASE_REG(rdi, RDI)
+		CASE_REG(r8, R8)
+		CASE_REG(r9, R9)
+		CASE_REG(r10, R10)
+		CASE_REG(r11, R11)
+		CASE_REG(r12, R12)
+		CASE_REG(r13, R13)
+		CASE_REG(r14, R14)
+		CASE_REG(r15, R15)
+		default:;
 	}
 
 	return { };
@@ -129,7 +144,7 @@ unicorn_hook_t::~unicorn_hook_t()
 
 unicorn_emulator_t::unicorn_emulator_t()
 {
-	const auto error = emulator_err_t{ uc_open(UC_ARCH_X86, UC_MODE_64, &backend_) };
+	auto error = emulator_err_t{ uc_open(UC_ARCH_X86, UC_MODE_64, &backend_) };
 
 	error.throw_if("unable to create backend engine");
 }
@@ -176,12 +191,12 @@ emulator_err_t unicorn_emulator_t::write_memory(const address_type address, cons
 	return emulator_err_t{ uc_mem_write(backend_, address, buffer, size) };
 }
 
-emulator_err_t unicorn_emulator_t::read_register(const x86::reg reg, void* const value) const
+emulator_err_t unicorn_emulator_t::read_register(const x86::register_t reg, void* const value) const
 {
 	return emulator_err_t{ uc_reg_read(backend_, convert_reg(reg), value) };
 }
 
-emulator_err_t unicorn_emulator_t::write_register(const x86::reg reg, const void* const value)
+emulator_err_t unicorn_emulator_t::write_register(const x86::register_t reg, const void* const value)
 {
 	return emulator_err_t{ uc_reg_write(backend_, convert_reg(reg), value) };
 }
@@ -264,6 +279,7 @@ std::expected<emulator_t::hook_type, emulator_err_t> unicorn_emulator_t::hook_in
 	const emulator_hook_t::invalid_memory_callback& callback, const protection_type monitored_protection,
 	const address_type start_address, const address_type end_address)
 {
+
 	const uc_hook_type hook_type = convert_prot_to_inv_mem_hook(monitored_protection);
 
 	return add_native_hook(hook_type, uc_wrapper_invalid_mem_hook, callback, start_address, end_address);

@@ -1,5 +1,6 @@
 #pragma once
 #include <unicorn/unicorn.h>
+
 #include <functional>
 #include <expected>
 #include <format>
@@ -11,16 +12,80 @@
 
 namespace x86
 {
-	enum class reg : std::uint8_t
+	struct register_t
 	{
-		rax,
-		rbx,
-		rcx,
-		rdx,
-		rip,
-		rsp,
-		rflags
+	public:
+		using size_type = std::uint32_t;
+
+		enum class id_type : std::uint8_t
+		{
+			cr0,
+			cr2,
+			cr3,
+			cr4,
+
+			rip,
+			rflags,
+
+			rax,
+			rcx,
+			rbx,
+			rdx,
+			rsp,
+			rbp,
+			rsi,
+			rdi,
+			r8,
+			r9,
+			r10,
+			r11,
+			r12,
+			r13,
+			r14,
+			r15
+		};
+
+		static constexpr size_type bit_64_size = 8;
+
+		constexpr explicit register_t(const id_type id_, const size_type size_)
+				:	id(id_),
+					size(size_) { }
+
+
+		id_type id = { };
+		size_type size = { };
 	};
+
+	namespace reg
+	{
+#define DEF_REG(name, size) constexpr static register_t name{ register_t::id_type::name, size };
+#define DEF_REG_64(name) DEF_REG(name, register_t::bit_64_size)
+
+		DEF_REG_64(cr0);
+		DEF_REG_64(cr2);
+		DEF_REG_64(cr3);
+		DEF_REG_64(cr4);
+
+		DEF_REG_64(rip);
+		DEF_REG_64(rflags);
+
+		DEF_REG_64(rax);
+		DEF_REG_64(rcx);
+		DEF_REG_64(rbx);
+		DEF_REG_64(rdx);
+		DEF_REG_64(rsp);
+		DEF_REG_64(rbp);
+		DEF_REG_64(rsi);
+		DEF_REG_64(rdi);
+		DEF_REG_64(r8);
+		DEF_REG_64(r9);
+		DEF_REG_64(r10);
+		DEF_REG_64(r11);
+		DEF_REG_64(r12);
+		DEF_REG_64(r13);
+		DEF_REG_64(r14);
+		DEF_REG_64(r15);
+	}
 
 	enum class insn : std::uint8_t
 	{
@@ -155,8 +220,61 @@ public:
 		return error;
 	}
 
-	[[nodiscard]] virtual emulator_err_t read_register(x86::reg reg, void* value) const = 0;
-	[[nodiscard]] virtual emulator_err_t write_register(x86::reg reg, const void* value) = 0;
+	[[nodiscard]] virtual emulator_err_t read_register(x86::register_t reg, void* value) const = 0;
+	[[nodiscard]] virtual emulator_err_t write_register(x86::register_t reg, const void* value) = 0;
+
+	template <x86::register_t Register, class T>
+	T read_register()
+	{
+		static_assert(std::is_trivially_copyable_v<T>, "reading non trivially copyable type from a register");
+
+		T value = { };
+
+		emulator_err_t error;
+
+		if constexpr (sizeof(T) == Register.size)
+		{
+			error = read_register(Register, &value);
+		}
+		else
+		{
+			std::array<std::uint8_t, Register.size> buffer = { };
+
+			error = read_register(Register, buffer.data());
+
+			const size_type copy_size = std::min(sizeof(T), static_cast<std::size_t>(Register.size));
+
+			std::memcpy(&value, buffer.data(), copy_size);
+		}
+
+		error.throw_if("read register");
+
+		return value;
+	}
+
+	template <x86::register_t Register, class T>
+	void write_register(const T& value)
+	{
+		static_assert(std::is_trivially_copyable_v<T>, "writing non trivially copyable type to a register");
+		static_assert(sizeof(T) <= Register.size, "writing too large of a value to a register");
+
+		emulator_err_t error;
+
+		if constexpr (sizeof(T) == Register.size)
+		{
+			error = write_register(Register, &value);
+		}
+		else
+		{
+			std::array<std::uint8_t, Register.size> buffer = { };
+
+			std::memcpy(buffer.data(), &value, sizeof(T));
+
+			error = write_register(Register, buffer.data());
+		}
+
+		error.throw_if("write register");
+	}
 
 	virtual std::expected<hook_type, emulator_err_t> hook_instruction(
 		x86::insn instruction, const emulator_hook_t::instruction_callback& callback, address_type start_address,

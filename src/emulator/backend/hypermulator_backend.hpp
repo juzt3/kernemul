@@ -23,8 +23,7 @@ protected:
 class hypermulator_t : public emulator_t
 {
 public:
-	hypermulator_t()
-			:	backend_(std::make_shared<hm::emulator_t>(hm::machine_mode_64)) { }
+	hypermulator_t();
 
 	[[nodiscard]] emulator_err_t run_at(address_type start_address, address_type end_address) override;
 
@@ -34,8 +33,8 @@ public:
 	[[nodiscard]] emulator_err_t read_memory(address_type address, void* buffer, size_type size) const override;
 	[[nodiscard]] emulator_err_t write_memory(address_type address, const void* buffer, size_type size) override;
 
-	[[nodiscard]] emulator_err_t read_register(x86::reg reg, void* value) const override;
-	[[nodiscard]] emulator_err_t write_register(x86::reg reg, const void* value) override;
+	[[nodiscard]] emulator_err_t read_register(x86::register_t reg, void* value) const override;
+	[[nodiscard]] emulator_err_t write_register(x86::register_t reg, const void* value) override;
 
 	std::expected<hook_type, emulator_err_t> hook_instruction(x86::insn instruction,
 	                                                          const emulator_hook_t::instruction_callback& callback, address_type start_address,
@@ -57,5 +56,15 @@ protected:
 	[[nodiscard]] std::expected<hook_type, emulator_err_t> add_native_hook(
 		const std::shared_ptr<hm::hook_t>& native_hook, const emulator_hook_t::callback_type& callback);
 
+	[[nodiscard]] std::expected<address_type, emulator_err_t> allocate_physical_page()
+	{
+		const address_type address = current_physical_page_;
+
+		current_physical_page_ += hm::emulator_t::page_size;
+
+		return address;
+	}
+
+	address_type current_physical_page_ = hm::emulator_t::page_size * 32;
 	std::shared_ptr<hm::emulator_t> backend_;
 };

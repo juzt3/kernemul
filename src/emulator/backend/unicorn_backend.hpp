@@ -46,8 +46,8 @@ public:
 	[[nodiscard]] emulator_err_t read_memory(address_type address, void* buffer, size_type size) const override;
 	[[nodiscard]] emulator_err_t write_memory(address_type address, const void* buffer, size_type size) override;
 
-	[[nodiscard]] emulator_err_t read_register(x86::reg reg, void* value) const override;
-	[[nodiscard]] emulator_err_t write_register(x86::reg reg, const void* value) override;
+	[[nodiscard]] emulator_err_t read_register(x86::register_t reg, void* value) const override;
+	[[nodiscard]] emulator_err_t write_register(x86::register_t reg, const void* value) override;
 
 	std::expected<hook_type, emulator_err_t> hook_instruction(x86::insn instruction,
 	                                                          const emulator_hook_t::instruction_callback& callback, address_type start_address,

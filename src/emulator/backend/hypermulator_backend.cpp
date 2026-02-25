@@ -20,25 +20,37 @@
 	return prot_none;
 }
 
-[[nodiscard]] static constexpr hm::guest_register_t convert_reg(const x86::reg reg)
+[[nodiscard]] static constexpr hm::guest_register_t convert_reg(const x86::register_t reg)
 {
-	switch (reg)
+#define CASE_REG(id_name) case x86::register_t::id_type::id_name: return hm::reg::##id_name;
+
+	switch (reg.id)
 	{
-	case x86::reg::rax:
-		return hm::reg::rax;
-	case x86::reg::rbx:
-		return hm::reg::rbx;
-	case x86::reg::rcx:
-		return hm::reg::rcx;
-	case x86::reg::rdx:
-		return hm::reg::rdx;
-	case x86::reg::rip:
-		return hm::reg::rip;
-	case x86::reg::rsp:
-		return hm::reg::rsp;
-	case x86::reg::rflags:
-		return hm::reg::rflags;
-	default:;
+		CASE_REG(cr0)
+		CASE_REG(cr2)
+		CASE_REG(cr3)
+		CASE_REG(cr4)
+		//
+		CASE_REG(rip)
+		CASE_REG(rflags)
+		//
+		CASE_REG(rax)
+		CASE_REG(rcx)
+		CASE_REG(rdx)
+		CASE_REG(rbx)
+		CASE_REG(rsp)
+		CASE_REG(rbp)
+		CASE_REG(rsi)
+		CASE_REG(rdi)
+		CASE_REG(r8)
+		CASE_REG(r9)
+		CASE_REG(r10)
+		CASE_REG(r11)
+		CASE_REG(r12)
+		CASE_REG(r13)
+		CASE_REG(r14)
+		CASE_REG(r15)
+		default:;
 	}
 
 	return { };
@@ -64,6 +76,12 @@ hypermulator_hook_t::~hypermulator_hook_t()
 	{
 		native_emulator_->remove_hook(native_hook_);
 	}
+}
+
+hypermulator_t::hypermulator_t()
+		:	backend_(std::make_shared<hm::emulator_t>(hm::machine_mode_64))
+{
+
 }
 
 emulator_err_t hypermulator_t::run_at(const address_type start_address, const address_type end_address)
@@ -98,14 +116,14 @@ emulator_err_t hypermulator_t::write_memory(const address_type address, const vo
 	return emulator_err_t{ backend_->write_physical_memory(address, buffer, size) };
 }
 
-emulator_err_t hypermulator_t::read_register(const x86::reg reg, void* const value) const
+emulator_err_t hypermulator_t::read_register(const x86::register_t reg, void* const value) const
 {
 	const hm::guest_register_t guest_reg = convert_reg(reg);
 
 	return emulator_err_t{ backend_->read_register(guest_reg, value, guest_reg.size) };
 }
 
-emulator_err_t hypermulator_t::write_register(const x86::reg reg, const void* const value)
+emulator_err_t hypermulator_t::write_register(const x86::register_t reg, const void* const value)
 {
 	const hm::guest_register_t guest_reg = convert_reg(reg);
 
