@@ -249,7 +249,10 @@ emulator_err_t emulator_t::map_virtual_page(const address_type page_address, con
 			}\
 		}
 
-	virtual_page_mappings_[page_address] = virtual_memory_mapping_t{ page_physical_address };
+	const address_type aligned_page_address = align_down(page_address, page_size);
+	const address_type aligned_page_physical_address = align_down(page_physical_address, page_size);
+
+	virtual_page_mappings_[aligned_page_address] = virtual_memory_mapping_t{ aligned_page_physical_address };
 
 	std::array<pml4e_64, paging_entry_count> pml4 = { };
 

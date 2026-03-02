@@ -10,13 +10,17 @@
 
 struct mapped_image_t
 {
+	using string_type = std::string;
 	using address_type = emulator_t::address_type;
 	using size_type = emulator_t::size_type;
 
-	mapped_image_t(const address_type _base_address, const size_type _size, const address_type _entry_point)
-			:	base_address(_base_address),
+	mapped_image_t(string_type _name, const address_type _base_address, const size_type _size, const address_type _entry_point)
+			:	name(std::move(_name)),
+				base_address(_base_address),
 				size(_size),
 				entry_point(_entry_point) { }
+
+	string_type name;
 
 	address_type base_address;
 	size_type size;
@@ -140,7 +144,7 @@ static void add_to_loaded_module_list(const std::shared_ptr<emulator_t>& emulato
 		                                  ? get_module_list_entry_address(last_entry->table_entry)
 		                                  : module_list;
 
-	auto object = emulator_object_t<_NT_LDR_DATA_TABLE_ENTRY>::allocate(emulator, contents);
+	auto object = emulator_object_t<_NT_LDR_DATA_TABLE_ENTRY>::allocate(emulator, contents, image.name);
 
 	if (last_entry)
 	{
@@ -202,7 +206,7 @@ static std::shared_ptr<mapped_image_t> map_kernel_image(const std::shared_ptr<em
 		return { };
 	}
 
-	auto image = std::make_shared<mapped_image_t>(*base_address, image_size, *base_address + nt_headers->optional_header.address_of_entry_point);
+	auto image = std::make_shared<mapped_image_t>(std::string(name), *base_address, image_size, *base_address + nt_headers->optional_header.address_of_entry_point);
 
 	add_to_loaded_module_list(emulator, *image);
 
