@@ -199,6 +199,7 @@
     <ClInclude Include="src\emulator\backend\unicorn_backend.hpp" />
     <ClInclude Include="src\emulator\emulator.hpp" />
     <ClInclude Include="src\emulator\object.hpp" />
+    <ClInclude Include="src\kernel_def.hpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

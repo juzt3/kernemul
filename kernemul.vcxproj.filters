@@ -119,6 +119,9 @@
     <ClInclude Include="ext\portable_executable\section_header.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="src\kernel_def.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="src\emulator\emulator.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>

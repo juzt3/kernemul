@@ -177,8 +177,13 @@ std::optional<emulator_t::address_type> emulator_t::translate_virtual_address(co
 	return mapping.physical_address + virtual_address.page_offset;
 }
 
-std::expected<emulator_t::address_type, emulator_err_t> emulator_t::heap_allocate(const size_type size, const protection_type protection)
+std::expected<emulator_t::address_type, emulator_err_t> emulator_t::heap_allocate(const size_type size, const protection_type protection, const bool page_aligned)
 {
+	if (page_aligned)
+	{
+		current_heap_virtual_address_ = align_up(current_heap_virtual_address_, page_size);
+	}
+
 	if (const auto error = map_virtual_memory(current_heap_virtual_address_, size, protection))
 	{
 		return std::unexpected(error);

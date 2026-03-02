@@ -237,7 +237,7 @@ public:
 
 	std::optional<address_type> translate_virtual_address(address_type address) const;
 
-	[[nodiscard]] std::expected<address_type, emulator_err_t> heap_allocate(size_type size, protection_type protection);
+	[[nodiscard]] std::expected<address_type, emulator_err_t> heap_allocate(size_type size, protection_type protection, bool page_aligned = false);
 
 	[[nodiscard]] virtual emulator_err_t read_register(x86::register_t reg, void* value) const = 0;
 	[[nodiscard]] virtual emulator_err_t write_register(x86::register_t reg, const void* value) = 0;
