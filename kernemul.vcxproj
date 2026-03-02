@@ -152,6 +152,7 @@
   <ItemGroup>
     <ClCompile Include="ext\hypermulator\arch\decoder.cpp" />
     <ClCompile Include="ext\hypermulator\emulator\emulator.cpp" />
+    <ClCompile Include="ext\hypermulator\emulator\emulator_hook.cpp" />
     <ClCompile Include="ext\hypermulator\emulator\mode_setup.cpp" />
     <ClCompile Include="ext\hypermulator\guest\guest_partition.cpp" />
     <ClCompile Include="ext\hypermulator\guest\guest_virtual_processor.cpp" />
@@ -168,6 +169,7 @@
     <ClCompile Include="ext\portable_executable\section_header.cpp" />
     <ClCompile Include="src\emulator\backend\hypermulator_backend.cpp" />
     <ClCompile Include="src\emulator\backend\unicorn_backend.cpp" />
+    <ClCompile Include="src\emulator\emulator_memory.cpp" />
     <ClCompile Include="src\main.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -188,6 +190,7 @@
     <ClInclude Include="ext\portable_executable\file_header.hpp" />
     <ClInclude Include="ext\portable_executable\image.hpp" />
     <ClInclude Include="ext\portable_executable\imports_directory.hpp" />
+    <ClInclude Include="ext\portable_executable\load_config_directory.hpp" />
     <ClInclude Include="ext\portable_executable\nt_headers.hpp" />
     <ClInclude Include="ext\portable_executable\optional_header.hpp" />
     <ClInclude Include="ext\portable_executable\relocations_directory.hpp" />

@@ -41,11 +41,11 @@ public:
 
 	[[nodiscard]] emulator_err_t run_at(address_type start_address, address_type end_address) override;
 
-	[[nodiscard]] emulator_err_t map_memory(address_type address, size_type size, protection_type protection) override;
-	[[nodiscard]] emulator_err_t unmap_memory(address_type address, size_type size) override;
+	[[nodiscard]] emulator_err_t map_physical_memory(address_type address, size_type size, protection_type protection) override;
+	[[nodiscard]] emulator_err_t unmap_physical_memory(address_type address, size_type size) override;
 
-	[[nodiscard]] emulator_err_t read_memory(address_type address, void* buffer, size_type size) const override;
-	[[nodiscard]] emulator_err_t write_memory(address_type address, const void* buffer, size_type size) override;
+	[[nodiscard]] emulator_err_t read_physical_memory(address_type address, void* buffer, size_type size) const override;
+	[[nodiscard]] emulator_err_t write_physical_memory(address_type address, const void* buffer, size_type size) override;
 
 	[[nodiscard]] emulator_err_t read_register(x86::register_t reg, void* value) const override;
 	[[nodiscard]] emulator_err_t write_register(x86::register_t reg, const void* value) override;

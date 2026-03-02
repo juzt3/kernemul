@@ -184,12 +184,22 @@ unicorn_emulator_t::unicorn_emulator_t()
 
 	error.throw_if("unable to create backend engine");
 
+	set_up_page_tables();
+
 	enable_protected_mode(*this);
 
 	enable_paging(*this);
 	enable_physical_address_extension(*this);
 
 	enable_ia32e_mode(*this);
+
+	error = emulator_err_t{ uc_ctl_tlb_mode(backend_, UC_TLB_CPU) };
+
+	error.throw_if("unable to set TLB mode");
+
+	error = emulator_err_t{ uc_ctl_flush_tlb(backend_) };
+
+	error.throw_if("unable to flush TLB");
 }
 
 unicorn_emulator_t::~unicorn_emulator_t()
@@ -205,30 +215,30 @@ emulator_err_t unicorn_emulator_t::run_at(const address_type start_address, cons
 	return emulator_err_t{ uc_emu_start(backend_, start_address, end_address, 0, 0) };
 }
 
-emulator_err_t unicorn_emulator_t::map_memory(const address_type address, const size_type size,
+emulator_err_t unicorn_emulator_t::map_physical_memory(const address_type address, const size_type size,
                                               const protection_type protection)
 {
-	const address_type aligned_address = align_down(address, memory_mapping_alignment);
-	const size_type aligned_size = align_up(size, memory_mapping_alignment);
+	const address_type aligned_address = align_down(address, page_size);
+	const size_type aligned_size = align_up(size, page_size);
 
 	return emulator_err_t{ uc_mem_map(backend_, aligned_address, aligned_size, convert_prot(protection)) };
 }
 
-emulator_err_t unicorn_emulator_t::unmap_memory(const address_type address, const size_type size)
+emulator_err_t unicorn_emulator_t::unmap_physical_memory(const address_type address, const size_type size)
 {
-	const address_type aligned_address = align_down(address, memory_mapping_alignment);
-	const size_type aligned_size = align_up(size, memory_mapping_alignment);
+	const address_type aligned_address = align_down(address, page_size);
+	const size_type aligned_size = align_up(size, page_size);
 
 	return emulator_err_t{ uc_mem_unmap(backend_, aligned_address, aligned_size) };
 }
 
-emulator_err_t unicorn_emulator_t::read_memory(const address_type address, void* const buffer,
+emulator_err_t unicorn_emulator_t::read_physical_memory(const address_type address, void* const buffer,
                                                const size_type size) const
 {
 	return emulator_err_t{ uc_mem_read(backend_, address, buffer, size) };
 }
 
-emulator_err_t unicorn_emulator_t::write_memory(const address_type address, const void* const buffer,
+emulator_err_t unicorn_emulator_t::write_physical_memory(const address_type address, const void* const buffer,
                                                 const size_type size)
 {
 	return emulator_err_t{ uc_mem_write(backend_, address, buffer, size) };
@@ -295,7 +305,6 @@ static void uc_wrapper_mem_access_hook([[maybe_unused]] const uc_engine* const e
 
 	std::get<emulator_hook_t::memory_access_callback>(hook_callback)(address, convert_access_to_prot(type));
 }
-
 
 std::expected<emulator_t::hook_type, emulator_err_t> unicorn_emulator_t::hook_instruction(
 	const x86::insn instruction, const emulator_hook_t::instruction_callback& callback,

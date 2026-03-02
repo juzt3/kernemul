@@ -9,6 +9,23 @@
 #include <string>
 #include <span>
 #include <stdexcept>
+#include <array>
+#include <optional>
+
+union paging_virtual_address_t
+{
+	std::uint64_t address;
+
+	struct
+	{
+		std::uint64_t page_offset : 12;
+		std::uint64_t pt_index : 9;
+		std::uint64_t pd_index : 9;
+		std::uint64_t pdpt_index : 9;
+		std::uint64_t pml4_index : 9;
+		std::uint64_t reserved : 12;
+	};
+};
 
 namespace x86
 {
@@ -171,6 +188,11 @@ protected:
 	std::string message_;
 };
 
+struct virtual_memory_mapping_t
+{
+	std::uint64_t physical_address;
+};
+
 class emulator_t : public std::enable_shared_from_this<emulator_t>
 {
 public:
@@ -182,51 +204,61 @@ public:
 	static constexpr address_type default_start_address = 0;
 	static constexpr address_type default_end_address = std::numeric_limits<address_type>::max();
 
-	static constexpr address_type heap_base = 0x3F0000;
-	static constexpr address_type thread_return_address = 0xF0000;
-	static constexpr size_type memory_mapping_alignment = 0x1000;
+	static constexpr address_type thread_return_address = 0xFFFFFFFF00000000;
+	static constexpr size_type page_size = 0x1000;
 
 	[[nodiscard]] virtual emulator_err_t run_at(address_type start_address, address_type end_address = 0) = 0;
 
-	[[nodiscard]] virtual emulator_err_t map_memory(address_type address, size_type size, protection_type protection) = 0;
-	[[nodiscard]] virtual emulator_err_t unmap_memory(address_type address, size_type size) = 0;
+	[[nodiscard]] virtual emulator_err_t map_physical_memory(address_type address, size_type size, protection_type protection) = 0;
+	[[nodiscard]] virtual emulator_err_t unmap_physical_memory(address_type address, size_type size) = 0;
 
-	[[nodiscard]] virtual emulator_err_t read_memory(address_type address, void* buffer, size_type size) const = 0;
+	[[nodiscard]] virtual emulator_err_t read_physical_memory(address_type address, void* buffer, size_type size) const = 0;
+	[[nodiscard]] emulator_err_t read_physical_memory(address_type address, std::span<std::uint8_t> buffer) const;
 
-	[[nodiscard]] emulator_err_t read_memory(const address_type address, const std::span<std::uint8_t> buffer) const
-	{
-		return read_memory(address, buffer.data(), buffer.size());
-	}
+	[[nodiscard]] virtual emulator_err_t write_physical_memory(address_type address, const void* buffer, size_type size) = 0;
+	[[nodiscard]] emulator_err_t write_physical_memory(address_type address, std::span<const std::uint8_t> buffer);
 
-	[[nodiscard]] virtual emulator_err_t write_memory(address_type address, const void* buffer, size_type size) = 0;
+	[[nodiscard]] emulator_err_t load_physical_memory(address_type address, std::span<const std::uint8_t> buffer,
+	                                                  protection_type protection);
 
-	[[nodiscard]] emulator_err_t write_memory(const address_type address, const std::span<const std::uint8_t> buffer)
-	{
-		return write_memory(address, buffer.data(), buffer.size());
-	}
 
-	[[nodiscard]] emulator_err_t load_memory(const address_type address, const std::span<const std::uint8_t> buffer,
-	                                         const protection_type protection)
-	{
-		emulator_err_t error = map_memory(address, buffer.size(), protection);
+	[[nodiscard]] emulator_err_t map_virtual_memory(address_type address, size_type size, protection_type protection);
+	[[nodiscard]] emulator_err_t unmap_virtual_memory(address_type address, size_type size);
 
-		if (error)
-		{
-			return error;
-		}
+	[[nodiscard]] emulator_err_t write_virtual_memory(address_type address, const void* buffer, size_type size);
+	[[nodiscard]] emulator_err_t write_virtual_memory(address_type address, std::span<const std::uint8_t> buffer);
 
-		error = write_memory(address, buffer);
+	[[nodiscard]] emulator_err_t read_virtual_memory(address_type address, void* buffer, size_type size) const;
+	[[nodiscard]] emulator_err_t read_virtual_memory(address_type address, std::span<std::uint8_t> buffer) const;
 
-		if (error)
-		{
-			(void)unmap_memory(address, buffer.size());
-		}
+	[[nodiscard]] emulator_err_t load_virtual_memory(address_type address,
+	                                                 std::span<const std::uint8_t> buffer,
+	                                                 protection_type protection);
 
-		return error;
-	}
+	std::optional<address_type> translate_virtual_address(address_type address) const;
+
+	[[nodiscard]] std::expected<address_type, emulator_err_t> heap_allocate(size_type size, protection_type protection);
 
 	[[nodiscard]] virtual emulator_err_t read_register(x86::register_t reg, void* value) const = 0;
 	[[nodiscard]] virtual emulator_err_t write_register(x86::register_t reg, const void* value) = 0;
+
+	virtual std::expected<hook_type, emulator_err_t> hook_instruction(
+		x86::insn instruction, const emulator_hook_t::instruction_callback& callback, address_type start_address,
+		address_type end_address) = 0;
+
+	virtual std::expected<hook_type, emulator_err_t> hook_basic_block(
+		const emulator_hook_t::code_callback& callback, address_type start_address, address_type end_address) = 0;
+
+	virtual std::expected<hook_type, emulator_err_t> hook_code(
+		const emulator_hook_t::code_callback& callback, address_type start_address, address_type end_address) = 0;
+
+	virtual std::expected<hook_type, emulator_err_t> hook_invalid_memory(
+		const emulator_hook_t::invalid_memory_callback& callback, protection_type monitored_protection,
+		address_type start_address, address_type end_address) = 0;
+
+	virtual std::expected<hook_type, emulator_err_t> hook_memory(
+		const emulator_hook_t::memory_access_callback& callback, protection_type monitored_protection,
+		address_type start_address, address_type end_address) = 0;
 
 	template <x86::register_t Register, class T>
 	T read_register()
@@ -281,38 +313,27 @@ public:
 		error.throw_if("write register");
 	}
 
-	virtual std::expected<hook_type, emulator_err_t> hook_instruction(
-		x86::insn instruction, const emulator_hook_t::instruction_callback& callback, address_type start_address,
-		address_type end_address) = 0;
-
-	virtual std::expected<hook_type, emulator_err_t> hook_basic_block(
-		const emulator_hook_t::code_callback& callback, address_type start_address, address_type end_address) = 0;
-
-	virtual std::expected<hook_type, emulator_err_t> hook_code(
-		const emulator_hook_t::code_callback& callback,address_type start_address, address_type end_address) = 0;
-
-	virtual std::expected<hook_type, emulator_err_t> hook_invalid_memory(
-		const emulator_hook_t::invalid_memory_callback& callback, protection_type monitored_protection,
-		address_type start_address, address_type end_address) = 0;
-
-	virtual std::expected<hook_type, emulator_err_t> hook_memory(
-		const emulator_hook_t::memory_access_callback& callback, protection_type monitored_protection,
-		address_type start_address, address_type end_address) = 0;
-
 protected:
+	std::expected<address_type, emulator_err_t> allocate_physical_memory(size_type size, protection_type protection);
+
+	emulator_err_t copy_virtual_memory(address_type address, void* buffer, size_type size, bool is_write);
+	emulator_err_t map_virtual_page(address_type page_address, address_type page_physical_address);
+	emulator_err_t unmap_virtual_page(address_type page_address);
+	emulator_err_t set_up_page_tables();
+
+	void push_hook(std::shared_ptr<emulator_hook_t> hook)
+	{
+		hooks_.push_back(std::move(hook));
+	}
+
 	template <class HookT, class ...Args>
 	std::shared_ptr<HookT> add_hook(Args&&... arguments)
 	{
 		const auto hook = std::make_shared<HookT>(std::forward<Args>(arguments)...);
 
-		hooks_.push_back(hook);
+		push_hook(hook);
 
 		return hook;
-	}
-
-	void push_hook(std::shared_ptr<emulator_hook_t> hook)
-	{
-		hooks_.push_back(std::move(hook));
 	}
 
 	template <class T, class Y>
@@ -330,5 +351,10 @@ protected:
 		return value & ~(alignment - 1);
 	}
 
+	address_type pml4_physical_address_ = 0;
+	address_type current_physical_page_ = 0x40000;
+	address_type current_heap_virtual_address_ = 0xFFFFFF8024800000;
+
+	std::unordered_map<address_type, virtual_memory_mapping_t> virtual_page_mappings_;
 	std::vector<hook_type> hooks_;
 };

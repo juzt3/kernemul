@@ -21,8 +21,12 @@ void hm::guest_virtual_processor_t::run()
 		}
 
 	} while (process_vmexit(vmexit_context));
+}
 
-	__debugbreak();
+std::optional<hm::guest_virtual_processor_t::address_type> hm::guest_virtual_processor_t::translate_virtual_address(
+	const address_type virtual_address) const
+{
+	return partition_->translate_virtual_address(*this, virtual_address);
 }
 
 bool hm::guest_virtual_processor_t::write_virtual_memory(const address_type virtual_address, const void* const buffer,

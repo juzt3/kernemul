@@ -2,8 +2,10 @@
 #include <Windows.h>
 #include <WinHvPlatform.h>
 #include <functional>
+#include <optional>
 #include <array>
 
+#include "guest_virtual_processor.hpp"
 #include "../arch/instruction.hpp"
 
 namespace hm
@@ -38,15 +40,20 @@ namespace hm
 	enum class exception_id_t : std::uint8_t
 	{
 		debug_trap = 1,
+		page_fault = 14
 	};
 
 	struct vmexit_processor_state_t
 	{
+		using address_type = std::uint64_t;
+
 		vmexit_processor_state_t() = default;
 
 		explicit vmexit_processor_state_t(const WHV_VP_EXIT_CONTEXT& whv_context);
 
-		std::uint64_t rip = 0;
+		[[nodiscard]] address_type physical_rip(const guest_virtual_processor_t& processor) const;
+
+		address_type rip = 0;
 		std::uint8_t instruction_length : 4 = 0;
 	};
 
@@ -56,14 +63,14 @@ namespace hm
 
 		explicit memory_vmexit_t(const WHV_MEMORY_ACCESS_CONTEXT& whv_context);
 
-		enum class access_t : std::uint8_t
+		enum class access : std::uint8_t
 		{
 			read,
 			write,
 			execute
 		};
 
-		access_t type = access_t::read;
+		access type = access::read;
 
 		bool physical_address_unmapped = true;
 		bool virtual_address_valid = false;
@@ -102,11 +109,16 @@ namespace hm
 
 	struct exception_vmexit_t
 	{
+		using error_code_type = std::uint32_t;
+
 		exception_vmexit_t() = default;
 
 		explicit exception_vmexit_t(const WHV_VP_EXCEPTION_CONTEXT& whv_context);
 
 		exception_id_t id = exception_id_t::debug_trap;
+		std::optional<error_code_type> error_code;
+		std::uint64_t exception_parameter;
+
 		std::array<std::uint8_t, max_instruction_length> instruction_bytes = { };
 	};
 

@@ -8,8 +8,26 @@ hm::vmexit_processor_state_t::vmexit_processor_state_t(const WHV_VP_EXIT_CONTEXT
 
 }
 
+hm::vmexit_processor_state_t::address_type hm::vmexit_processor_state_t::physical_rip(
+	const guest_virtual_processor_t& processor) const
+{
+	if (processor.uses_paging())
+	{
+		const auto translation = processor.translate_virtual_address(rip);
+
+		if (!translation)
+		{
+			throw std::runtime_error("unable to translate rip address");
+		}
+
+		return *translation;
+	}
+
+	return rip;
+}
+
 hm::memory_vmexit_t::memory_vmexit_t(const WHV_MEMORY_ACCESS_CONTEXT& whv_context)
-		:	type(static_cast<access_t>(whv_context.AccessInfo.AccessType)),
+		:	type(static_cast<access>(whv_context.AccessInfo.AccessType)),
 			physical_address_unmapped(whv_context.AccessInfo.GpaUnmapped),
 			virtual_address_valid(whv_context.AccessInfo.GvaValid),
 			physical_address(whv_context.Gpa),
@@ -38,7 +56,9 @@ hm::rdtsc_vmexit_t::rdtsc_vmexit_t(const WHV_X64_RDTSC_CONTEXT& whv_context)
 }
 
 hm::exception_vmexit_t::exception_vmexit_t(const WHV_VP_EXCEPTION_CONTEXT& whv_context)
-		:	id(static_cast<exception_id_t>(whv_context.ExceptionType))
+		:	id(static_cast<exception_id_t>(whv_context.ExceptionType)),
+			error_code(whv_context.ExceptionInfo.ErrorCodeValid ? whv_context.ErrorCode : std::optional<error_code_type>(std::nullopt)),
+			exception_parameter(whv_context.ExceptionParameter)
 {
 	std::memcpy(instruction_bytes.data(), whv_context.InstructionBytes, instruction_bytes.size());
 }

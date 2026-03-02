@@ -8,16 +8,16 @@ public:
 	using native_emulator_type = std::shared_ptr<hm::emulator_t>;
 	using native_hook_type = std::shared_ptr<hm::hook_t>;
 
-	explicit hypermulator_hook_t(native_emulator_type native_emulator, native_hook_type native_hook, callback_type callback)
+	explicit hypermulator_hook_t(native_emulator_type native_emulator, std::span<const native_hook_type> native_hooks, callback_type callback)
 			:	emulator_hook_t(std::move(callback)),
 				native_emulator_(std::move(native_emulator)),
-				native_hook_(std::move(native_hook)) { }
+				native_hooks_(native_hooks.begin(), native_hooks.end()) { }
 
 	~hypermulator_hook_t();
 
 protected:
 	native_emulator_type native_emulator_;
-	native_hook_type native_hook_;
+	std::vector<native_hook_type> native_hooks_;
 };
 
 class hypermulator_t : public emulator_t
@@ -27,11 +27,11 @@ public:
 
 	[[nodiscard]] emulator_err_t run_at(address_type start_address, address_type end_address) override;
 
-	[[nodiscard]] emulator_err_t map_memory(address_type address, size_type size, protection_type protection) override;
-	[[nodiscard]] emulator_err_t unmap_memory(address_type address, size_type size) override;
+	[[nodiscard]] emulator_err_t map_physical_memory(address_type address, size_type size, protection_type protection) override;
+	[[nodiscard]] emulator_err_t unmap_physical_memory(address_type address, size_type size) override;
 
-	[[nodiscard]] emulator_err_t read_memory(address_type address, void* buffer, size_type size) const override;
-	[[nodiscard]] emulator_err_t write_memory(address_type address, const void* buffer, size_type size) override;
+	[[nodiscard]] emulator_err_t read_physical_memory(address_type address, void* buffer, size_type size) const override;
+	[[nodiscard]] emulator_err_t write_physical_memory(address_type address, const void* buffer, size_type size) override;
 
 	[[nodiscard]] emulator_err_t read_register(x86::register_t reg, void* value) const override;
 	[[nodiscard]] emulator_err_t write_register(x86::register_t reg, const void* value) override;
@@ -53,18 +53,14 @@ public:
 	                                                     protection_type monitored_protection, address_type start_address, address_type end_address) override;
 
 protected:
+	using virtual_hook_creation_callback = std::function<hypermulator_hook_t::native_hook_type(address_type start_physical_address, address_type end_physical_address)>;
+
+	[[nodiscard]] std::vector<hypermulator_hook_t::native_hook_type> wrap_virtual_hook_creation(
+		const virtual_hook_creation_callback& callback, address_type start_address,
+		address_type end_address);
+
 	[[nodiscard]] std::expected<hook_type, emulator_err_t> add_native_hook(
-		const std::shared_ptr<hm::hook_t>& native_hook, const emulator_hook_t::callback_type& callback);
+		std::span<const hypermulator_hook_t::native_hook_type> native_hooks, const emulator_hook_t::callback_type& callback);
 
-	[[nodiscard]] std::expected<address_type, emulator_err_t> allocate_physical_page()
-	{
-		const address_type address = current_physical_page_;
-
-		current_physical_page_ += hm::emulator_t::page_size;
-
-		return address;
-	}
-
-	address_type current_physical_page_ = hm::emulator_t::page_size * 32;
 	std::shared_ptr<hm::emulator_t> backend_;
 };

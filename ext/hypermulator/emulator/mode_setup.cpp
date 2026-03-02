@@ -117,6 +117,15 @@ static void enable_ia32e_mode(hm::guest_virtual_processor_t& processor)
 	processor.write_register<hm::reg::efer>(efer);
 }
 
+static void enable_execute_disable_bit(hm::guest_virtual_processor_t& processor)
+{
+	ia32_efer_register efer = processor.read_register<hm::reg::efer, ia32_efer_register>();
+
+	efer.execute_disable_bit_enable = 1;
+
+	processor.write_register<hm::reg::efer>(efer);
+}
+
 static void enable_protected_mode(hm::guest_virtual_processor_t& processor)
 {
 	cr0 current_cr0 = processor.read_register<hm::reg::cr0, cr0>();
@@ -269,6 +278,7 @@ bool hm::emulator_t::load_cpu_mode_default_state()
 			enable_physical_address_extension(processor);
 
 			enable_ia32e_mode(processor);
+			enable_execute_disable_bit(processor);
 
 			set_up_segments(processor, true, true);
 

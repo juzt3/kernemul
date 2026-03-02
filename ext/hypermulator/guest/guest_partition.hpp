@@ -109,6 +109,7 @@ namespace hm
 		bool run_vmexit_callbacks(guest_virtual_processor_t& virtual_processor, vmexit_context_t& context) const;
 
 		SET_EXCEPTION_EXITING(debug, WHvX64ExceptionTypeDebugTrapOrFault)
+		SET_EXCEPTION_EXITING(page_fault, WHvX64ExceptionTypePageFault)
 
 		SET_EXTENDED_VMEXIT_EXITING(cpuid, X64CpuidExit)
 		SET_EXTENDED_VMEXIT_EXITING(rdtsc, X64RdtscExit)

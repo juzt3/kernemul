@@ -17,11 +17,11 @@ namespace hm
 	{
 		protection_t protection;
 
-		[[nodiscard]] bool exits_on(const memory_vmexit_t::access_t access) const
+		[[nodiscard]] bool exits_on(const memory_vmexit_t::access access) const
 		{
-			return (access == memory_vmexit_t::access_t::read && protection & prot_read) ||
-				(access == memory_vmexit_t::access_t::write && protection & prot_write) ||
-				(access == memory_vmexit_t::access_t::execute && protection & prot_execute);
+			return (access == memory_vmexit_t::access::read && protection & prot_read) ||
+				(access == memory_vmexit_t::access::write && protection & prot_write) ||
+				(access == memory_vmexit_t::access::execute && protection & prot_execute);
 		}
 	};
 
@@ -44,8 +44,8 @@ namespace hm
 		using address_type = guest_partition_t::address_type;
 		using instruction_callback = std::function<bool()>; // returns true = skip instruction
 		using code_callback = std::function<void()>;
-		using memory_access_callback = std::function<void(address_type address, memory_vmexit_t::access_t access)>;
-		using invalid_memory_callback = std::function<bool(address_type address, memory_vmexit_t::access_t access)>; // returns true = has handled invalid access properly (e.g. mapping address in)
+		using memory_access_callback = std::function<void(address_type address, memory_vmexit_t::access access)>;
+		using invalid_memory_callback = std::function<bool(address_type address, memory_vmexit_t::access access)>; // returns true = has handled invalid access properly (e.g. mapping address in)
 
 		using callback_type = std::variant<instruction_callback, code_callback, memory_access_callback, invalid_memory_callback>;
 		using data_type = std::variant<hook_instruction_t, hook_memory_t, hook_basic_block_t>;
@@ -80,11 +80,11 @@ namespace hm
 
 		[[nodiscard]] bool run_at(address_type start_address, address_type end_address = 0);
 
-		std::shared_ptr<hook_t> hook_code(const hook_t::code_callback& callback, address_type start_address = default_start_address, address_type end_address = default_end_address);
-		std::shared_ptr<hook_t> hook_basic_block(const hook_t::code_callback& callback, address_type start_address = default_start_address, address_type end_address = default_end_address);
-		std::shared_ptr<hook_t> hook_instruction(hook_instruction_t instruction, const hook_t::instruction_callback& callback, address_type start_address = default_start_address, address_type end_address = default_end_address);
-		std::shared_ptr<hook_t> hook_memory(protection_type protection, const hook_t::memory_access_callback& callback, address_type start_address = default_start_address, address_type end_address = default_end_address);
+		std::shared_ptr<hook_t> hook_code(const hook_t::code_callback& callback, address_type start_physical_address = default_start_address, address_type end_physical_address = default_end_address);
+		std::shared_ptr<hook_t> hook_basic_block(const hook_t::code_callback& callback, address_type start_physical_address = default_start_address, address_type end_physical_address = default_end_address);
+		std::shared_ptr<hook_t> hook_memory(protection_type protection, const hook_t::memory_access_callback& callback, address_type start_physical_address = default_start_address, address_type end_physical_address = default_end_address);
 		std::shared_ptr<hook_t> hook_invalid_memory(protection_type protection, const hook_t::invalid_memory_callback& callback, address_type start_address = default_start_address, address_type end_address = default_end_address);
+		std::shared_ptr<hook_t> hook_instruction(hook_instruction_t instruction, const hook_t::instruction_callback& callback, address_type start_address = default_start_address, address_type end_address = default_end_address);
 
 		bool remove_hook(const std::shared_ptr<hook_t>& hook);
 
@@ -150,12 +150,16 @@ namespace hm
 
 	protected:
 		bool configure_single_step();
+		void reset_guest_exit_state();
+
 		void single_step(guest_virtual_processor_t& processor, vmexit_context_t& context);
+		bool handle_page_fault(guest_virtual_processor_t& processor, const vmexit_context_t& context);
 
 		bool handle_exception(guest_virtual_processor_t& processor, vmexit_context_t& context);
 		bool handle_memory_access(guest_virtual_processor_t& processor, vmexit_context_t& context);
 
 		void set_block_code_hook_step(const std::shared_ptr<hook_t>& hook);
+		void handle_block_hook_overflow(const std::shared_ptr<hook_t>& hook, address_type rip);
 		void invoke_block_code_hook_step_callback(const std::shared_ptr<hook_t>& hook, address_type rip,
 		                                          std::span<const std::uint8_t> instruction_bytes);
 		bool protect_block_code_hook_memory_range(address_type start_address, address_type end_address, bool executable);
@@ -166,6 +170,8 @@ namespace hm
 		                              const std::shared_ptr<hook_t>& hook, bool& step_handled);
 		bool memory_process_memory_hook(guest_virtual_processor_t& processor, vmexit_context_t& context,
 		                                const std::shared_ptr<hook_t>& hook, bool& step_handled);
+
+		bool raw_process_invalid_memory_hook(const std::shared_ptr<hook_t>& hook, address_type accessed_address, memory_vmexit_t::access access_type);
 
 		bool handle_cpuid_instruction(guest_virtual_processor_t& processor, vmexit_context_t& context);
 		bool handle_rdtsc_instruction(guest_virtual_processor_t& processor, vmexit_context_t& context);

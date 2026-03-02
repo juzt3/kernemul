@@ -1,16 +1,15 @@
 #pragma once
 #include "guest_register.hpp"
-#include "guest_vmexit.hpp"
 
 #include <stdexcept>
+#include <optional>
 #include <memory>
 #include <array>
 #include <span>
 
-#include "guest_partition.hpp"
-
 namespace hm
 {
+	struct vmexit_context_t;
 	class guest_partition_t;
 	struct guest_register_t;
 
@@ -31,6 +30,8 @@ namespace hm
 		[[nodiscard]] id_type id() const;
 
 		void run();
+
+		[[nodiscard]] std::optional<address_type> translate_virtual_address(address_type virtual_address) const;
 
 		bool write_virtual_memory(address_type virtual_address, const void* buffer, size_type size);
 		bool write_virtual_memory(address_type virtual_address, std::span<const std::uint8_t> buffer);
