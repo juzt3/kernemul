@@ -232,7 +232,7 @@ static emulator_object_t<_DRIVER_OBJECT> set_up_driver_object(const std::shared_
 	contents.DriverStart = reinterpret_cast<void*>(image.base_address);
 	contents.DriverSize = static_cast<std::uint32_t>(image.size);
 
-	return emulator_object_t<_DRIVER_OBJECT>::allocate(emulator, contents);
+	return emulator_object_t<_DRIVER_OBJECT>::allocate(emulator, contents, image.name);
 }
 
 static void set_up_driver_entry(const std::shared_ptr<emulator_t>& emulator)
@@ -290,7 +290,7 @@ std::int32_t main()
 		spdlog::info("mapped ntoskrnl at 0x{:X}", nt_image->base_address);
 		spdlog::info("mapped image at 0x{:X}", base_address);
 
-		emulator_err_t error = emulator->hook_basic_block(
+		/*emulator_err_t error = emulator->hook_basic_block(
 			[emulator]()
 			{
 				const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
@@ -301,9 +301,9 @@ std::int32_t main()
 			end_address
 		).error_or({});
 		 
-		error.throw_if("basic block hook attach");
+		error.throw_if("basic block hook attach");*/
 
-		error = emulator->hook_invalid_memory(
+		emulator_err_t error = emulator->hook_invalid_memory(
 			[emulator](const emulator_t::address_type faulting_address, const protection_t access) -> bool
 			{
 				const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
