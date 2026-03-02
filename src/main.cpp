@@ -8,21 +8,33 @@
 
 #include "kernel_def.hpp"
 
+struct mapped_image_t
+{
+	using address_type = emulator_t::address_type;
+	using size_type = emulator_t::size_type;
+
+	mapped_image_t(const address_type _base_address, const size_type _size, const address_type _entry_point)
+			:	base_address(_base_address),
+				size(_size),
+				entry_point(_entry_point) { }
+
+	address_type base_address;
+	size_type size;
+
+	address_type entry_point;
+
+	emulator_object_t<_NT_LDR_DATA_TABLE_ENTRY> table_entry;
+};
+
 namespace kernel
 {
 	static emulator_object_t<_KUSER_SHARED_DATA> user_shared_data;
 
 	static emulator_object_t<_LIST_ENTRY> ps_loaded_module_list;
-	static std::vector<emulator_object_t<_NT_LDR_DATA_TABLE_ENTRY>> module_entries;
+	static std::vector<std::shared_ptr<mapped_image_t>> module_entries;
+
+	static std::shared_ptr<mapped_image_t> emulated_module;
 }
-
-struct mapped_image_t
-{
-	emulator_t::address_type base_address;
-	emulator_t::size_type size;
-
-	emulator_t::address_type entry_point;
-};
 
 static void relocate_image(portable_executable::image_t* const image, const emulator_t::address_type runtime_base_address)
 {
@@ -109,7 +121,7 @@ static void set_loaded_module_list_blink(const emulator_object_t<_NT_LDR_DATA_TA
 	set_list_entry_blink(kernel::ps_loaded_module_list, list_entry);
 }
 
-static void add_to_loaded_module_list(const std::shared_ptr<emulator_t>& emulator, const mapped_image_t& image)
+static void add_to_loaded_module_list(const std::shared_ptr<emulator_t>& emulator, mapped_image_t& image)
 {
 	_NT_LDR_DATA_TABLE_ENTRY contents = { };
 
@@ -119,28 +131,32 @@ static void add_to_loaded_module_list(const std::shared_ptr<emulator_t>& emulato
 
 	const auto module_list = reinterpret_cast<PLIST_ENTRY>(kernel::ps_loaded_module_list.address());
 
+	const std::shared_ptr<mapped_image_t>& last_entry = kernel::module_entries.empty()
+		                                                    ? nullptr
+		                                                    : kernel::module_entries.back();
+
 	contents.InLoadOrderLinks.Flink = module_list;
-	contents.InLoadOrderLinks.Blink = kernel::module_entries.empty()
-		                                  ? module_list
-		                                  : get_module_list_entry_address(kernel::module_entries.back());
+	contents.InLoadOrderLinks.Blink = last_entry
+		                                  ? get_module_list_entry_address(last_entry->table_entry)
+		                                  : module_list;
 
 	auto object = emulator_object_t<_NT_LDR_DATA_TABLE_ENTRY>::allocate(emulator, contents);
 
-	if (kernel::module_entries.empty())
+	if (last_entry)
 	{
-		set_loaded_module_list_flink(object);
+		set_module_list_entry_flink(last_entry->table_entry, object);
 	}
 	else
 	{
-		set_module_list_entry_flink(kernel::module_entries.back(), object);
+		set_loaded_module_list_flink(object);
 	}
 
 	set_loaded_module_list_blink(object);
 
-	kernel::module_entries.push_back(std::move(object));
+	image.table_entry = std::move(object);
 }
 
-static std::optional<mapped_image_t> map_kernel_image(const std::shared_ptr<emulator_t>& emulator, const std::string_view name)
+static std::shared_ptr<mapped_image_t> map_kernel_image(const std::shared_ptr<emulator_t>& emulator, const std::string_view name)
 {
 	portable_executable::file_t pe_file(name);
 
@@ -186,12 +202,9 @@ static std::optional<mapped_image_t> map_kernel_image(const std::shared_ptr<emul
 		return { };
 	}
 
-	const auto image = mapped_image_t{
-		.base_address = *base_address, .size = image_size,
-		.entry_point = *base_address + nt_headers->optional_header.address_of_entry_point
-	};
+	auto image = std::make_shared<mapped_image_t>(*base_address, image_size, *base_address + nt_headers->optional_header.address_of_entry_point);
 
-	add_to_loaded_module_list(emulator, image);
+	add_to_loaded_module_list(emulator, *image);
 
 	return image;
 }
@@ -205,6 +218,24 @@ static void set_up_user_shared_data(const std::shared_ptr<emulator_t>& emulator)
 	contents.NtMinorVersion = 0;
 
 	kernel::user_shared_data = emulator_object_t<_KUSER_SHARED_DATA>::allocate_at(emulator, contents, 0xFFFFF78000000000);
+}
+
+static emulator_object_t<_DRIVER_OBJECT> set_up_driver_object(const std::shared_ptr<emulator_t>& emulator, const mapped_image_t& image)
+{
+	_DRIVER_OBJECT contents = { };
+
+	contents.DriverSection = reinterpret_cast<void*>(image.table_entry.address());
+	contents.DriverStart = reinterpret_cast<void*>(image.base_address);
+	contents.DriverSize = static_cast<std::uint32_t>(image.size);
+
+	return emulator_object_t<_DRIVER_OBJECT>::allocate(emulator, contents);
+}
+
+static void set_up_driver_entry(const std::shared_ptr<emulator_t>& emulator)
+{
+	const auto driver_object = set_up_driver_object(emulator, *kernel::emulated_module);
+
+	emulator->write_register<x86::reg::rcx>(driver_object.address());
 }
 
 static void set_up_ps_loaded_module_list(const std::shared_ptr<emulator_t>& emulator)
@@ -245,11 +276,12 @@ std::int32_t main()
 		set_up_user_shared_data(emulator);
 
 		const auto nt_image = map_kernel_image(emulator, nt_file_name);
-		const auto pe_image = map_kernel_image(emulator, pe_file_name);
 
-	    const emulator_t::address_type base_address = pe_image->base_address;
-	    const emulator_t::address_type end_address = base_address + pe_image->size;
-		const emulator_t::address_type entry_point_address = pe_image->entry_point;
+		kernel::emulated_module = map_kernel_image(emulator, pe_file_name);
+
+	    const emulator_t::address_type base_address = kernel::emulated_module->base_address;
+	    const emulator_t::address_type end_address = base_address + kernel::emulated_module->size;
+		const emulator_t::address_type entry_point_address = kernel::emulated_module->entry_point;
 
 		spdlog::info("mapped ntoskrnl at 0x{:X}", nt_image->base_address);
 		spdlog::info("mapped image at 0x{:X}", base_address);
@@ -282,6 +314,8 @@ std::int32_t main()
 		).error_or({});
 
 		error.throw_if("invalid memory hook attach");
+
+		set_up_driver_entry(emulator);
 
 		error = emulator->run_at(entry_point_address, emulator_t::thread_return_address);
 
