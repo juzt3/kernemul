@@ -36,6 +36,7 @@ namespace kernel
 	static emulator_object_t<_KUSER_SHARED_DATA> user_shared_data;
 
 	static emulator_object_t<_KPCR> kpcr;
+	static emulator_object_t<_KPRCB> kprcb;
 
 	static emulator_object_t<_LIST_ENTRY> ps_loaded_module_list;
 	static std::vector<std::shared_ptr<mapped_image_t>> module_entries;
@@ -262,7 +263,7 @@ static void set_up_stack(emulator_t& emulator)
 
 	error.throw_if("map stack");
 
-	const emulator_t::address_type starting_rsp_value = *stack_base_address + stack_size - 0x1000;
+	const emulator_t::address_type starting_rsp_value = *stack_base_address + stack_size - 0x1000 - 8;
 
 	emulator.write_register<x86::reg::rsp>(starting_rsp_value);
 
@@ -271,15 +272,28 @@ static void set_up_stack(emulator_t& emulator)
 	error.throw_if("set return address");
 }
 
-static void set_up_kernel_gs(const std::shared_ptr<emulator_t>& emulator)
+static void set_up_kprcb(const std::shared_ptr<emulator_t>& emulator)
 {
+	kernel::kprcb = emulator_object_t<_KPRCB>::allocate(emulator);
+}
+
+static void set_up_kpcr(const std::shared_ptr<emulator_t>& emulator)
+{
+	set_up_kprcb(emulator);
+
 	kernel::kpcr = emulator_object_t<_KPCR>::allocate(emulator);
 
 	_KPCR contents = { };
 
 	contents.Self = reinterpret_cast<_KPCR*>(kernel::kpcr.address());
+	contents.CurrentPrcb = reinterpret_cast<_KPRCB*>(kernel::kprcb.address());
 
 	kernel::kpcr.write(contents);
+}
+
+static void set_up_kernel_gs(const std::shared_ptr<emulator_t>& emulator)
+{
+	set_up_kpcr(emulator);
 
 	const emulator_err_t error = emulator->write_gs_base(kernel::kpcr.address());
 
@@ -288,7 +302,7 @@ static void set_up_kernel_gs(const std::shared_ptr<emulator_t>& emulator)
 	spdlog::info("mapped kernel gs at 0x{:X}", kernel::kpcr.address());
 }
 
-static void set_up_idt(const std::shared_ptr<emulator_t>& emulator)
+static void set_up_idt(const std::shared_ptr<emulator_t>& emulator, const mapped_image_t& nt_image)
 {
 	constexpr std::uint32_t handler_count = 256;
 	constexpr emulator_t::size_type idt_size = handler_count * sizeof(segment_descriptor_interrupt_gate_64);
@@ -299,6 +313,8 @@ static void set_up_idt(const std::shared_ptr<emulator_t>& emulator)
 
 	error.throw_if("map IDT");
 
+	const emulator_t::address_type handler_address = nt_image.base_address + (nt_image.size / 2);
+
 	for (std::uint32_t i = 0; i < handler_count; i++)
 	{
 		const std::uint32_t offset = i * sizeof(segment_descriptor_interrupt_gate_64);
@@ -306,11 +322,21 @@ static void set_up_idt(const std::shared_ptr<emulator_t>& emulator)
 		const std::string name = std::format("IDT vector #{:X}", i);
 
 		auto entry_object = emulator_object_t<segment_descriptor_interrupt_gate_64>(emulator, *idt_base_address + offset, name);
+
+		segment_descriptor_interrupt_gate_64 contents = { };
+
+		contents.offset_low = handler_address & 0xFFFF;
+		contents.offset_middle = (handler_address >> 16) & 0xFFFF;
+		contents.offset_high = (handler_address >> 32) & 0xFFFF'FFFF;
+
+		entry_object.write(contents);
 	}
 
 	error = emulator->write_idt(*idt_base_address, idt_size - 1);
 
 	error.throw_if("loading IDT");
+
+	spdlog::info("mapped IDT at 0x{:X}", *idt_base_address);
 }
 
 std::int32_t main()
@@ -326,11 +352,12 @@ std::int32_t main()
 		set_up_kernel_gs(emulator);
 		set_up_ps_loaded_module_list(emulator);
 		set_up_user_shared_data(emulator);
-		set_up_idt(emulator);
 
 		const auto nt_image = map_kernel_image(emulator, nt_file_name);
 
 		kernel::emulated_module = map_kernel_image(emulator, pe_file_name);
+
+		set_up_idt(emulator, *nt_image);
 
 	    const emulator_t::address_type base_address = kernel::emulated_module->base_address;
 	    const emulator_t::address_type end_address = base_address + kernel::emulated_module->size;
@@ -339,20 +366,36 @@ std::int32_t main()
 		spdlog::info("mapped ntoskrnl at 0x{:X}", nt_image->base_address);
 		spdlog::info("mapped image at 0x{:X}", base_address);
 
-		/*emulator_err_t error = emulator->hook_basic_block(
+		emulator_err_t error = emulator->hook_basic_block(
 			[emulator]()
 			{
 				const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
 
 				spdlog::info("basic block executed at 0x{:X}", rip);
 			},
-			base_address,
-			end_address
+			nt_image->base_address,
+			nt_image->base_address + nt_image->size
 		).error_or({});
 		 
-		error.throw_if("basic block hook attach");*/
+		error.throw_if("basic block hook attach");
 
-		emulator_err_t error = emulator->hook_invalid_memory(
+		error = emulator->hook_instruction(x86::insn::cpuid,
+			[emulator]()
+			{
+				const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
+				const auto rax = emulator->read_register<x86::reg::rax, emulator_t::address_type>();
+
+				spdlog::info("cpuid executed at 0x{:X} (rax=0x{:X})", rip, rax);
+
+				return false;
+			},
+			emulator_t::default_start_address,
+			emulator_t::default_end_address
+		).error_or({});
+
+		error.throw_if("instruction hook attach");
+
+		error = emulator->hook_invalid_memory(
 			[emulator](const emulator_t::address_type faulting_address, const protection_t access) -> bool
 			{
 				const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
@@ -373,9 +416,8 @@ std::int32_t main()
 		error = emulator->run_at(entry_point_address, emulator_t::thread_return_address);
 
 		const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
-		const auto rax = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
-
-		spdlog::info("emulation finished at rip=0x{:X}, rax=0x{:X}", rip, rax);
+	
+		spdlog::info("emulation finished at rip=0x{:X}", rip);
 
 		error.throw_if("emulation running");
 	}

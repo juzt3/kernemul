@@ -247,3 +247,122 @@ struct _KPCR
     VOID* Unused3;                                                          //0x110
     ULONG PcrAlign1[24];                                                    //0x118
 };
+
+//0x10 bytes (sizeof)
+struct _KDESCRIPTOR
+{
+    USHORT Pad[3];                                                          //0x0
+    USHORT Limit;                                                           //0x6
+    VOID* Base;                                                             //0x8
+};
+
+//0xf0 bytes (sizeof)
+struct _KSPECIAL_REGISTERS
+{
+    ULONGLONG Cr0;                                                          //0x0
+    ULONGLONG Cr2;                                                          //0x8
+    ULONGLONG Cr3;                                                          //0x10
+    ULONGLONG Cr4;                                                          //0x18
+    ULONGLONG KernelDr0;                                                    //0x20
+    ULONGLONG KernelDr1;                                                    //0x28
+    ULONGLONG KernelDr2;                                                    //0x30
+    ULONGLONG KernelDr3;                                                    //0x38
+    ULONGLONG KernelDr6;                                                    //0x40
+    ULONGLONG KernelDr7;                                                    //0x48
+    struct _KDESCRIPTOR Gdtr;                                               //0x50
+    struct _KDESCRIPTOR Idtr;                                               //0x60
+    USHORT Tr;                                                              //0x70
+    USHORT Ldtr;                                                            //0x72
+    ULONG MxCsr;                                                            //0x74
+    ULONGLONG DebugControl;                                                 //0x78
+    ULONGLONG LastBranchToRip;                                              //0x80
+    ULONGLONG LastBranchFromRip;                                            //0x88
+    ULONGLONG LastExceptionToRip;                                           //0x90
+    ULONGLONG LastExceptionFromRip;                                         //0x98
+    ULONGLONG Cr8;                                                          //0xa0
+    ULONGLONG MsrGsBase;                                                    //0xa8
+    ULONGLONG MsrGsSwap;                                                    //0xb0
+    ULONGLONG MsrStar;                                                      //0xb8
+    ULONGLONG MsrLStar;                                                     //0xc0
+    ULONGLONG MsrCStar;                                                     //0xc8
+    ULONGLONG MsrSyscallMask;                                               //0xd0
+    ULONGLONG Xcr0;                                                         //0xd8
+    ULONGLONG MsrFsBase;                                                    //0xe0
+    ULONGLONG SpecialPadding0;                                              //0xe8
+};
+
+//0x5c0 bytes (sizeof)
+struct _KPROCESSOR_STATE
+{
+    struct _KSPECIAL_REGISTERS SpecialRegisters;                            //0x0
+    struct _CONTEXT ContextFrame;                                           //0xf0
+};
+
+//0x700 bytes (sizeof)
+struct _KPRCB
+{
+    ULONG MxCsr;                                                            //0x0
+    UCHAR LegacyNumber;                                                     //0x4
+    UCHAR ReservedMustBeZero;                                               //0x5
+    UCHAR InterruptRequest;                                                 //0x6
+    UCHAR IdleHalt;                                                         //0x7
+    struct _KTHREAD* CurrentThread;                                         //0x8
+    struct _KTHREAD* NextThread;                                            //0x10
+    struct _KTHREAD* IdleThread;                                            //0x18
+    UCHAR NestingLevel;                                                     //0x20
+    UCHAR ClockOwner;                                                       //0x21
+    union
+    {
+        UCHAR PendingTickFlags;                                             //0x22
+        struct
+        {
+            UCHAR PendingTick : 1;                                            //0x22
+            UCHAR PendingBackupTick : 1;                                      //0x22
+        };
+    };
+    UCHAR IdleState;                                                        //0x23
+    ULONG Number;                                                           //0x24
+    ULONGLONG RspBase;                                                      //0x28
+    ULONGLONG PrcbLock;                                                     //0x30
+    CHAR* PriorityState;                                                    //0x38
+    CHAR CpuType;                                                           //0x40
+    CHAR CpuID;                                                             //0x41
+    union
+    {
+        USHORT CpuStep;                                                     //0x42
+        struct
+        {
+            UCHAR CpuStepping;                                              //0x42
+            UCHAR CpuModel;                                                 //0x43
+        };
+    };
+    ULONG MHz;                                                              //0x44
+    ULONGLONG HalReserved[8];                                               //0x48
+    USHORT MinorVersion;                                                    //0x88
+    USHORT MajorVersion;                                                    //0x8a
+    UCHAR BuildType;                                                        //0x8c
+    UCHAR CpuVendor;                                                        //0x8d
+    UCHAR LegacyCoresPerPhysicalProcessor;                                  //0x8e
+    UCHAR LegacyLogicalProcessorsPerCore;                                   //0x8f
+    ULONGLONG TscFrequency;                                                 //0x90
+    ULONG CoresPerPhysicalProcessor;                                        //0x98
+    ULONG LogicalProcessorsPerCore;                                         //0x9c
+    ULONGLONG PrcbPad04[4];                                                 //0xa0
+    struct _KNODE* ParentNode;                                              //0xc0
+    ULONGLONG GroupSetMember;                                               //0xc8
+    UCHAR Group;                                                            //0xd0
+    UCHAR GroupIndex;                                                       //0xd1
+    UCHAR PrcbPad05[2];                                                     //0xd2
+    ULONG InitialApicId;                                                    //0xd4
+    ULONG ScbOffset;                                                        //0xd8
+    ULONG ApicMask;                                                         //0xdc
+    VOID* AcpiReserved;                                                     //0xe0
+    ULONG CFlushSize;                                                       //0xe8
+    ULONGLONG PrcbPad11[2];                                                 //0xf0
+    struct _KPROCESSOR_STATE ProcessorState;                                //0x100
+    struct _XSAVE_AREA_HEADER* ExtendedSupervisorState;                     //0x6c0
+    ULONG ProcessorSignature;                                               //0x6c8
+    ULONG ProcessorFlags;                                                   //0x6cc
+    ULONGLONG PrcbPad12a;                                                   //0x6d0
+    ULONGLONG PrcbPad12[3];                                                 //0x6d8
+};
