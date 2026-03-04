@@ -4,6 +4,7 @@
 
 #include <portable_executable/image.hpp>
 #include <portable_executable/file.hpp>
+#include <ia32-doc/ia32.hpp>
 #include <spdlog/spdlog.h>
 
 #include "kernel_def.hpp"
@@ -259,7 +260,7 @@ static void set_up_stack(emulator_t& emulator)
 
 	emulator_err_t error = stack_base_address.error_or({});
 
-	error.throw_if("unable to map stack");
+	error.throw_if("map stack");
 
 	const emulator_t::address_type starting_rsp_value = *stack_base_address + stack_size - 0x1000;
 
@@ -267,7 +268,7 @@ static void set_up_stack(emulator_t& emulator)
 
 	error = emulator.write_virtual_memory(starting_rsp_value, &emulator_t::thread_return_address, sizeof(emulator_t::thread_return_address));
 
-	error.throw_if("unable to set return address");
+	error.throw_if("set return address");
 }
 
 static void set_up_kernel_gs(const std::shared_ptr<emulator_t>& emulator)
@@ -282,9 +283,34 @@ static void set_up_kernel_gs(const std::shared_ptr<emulator_t>& emulator)
 
 	const emulator_err_t error = emulator->write_gs_base(kernel::kpcr.address());
 
-	error.throw_if("unable to write kernel gs base");
+	error.throw_if("write kernel gs base");
 
 	spdlog::info("mapped kernel gs at 0x{:X}", kernel::kpcr.address());
+}
+
+static void set_up_idt(const std::shared_ptr<emulator_t>& emulator)
+{
+	constexpr std::uint32_t handler_count = 256;
+	constexpr emulator_t::size_type idt_size = handler_count * sizeof(segment_descriptor_interrupt_gate_64);
+
+	const auto idt_base_address = emulator->heap_allocate(idt_size, prot_read, true);
+
+	emulator_err_t error = idt_base_address.error_or({});
+
+	error.throw_if("map IDT");
+
+	for (std::uint32_t i = 0; i < handler_count; i++)
+	{
+		const std::uint32_t offset = i * sizeof(segment_descriptor_interrupt_gate_64);
+
+		const std::string name = std::format("IDT vector #{:X}", i);
+
+		auto entry_object = emulator_object_t<segment_descriptor_interrupt_gate_64>(emulator, *idt_base_address + offset, name);
+	}
+
+	error = emulator->write_idt(*idt_base_address, idt_size - 1);
+
+	error.throw_if("loading IDT");
 }
 
 std::int32_t main()
@@ -300,6 +326,7 @@ std::int32_t main()
 		set_up_kernel_gs(emulator);
 		set_up_ps_loaded_module_list(emulator);
 		set_up_user_shared_data(emulator);
+		set_up_idt(emulator);
 
 		const auto nt_image = map_kernel_image(emulator, nt_file_name);
 
@@ -312,7 +339,7 @@ std::int32_t main()
 		spdlog::info("mapped ntoskrnl at 0x{:X}", nt_image->base_address);
 		spdlog::info("mapped image at 0x{:X}", base_address);
 
-		emulator_err_t error = emulator->hook_basic_block(
+		/*emulator_err_t error = emulator->hook_basic_block(
 			[emulator]()
 			{
 				const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
@@ -323,9 +350,9 @@ std::int32_t main()
 			end_address
 		).error_or({});
 		 
-		error.throw_if("basic block hook attach");
+		error.throw_if("basic block hook attach");*/
 
-		error = emulator->hook_invalid_memory(
+		emulator_err_t error = emulator->hook_invalid_memory(
 			[emulator](const emulator_t::address_type faulting_address, const protection_t access) -> bool
 			{
 				const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();

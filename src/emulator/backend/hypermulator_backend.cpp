@@ -149,6 +149,17 @@ emulator_err_t hypermulator_t::write_gs_base(const address_type value)
 	return emulator_err_t{ backend_->write_register(hm::reg::gs, &gs_segment, sizeof(gs_segment)) };
 }
 
+emulator_err_t hypermulator_t::write_idt(const address_type base, const size_type limit)
+{
+	const hm::guest_table_register_t idtr = {
+		.pad = { },
+		.limit = static_cast<std::uint16_t>(limit),
+		.base = base
+	};
+
+	return emulator_err_t{ backend_->write_register(hm::reg::idtr, &idtr, sizeof(idtr)) };
+}
+
 std::expected<emulator_t::hook_type, emulator_err_t> hypermulator_t::hook_instruction(
 	const x86::insn instruction, const emulator_hook_t::instruction_callback& callback,
 	const address_type start_address,

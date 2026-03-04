@@ -14,6 +14,13 @@ namespace hm
 		std::uint16_t attributes;
 	};
 
+	struct guest_table_register_t
+	{
+		std::uint16_t pad[3];
+		std::uint16_t limit;
+		std::uint64_t base;
+	};
+
 	struct guest_register_t
 	{
 		using id_type = WHV_REGISTER_NAME;

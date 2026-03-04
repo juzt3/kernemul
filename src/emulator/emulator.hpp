@@ -243,6 +243,7 @@ public:
 	[[nodiscard]] virtual emulator_err_t write_register(x86::register_t reg, const void* value) = 0;
 
 	[[nodiscard]] virtual emulator_err_t write_gs_base(address_type value) = 0;
+	[[nodiscard]] virtual emulator_err_t write_idt(address_type base, size_type limit) = 0;
 
 	virtual std::expected<hook_type, emulator_err_t> hook_instruction(
 		x86::insn instruction, const emulator_hook_t::instruction_callback& callback, address_type start_address,
