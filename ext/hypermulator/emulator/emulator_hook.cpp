@@ -420,9 +420,10 @@ bool hm::emulator_t::memory_process_memory_hook(guest_virtual_processor_t& proce
 		return false;
 	}
 
+	const address_type real_phys_addr = processor.translate_virtual_address(info.virtual_address).value_or(1337);
 	const address_type physical_accessed_address = info.physical_address;
 
-	if (!hook_memory.exits_on(info.type) || !hook->in_range(physical_accessed_address))
+	if (!hook->in_range(physical_accessed_address))
 	{
 		if (!step_handled && hook->type == hook_type_t::memory_access && hook->in_aligned_range(physical_accessed_address))
 		{

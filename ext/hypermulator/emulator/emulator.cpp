@@ -155,6 +155,13 @@ bool hm::emulator_t::read_physical_memory(const address_type physical_address,
 	return read_physical_memory(physical_address, buffer.data(), buffer.size());
 }
 
+std::optional<hm::emulator_t::address_type> hm::emulator_t::translate_virtual_address(const address_type address) const
+{
+	const auto processor = virtual_processor();
+
+	return processor.translate_virtual_address(address);
+}
+
 bool hm::emulator_t::write_register(const guest_register_t& guest_register, const void* const value,
                                     const size_type size)
 {

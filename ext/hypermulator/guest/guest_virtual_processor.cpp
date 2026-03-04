@@ -3,6 +3,7 @@
 #include "guest_register.hpp"
 
 #include <ia32-doc/ia32.hpp>
+#include <spdlog/spdlog.h>
 
 hm::guest_virtual_processor_t::id_type hm::guest_virtual_processor_t::id() const
 {

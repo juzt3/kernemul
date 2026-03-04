@@ -12,7 +12,7 @@ public:
 
 	emulator_object_t() = default;
 
-	explicit emulator_object_t(const std::shared_ptr<emulator_t>& emulator, const address_type address, const std::string& name)
+	explicit emulator_object_t(const std::shared_ptr<emulator_t>& emulator, const address_type address, const std::string& name = { })
 			:	emulator_(emulator),
 				name_(name),
 				address_(address)

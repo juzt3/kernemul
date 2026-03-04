@@ -36,6 +36,8 @@ public:
 	[[nodiscard]] emulator_err_t read_register(x86::register_t reg, void* value) const override;
 	[[nodiscard]] emulator_err_t write_register(x86::register_t reg, const void* value) override;
 
+	[[nodiscard]] emulator_err_t write_gs_base(address_type value) override;
+
 	std::expected<hook_type, emulator_err_t> hook_instruction(x86::insn instruction,
 	                                                          const emulator_hook_t::instruction_callback& callback, address_type start_address,
 	                                                          address_type end_address) override;
@@ -62,5 +64,6 @@ protected:
 	[[nodiscard]] std::expected<hook_type, emulator_err_t> add_native_hook(
 		std::span<const hypermulator_hook_t::native_hook_type> native_hooks, const emulator_hook_t::callback_type& callback);
 
+protected:
 	std::shared_ptr<hm::emulator_t> backend_;
 };

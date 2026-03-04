@@ -50,6 +50,8 @@ public:
 	[[nodiscard]] emulator_err_t read_register(x86::register_t reg, void* value) const override;
 	[[nodiscard]] emulator_err_t write_register(x86::register_t reg, const void* value) override;
 
+	[[nodiscard]] emulator_err_t write_gs_base(address_type value) override;
+
 	std::expected<hook_type, emulator_err_t> hook_instruction(x86::insn instruction,
 	                                                          const emulator_hook_t::instruction_callback& callback, address_type start_address,
 	                                                          address_type end_address) override;
@@ -104,5 +106,6 @@ protected:
 		return hook;
 	}
 
+protected:
 	backend_type backend_ = nullptr;
 };

@@ -99,6 +99,8 @@ namespace hm
 		bool read_physical_memory(address_type physical_address, void* buffer, size_type size) const;
 		bool read_physical_memory(address_type physical_address, std::span<std::uint8_t> buffer) const;
 
+		[[nodiscard]] std::optional<address_type> translate_virtual_address(address_type address) const;
+
 		bool write_register(const guest_register_t& guest_register, const void* value, size_type size);
 		bool read_register(const guest_register_t& guest_register, void* value, size_type size) const;
 

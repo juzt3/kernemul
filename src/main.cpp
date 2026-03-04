@@ -27,12 +27,14 @@ struct mapped_image_t
 
 	address_type entry_point;
 
-	emulator_object_t<_NT_LDR_DATA_TABLE_ENTRY> table_entry;
+	emulator_object_t<_KLDR_DATA_TABLE_ENTRY> table_entry;
 };
 
 namespace kernel
 {
 	static emulator_object_t<_KUSER_SHARED_DATA> user_shared_data;
+
+	static emulator_object_t<_KPCR> kpcr;
 
 	static emulator_object_t<_LIST_ENTRY> ps_loaded_module_list;
 	static std::vector<std::shared_ptr<mapped_image_t>> module_entries;
@@ -56,12 +58,12 @@ static void relocate_image(portable_executable::image_t* const image, const emul
 	}
 }
 
-static PLIST_ENTRY get_module_list_entry_address(const emulator_object_t<_NT_LDR_DATA_TABLE_ENTRY>& object)
+static PLIST_ENTRY get_module_list_entry_address(const emulator_object_t<_KLDR_DATA_TABLE_ENTRY>& object)
 {
-	return reinterpret_cast<PLIST_ENTRY>(object.address()) + offsetof(_NT_LDR_DATA_TABLE_ENTRY, InLoadOrderLinks);
+	return reinterpret_cast<PLIST_ENTRY>(object.address()) + offsetof(_KLDR_DATA_TABLE_ENTRY, InLoadOrderLinks);
 }
 
-static void set_module_list_entry_flink(emulator_object_t<_NT_LDR_DATA_TABLE_ENTRY>& object, const PLIST_ENTRY flink)
+static void set_module_list_entry_flink(emulator_object_t<_KLDR_DATA_TABLE_ENTRY>& object, const PLIST_ENTRY flink)
 {
 	auto current = object.read();
 
@@ -70,7 +72,7 @@ static void set_module_list_entry_flink(emulator_object_t<_NT_LDR_DATA_TABLE_ENT
 	object.write(current);
 }
 
-static void set_module_list_entry_blink(emulator_object_t<_NT_LDR_DATA_TABLE_ENTRY>& object, const PLIST_ENTRY blink)
+static void set_module_list_entry_blink(emulator_object_t<_KLDR_DATA_TABLE_ENTRY>& object, const PLIST_ENTRY blink)
 {
 	auto current = object.read();
 
@@ -79,14 +81,14 @@ static void set_module_list_entry_blink(emulator_object_t<_NT_LDR_DATA_TABLE_ENT
 	object.write(current);
 }
 
-static void set_module_list_entry_flink(emulator_object_t<_NT_LDR_DATA_TABLE_ENTRY>& object, const emulator_object_t<_NT_LDR_DATA_TABLE_ENTRY>& flink)
+static void set_module_list_entry_flink(emulator_object_t<_KLDR_DATA_TABLE_ENTRY>& object, const emulator_object_t<_KLDR_DATA_TABLE_ENTRY>& flink)
 {
 	const auto list_entry = get_module_list_entry_address(flink);
 
 	set_module_list_entry_flink(object, list_entry);
 }
 
-static void set_module_list_entry_blink(emulator_object_t<_NT_LDR_DATA_TABLE_ENTRY>& object, const emulator_object_t<_NT_LDR_DATA_TABLE_ENTRY>& blink)
+static void set_module_list_entry_blink(emulator_object_t<_KLDR_DATA_TABLE_ENTRY>& object, const emulator_object_t<_KLDR_DATA_TABLE_ENTRY>& blink)
 {
 	const auto list_entry = get_module_list_entry_address(blink);
 
@@ -111,27 +113,27 @@ static void set_list_entry_blink(emulator_object_t<LIST_ENTRY>& object, const PL
 	object.write(current);
 }
 
-static void set_loaded_module_list_flink(const emulator_object_t<_NT_LDR_DATA_TABLE_ENTRY>& flink)
+static void set_loaded_module_list_flink(const emulator_object_t<_KLDR_DATA_TABLE_ENTRY>& flink)
 {
 	const auto list_entry = get_module_list_entry_address(flink);
 
 	set_list_entry_flink(kernel::ps_loaded_module_list, list_entry);
 }
 
-static void set_loaded_module_list_blink(const emulator_object_t<_NT_LDR_DATA_TABLE_ENTRY>& blink)
+static void set_loaded_module_list_blink(const emulator_object_t<_KLDR_DATA_TABLE_ENTRY>& blink)
 {
 	const auto list_entry = get_module_list_entry_address(blink);
 
 	set_list_entry_blink(kernel::ps_loaded_module_list, list_entry);
 }
 
-static void add_to_loaded_module_list(const std::shared_ptr<emulator_t>& emulator, mapped_image_t& image)
+static void add_to_loaded_module_list(const std::shared_ptr<emulator_t>& emulator, const std::shared_ptr<mapped_image_t>& image)
 {
-	_NT_LDR_DATA_TABLE_ENTRY contents = { };
+	_KLDR_DATA_TABLE_ENTRY contents = { };
 
-	contents.DllBase = reinterpret_cast<void*>(image.base_address);
-	contents.SizeOfImage = static_cast<std::uint32_t>(image.size);
-	contents.EntryPoint = reinterpret_cast<void*>(image.entry_point);
+	contents.DllBase = reinterpret_cast<void*>(image->base_address);
+	contents.SizeOfImage = static_cast<std::uint32_t>(image->size);
+	contents.EntryPoint = reinterpret_cast<void*>(image->entry_point);
 
 	const auto module_list = reinterpret_cast<PLIST_ENTRY>(kernel::ps_loaded_module_list.address());
 
@@ -144,7 +146,7 @@ static void add_to_loaded_module_list(const std::shared_ptr<emulator_t>& emulato
 		                                  ? get_module_list_entry_address(last_entry->table_entry)
 		                                  : module_list;
 
-	auto object = emulator_object_t<_NT_LDR_DATA_TABLE_ENTRY>::allocate(emulator, contents, image.name);
+	auto object = emulator_object_t<_KLDR_DATA_TABLE_ENTRY>::allocate(emulator, contents, image->name);
 
 	if (last_entry)
 	{
@@ -157,7 +159,9 @@ static void add_to_loaded_module_list(const std::shared_ptr<emulator_t>& emulato
 
 	set_loaded_module_list_blink(object);
 
-	image.table_entry = std::move(object);
+	image->table_entry = std::move(object);
+
+	kernel::module_entries.push_back(image);
 }
 
 static std::shared_ptr<mapped_image_t> map_kernel_image(const std::shared_ptr<emulator_t>& emulator, const std::string_view name)
@@ -208,7 +212,7 @@ static std::shared_ptr<mapped_image_t> map_kernel_image(const std::shared_ptr<em
 
 	auto image = std::make_shared<mapped_image_t>(std::string(name), *base_address, image_size, *base_address + nt_headers->optional_header.address_of_entry_point);
 
-	add_to_loaded_module_list(emulator, *image);
+	add_to_loaded_module_list(emulator, image);
 
 	return image;
 }
@@ -244,7 +248,7 @@ static void set_up_driver_entry(const std::shared_ptr<emulator_t>& emulator)
 
 static void set_up_ps_loaded_module_list(const std::shared_ptr<emulator_t>& emulator)
 {
-	kernel::ps_loaded_module_list = emulator_object_t<_LIST_ENTRY>::allocate(emulator);
+	kernel::ps_loaded_module_list = emulator_object_t<_LIST_ENTRY>::allocate(emulator, "PsLoadedModuleList");
 }
 
 static void set_up_stack(emulator_t& emulator)
@@ -266,6 +270,23 @@ static void set_up_stack(emulator_t& emulator)
 	error.throw_if("unable to set return address");
 }
 
+static void set_up_kernel_gs(const std::shared_ptr<emulator_t>& emulator)
+{
+	kernel::kpcr = emulator_object_t<_KPCR>::allocate(emulator);
+
+	_KPCR contents = { };
+
+	contents.Self = reinterpret_cast<_KPCR*>(kernel::kpcr.address());
+
+	kernel::kpcr.write(contents);
+
+	const emulator_err_t error = emulator->write_gs_base(kernel::kpcr.address());
+
+	error.throw_if("unable to write kernel gs base");
+
+	spdlog::info("mapped kernel gs at 0x{:X}", kernel::kpcr.address());
+}
+
 std::int32_t main()
 {
 	constexpr std::string_view pe_file_name = "test.bin";
@@ -276,6 +297,7 @@ std::int32_t main()
 		const auto emulator = std::static_pointer_cast<emulator_t>(std::make_shared<hypermulator_t>());
 
 		set_up_stack(*emulator);
+		set_up_kernel_gs(emulator);
 		set_up_ps_loaded_module_list(emulator);
 		set_up_user_shared_data(emulator);
 
@@ -290,7 +312,7 @@ std::int32_t main()
 		spdlog::info("mapped ntoskrnl at 0x{:X}", nt_image->base_address);
 		spdlog::info("mapped image at 0x{:X}", base_address);
 
-		/*emulator_err_t error = emulator->hook_basic_block(
+		emulator_err_t error = emulator->hook_basic_block(
 			[emulator]()
 			{
 				const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
@@ -301,9 +323,9 @@ std::int32_t main()
 			end_address
 		).error_or({});
 		 
-		error.throw_if("basic block hook attach");*/
+		error.throw_if("basic block hook attach");
 
-		emulator_err_t error = emulator->hook_invalid_memory(
+		error = emulator->hook_invalid_memory(
 			[emulator](const emulator_t::address_type faulting_address, const protection_t access) -> bool
 			{
 				const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
@@ -324,7 +346,7 @@ std::int32_t main()
 		error = emulator->run_at(entry_point_address, emulator_t::thread_return_address);
 
 		const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
-		const auto rax = emulator->read_register<x86::reg::rax, emulator_t::address_type>();
+		const auto rax = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
 
 		spdlog::info("emulation finished at rip=0x{:X}, rax=0x{:X}", rip, rax);
 

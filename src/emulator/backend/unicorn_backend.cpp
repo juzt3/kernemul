@@ -254,6 +254,13 @@ emulator_err_t unicorn_emulator_t::write_register(const x86::register_t reg, con
 	return emulator_err_t{ uc_reg_write(backend_, convert_reg(reg), value) };
 }
 
+emulator_err_t unicorn_emulator_t::write_gs_base(const address_type value)
+{
+	const std::uint64_t gs_base = value;
+
+	return emulator_err_t{ uc_reg_write(backend_, UC_X86_REG_GS_BASE, &gs_base) };
+}
+
 static std::int32_t uc_wrapper_insn_hook([[maybe_unused]] const uc_engine* const engine,
                                          const unicorn_hook_t* const hook)
 {

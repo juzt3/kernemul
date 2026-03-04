@@ -133,6 +133,22 @@ emulator_err_t hypermulator_t::write_register(const x86::register_t reg, const v
 	return emulator_err_t{ backend_->write_register(guest_reg, value, guest_reg.size) };
 }
 
+emulator_err_t hypermulator_t::write_gs_base(const address_type value)
+{
+	hm::guest_segment_register_t gs_segment = { };
+
+	const bool status = backend_->read_register(hm::reg::gs, &gs_segment, sizeof(gs_segment));
+
+	if (!status)
+	{
+		return emulator_err_t{ false };
+	}
+
+	gs_segment.base = value;
+
+	return emulator_err_t{ backend_->write_register(hm::reg::gs, &gs_segment, sizeof(gs_segment)) };
+}
+
 std::expected<emulator_t::hook_type, emulator_err_t> hypermulator_t::hook_instruction(
 	const x86::insn instruction, const emulator_hook_t::instruction_callback& callback,
 	const address_type start_address,
@@ -147,32 +163,6 @@ std::expected<emulator_t::hook_type, emulator_err_t> hypermulator_t::hook_instru
 std::expected<emulator_t::hook_type, emulator_err_t> hypermulator_t::hook_basic_block(
 	const emulator_hook_t::code_callback& callback, const address_type start_address, const address_type end_address)
 {
-	/*std::vector<hypermulator_hook_t::native_hook_type> native_hooks;
-
-	for (address_type i = start_address; i < end_address;)
-	{
-		const auto current_physical_address = translate_virtual_address(i);
-
-		if (!current_physical_address)
-		{
-			native_hooks.push_back({});
-
-			break;
-		}
-
-		const size_type page_offset = i % page_size;
-		const size_type size_left_page = page_size - page_offset;
-
-		const size_type size_left_range = end_address - i;
-		const size_type current_size = std::min(size_left_page, size_left_range);
-
-		const address_type end_physical_address = *current_physical_address + current_size;
-
-		native_hooks.push_back(backend_->hook_basic_block(callback, *current_physical_address, end_physical_address));
-
-		i += current_size;
-	}*/
-
 	const auto native_hooks = wrap_virtual_hook_creation(
 		[this, callback](const address_type start_physical_address, const address_type end_physical_address) -> hypermulator_hook_t::native_hook_type
 		{

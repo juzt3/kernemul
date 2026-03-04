@@ -1,5 +1,6 @@
 #include "emulator.hpp"
 #include <ia32-doc/ia32.hpp>
+#include <spdlog/spdlog.h>
 
 constexpr emulator_t::size_type paging_table_size = 0x1000;
 constexpr emulator_t::size_type paging_entry_count = 512;
@@ -157,7 +158,7 @@ emulator_err_t emulator_t::load_virtual_memory(const address_type address, const
 	return error;
 }
 
-std::optional<emulator_t::address_type> emulator_t::translate_virtual_address(const address_type address) const
+std::optional<emulator_t::address_type> emulator_t::translate_virtual_address(const address_type address)
 {
 	const address_type aligned_page_address = align_down(address, page_size);
 
@@ -173,25 +174,31 @@ std::optional<emulator_t::address_type> emulator_t::translate_virtual_address(co
 	const paging_virtual_address_t virtual_address = {
 		.address = address
 	};
-	
+
 	return mapping.physical_address + virtual_address.page_offset;
 }
 
-std::expected<emulator_t::address_type, emulator_err_t> emulator_t::heap_allocate(const size_type size, const protection_type protection, const bool page_aligned)
+std::expected<emulator_t::address_type, emulator_err_t> emulator_t::heap_allocate(
+	const size_type size, const protection_type protection, const bool page_aligned)
 {
-	if (page_aligned)
+	if (last_heap_protection_ == prot_none || last_heap_protection_ != protection ||
+		page_aligned)
 	{
 		current_heap_virtual_address_ = align_up(current_heap_virtual_address_, page_size);
 	}
 
-	if (const auto error = map_virtual_memory(current_heap_virtual_address_, size, protection))
+	if (!translate_virtual_address(current_heap_virtual_address_))
 	{
-		return std::unexpected(error);
+		if (const auto error = map_virtual_memory(current_heap_virtual_address_, size, protection))
+		{
+			return std::unexpected(error);
+		}
 	}
 
 	const address_type address = current_heap_virtual_address_;
 
 	current_heap_virtual_address_ += size;
+	last_heap_protection_ = protection;
 
 	return address;
 }
@@ -202,7 +209,7 @@ std::expected<emulator_t::address_type, emulator_err_t> emulator_t::allocate_phy
 	const size_type aligned_size = align_up(size, page_size);
 	const address_type address = current_physical_page_;
 
-	if (const auto error = map_physical_memory(current_physical_page_, size, protection))
+	if (const auto error = map_physical_memory(address, size, protection))
 	{
 		return std::unexpected(error);
 	}
@@ -264,7 +271,7 @@ emulator_err_t emulator_t::map_virtual_page(const address_type page_address, con
 	}
 
 	const paging_virtual_address_t virtual_address = {
-		.address = page_address
+		.address = aligned_page_address
 	};
 
 	SETUP_PAGING_LEVEL(pml4, pdpt)
@@ -275,7 +282,7 @@ emulator_err_t emulator_t::map_virtual_page(const address_type page_address, con
 
 	pte.present = 1;
 	pte.write = 1;
-	pte.page_frame_number = page_physical_address >> 12;
+	pte.page_frame_number = aligned_page_physical_address >> 12;
 
 	if (const auto error = write_physical_memory(pt_address, pt.data(), sizeof(pt)))
 	{

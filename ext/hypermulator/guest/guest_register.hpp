@@ -6,6 +6,14 @@
 
 namespace hm
 {
+	struct guest_segment_register_t
+	{
+		std::uint64_t base;
+		std::uint32_t limit;
+		std::uint16_t selector;
+		std::uint16_t attributes;
+	};
+
 	struct guest_register_t
 	{
 		using id_type = WHV_REGISTER_NAME;
@@ -49,6 +57,7 @@ namespace hm
 		constexpr guest_register_t interrupt_state(WHvRegisterInterruptState, interrupt_state_size);
 
 		constexpr guest_register_t efer(WHvX64RegisterEfer, 8);
+		constexpr guest_register_t kernel_gs_base(WHvX64RegisterKernelGsBase, 8);
 
 		constexpr guest_register_t cr0(WHvX64RegisterCr0, 8);
 		constexpr guest_register_t xcr0(WHvX64RegisterXCr0, 8);

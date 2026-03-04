@@ -179,72 +179,71 @@ struct _RTL_BALANCED_NODE
     };
 };
 
-//0x120 bytes (sizeof)
-struct _NT_LDR_DATA_TABLE_ENTRY
+//0xa0 bytes (sizeof)
+struct _KLDR_DATA_TABLE_ENTRY
 {
     struct _LIST_ENTRY InLoadOrderLinks;                                    //0x0
-    struct _LIST_ENTRY InMemoryOrderLinks;                                  //0x10
-    struct _LIST_ENTRY InInitializationOrderLinks;                          //0x20
+    VOID* ExceptionTable;                                                   //0x10
+    ULONG ExceptionTableSize;                                               //0x18
+    VOID* GpValue;                                                          //0x20
+    struct _NON_PAGED_DEBUG_INFO* NonPagedDebugInfo;                        //0x28
     VOID* DllBase;                                                          //0x30
     VOID* EntryPoint;                                                       //0x38
     ULONG SizeOfImage;                                                      //0x40
     struct _UNICODE_STRING FullDllName;                                     //0x48
     struct _UNICODE_STRING BaseDllName;                                     //0x58
+    ULONG Flags;                                                            //0x68
+    USHORT LoadCount;                                                       //0x6c
     union
     {
-        UCHAR FlagGroup[4];                                                 //0x68
-        ULONG Flags;                                                        //0x68
+        USHORT SignatureLevel : 4;                                            //0x6e
+        USHORT SignatureType : 3;                                             //0x6e
+        USHORT Unused : 9;                                                    //0x6e
+        USHORT EntireField;                                                 //0x6e
+    } u1;                                                                   //0x6e
+    VOID* SectionPointer;                                                   //0x70
+    ULONG CheckSum;                                                         //0x78
+    ULONG CoverageSectionSize;                                              //0x7c
+    VOID* CoverageSection;                                                  //0x80
+    VOID* LoadedImports;                                                    //0x88
+    VOID* Spare;                                                            //0x90
+    ULONG SizeOfImageNotRounded;                                            //0x98
+    ULONG TimeDateStamp;                                                    //0x9c
+};
+
+//0x178 bytes (sizeof)
+struct _KPCR
+{
+    union
+    {
+        struct _NT_TIB NtTib;                                               //0x0
         struct
         {
-            ULONG PackagedBinary : 1;                                         //0x68
-            ULONG MarkedForRemoval : 1;                                       //0x68
-            ULONG ImageDll : 1;                                               //0x68
-            ULONG LoadNotificationsSent : 1;                                  //0x68
-            ULONG TelemetryEntryProcessed : 1;                                //0x68
-            ULONG ProcessStaticImport : 1;                                    //0x68
-            ULONG InLegacyLists : 1;                                          //0x68
-            ULONG InIndexes : 1;                                              //0x68
-            ULONG ShimDll : 1;                                                //0x68
-            ULONG InExceptionTable : 1;                                       //0x68
-            ULONG ReservedFlags1 : 2;                                         //0x68
-            ULONG LoadInProgress : 1;                                         //0x68
-            ULONG LoadConfigProcessed : 1;                                    //0x68
-            ULONG EntryProcessed : 1;                                         //0x68
-            ULONG ProtectDelayLoad : 1;                                       //0x68
-            ULONG ReservedFlags3 : 2;                                         //0x68
-            ULONG DontCallForThreads : 1;                                     //0x68
-            ULONG ProcessAttachCalled : 1;                                    //0x68
-            ULONG ProcessAttachFailed : 1;                                    //0x68
-            ULONG CorDeferredValidate : 1;                                    //0x68
-            ULONG CorImage : 1;                                               //0x68
-            ULONG DontRelocate : 1;                                           //0x68
-            ULONG CorILOnly : 1;                                              //0x68
-            ULONG ChpeImage : 1;                                              //0x68
-            ULONG ReservedFlags5 : 2;                                         //0x68
-            ULONG Redirected : 1;                                             //0x68
-            ULONG ReservedFlags6 : 2;                                         //0x68
-            ULONG CompatDatabaseProcessed : 1;                                //0x68
+            union _KGDTENTRY64* GdtBase;                                    //0x0
+            struct _KTSS64* TssBase;                                        //0x8
+            ULONGLONG UserRsp;                                              //0x10
+            struct _KPCR* Self;                                             //0x18
+            struct _KPRCB* CurrentPrcb;                                     //0x20
+            struct _KSPIN_LOCK_QUEUE* LockArray;                            //0x28
+            VOID* Used_Self;                                                //0x30
         };
     };
-    USHORT ObsoleteLoadCount;                                               //0x6c
-    USHORT TlsIndex;                                                        //0x6e
-    struct _LIST_ENTRY HashLinks;                                           //0x70
-    ULONG TimeDateStamp;                                                    //0x80
-    struct _ACTIVATION_CONTEXT* EntryPointActivationContext;                //0x88
-    VOID* Lock;                                                             //0x90
-    struct _LDR_DDAG_NODE* DdagNode;                                        //0x98
-    struct _LIST_ENTRY NodeModuleLink;                                      //0xa0
-    struct _LDRP_LOAD_CONTEXT* LoadContext;                                 //0xb0
-    VOID* ParentDllBase;                                                    //0xb8
-    VOID* SwitchBackContext;                                                //0xc0
-    struct _RTL_BALANCED_NODE BaseAddressIndexNode;                         //0xc8
-    struct _RTL_BALANCED_NODE MappingInfoIndexNode;                         //0xe0
-    ULONGLONG OriginalBase;                                                 //0xf8
-    union _LARGE_INTEGER LoadTime;                                          //0x100
-    ULONG BaseNameHashValue;                                                //0x108
-    enum _LDR_DLL_LOAD_REASON LoadReason;                                   //0x10c
-    ULONG ImplicitPathOptions;                                              //0x110
-    ULONG ReferenceCount;                                                   //0x114
-    ULONG DependentLoadFlags;                                               //0x118
-    UCHAR SigningLevel;                                                     //0x11c
+    union _KIDTENTRY64* IdtBase;                                            //0x38
+    ULONGLONG Unused[2];                                                    //0x40
+    UCHAR Irql;                                                             //0x50
+    UCHAR SecondLevelCacheAssociativity;                                    //0x51
+    UCHAR ObsoleteNumber;                                                   //0x52
+    UCHAR Fill0;                                                            //0x53
+    ULONG Unused0[3];                                                       //0x54
+    USHORT MajorVersion;                                                    //0x60
+    USHORT MinorVersion;                                                    //0x62
+    ULONG StallScaleFactor;                                                 //0x64
+    VOID* Unused1[3];                                                       //0x68
+    ULONG KernelReserved[15];                                               //0x80
+    ULONG SecondLevelCacheSize;                                             //0xbc
+    ULONG HalReserved[16];                                                  //0xc0
+    ULONG Unused2;                                                          //0x100
+    VOID* KdVersionBlock;                                                   //0x108
+    VOID* Unused3;                                                          //0x110
+    ULONG PcrAlign1[24];                                                    //0x118
 };

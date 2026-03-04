@@ -235,12 +235,14 @@ public:
 	                                                 std::span<const std::uint8_t> buffer,
 	                                                 protection_type protection);
 
-	std::optional<address_type> translate_virtual_address(address_type address) const;
+	std::optional<address_type> translate_virtual_address(address_type address);
 
 	[[nodiscard]] std::expected<address_type, emulator_err_t> heap_allocate(size_type size, protection_type protection, bool page_aligned = false);
 
 	[[nodiscard]] virtual emulator_err_t read_register(x86::register_t reg, void* value) const = 0;
 	[[nodiscard]] virtual emulator_err_t write_register(x86::register_t reg, const void* value) = 0;
+
+	[[nodiscard]] virtual emulator_err_t write_gs_base(address_type value) = 0;
 
 	virtual std::expected<hook_type, emulator_err_t> hook_instruction(
 		x86::insn instruction, const emulator_hook_t::instruction_callback& callback, address_type start_address,
@@ -313,11 +315,12 @@ public:
 		error.throw_if("write register");
 	}
 
+	emulator_err_t map_virtual_page(address_type page_address, address_type page_physical_address);
+
 protected:
 	std::expected<address_type, emulator_err_t> allocate_physical_memory(size_type size, protection_type protection);
 
 	emulator_err_t copy_virtual_memory(address_type address, void* buffer, size_type size, bool is_write);
-	emulator_err_t map_virtual_page(address_type page_address, address_type page_physical_address);
 	emulator_err_t unmap_virtual_page(address_type page_address);
 	emulator_err_t set_up_page_tables();
 
@@ -354,6 +357,7 @@ protected:
 	address_type pml4_physical_address_ = 0;
 	address_type current_physical_page_ = 0x40000;
 	address_type current_heap_virtual_address_ = 0xFFFFFF8024800000;
+	protection_type last_heap_protection_ = prot_none;
 
 	std::unordered_map<address_type, virtual_memory_mapping_t> virtual_page_mappings_;
 	std::vector<hook_type> hooks_;
