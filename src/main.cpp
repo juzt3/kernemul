@@ -42,6 +42,29 @@ namespace kernel
 	static std::vector<std::shared_ptr<mapped_image_t>> module_entries;
 
 	static std::shared_ptr<mapped_image_t> emulated_module;
+
+	using function_implementation_t = std::function<void()>;
+
+	static std::unordered_map<emulator_t::address_type, function_implementation_t> redirected_functions;
+
+	[[nodiscard]] std::shared_ptr<mapped_image_t> find_module(const std::string_view name)
+	{
+		const auto it = std::ranges::find(module_entries, name, &mapped_image_t::name);
+
+		return it != std::ranges::end(module_entries) ? *it : nullptr;
+	}
+
+	[[nodiscard]] std::optional<function_implementation_t> find_redirected_function(const emulator_t::address_type address)
+	{
+		const auto it = redirected_functions.find(address);
+		
+		if (it != std::ranges::end(redirected_functions))
+		{
+			return it->second;
+		}
+
+		return std::nullopt;
+	}
 }
 
 static void relocate_image(portable_executable::image_t* const image, const emulator_t::address_type runtime_base_address)
@@ -166,7 +189,115 @@ static void add_to_loaded_module_list(const std::shared_ptr<emulator_t>& emulato
 	kernel::module_entries.push_back(image);
 }
 
-static std::shared_ptr<mapped_image_t> map_kernel_image(const std::shared_ptr<emulator_t>& emulator, const std::string_view name)
+static void redirect_image_export(const kernel::function_implementation_t& function_impl,
+                                  const portable_executable::image_t* const pe_image,
+                                  const mapped_image_t& mapped_image, const std::string_view name)
+{
+	const auto local_export_address = pe_image->find_export(name);
+
+	if (!local_export_address)
+	{
+		throw std::runtime_error("unable to find export");
+	}
+
+	const std::uint32_t rva = static_cast<std::uint32_t>(local_export_address - pe_image->as<const std::uint8_t*>());
+
+	const emulator_t::address_type export_runtime_address = mapped_image.base_address + rva;
+
+	kernel::redirected_functions[export_runtime_address] = function_impl;
+}
+
+static void write_nt_success(const std::shared_ptr<emulator_t>& emulator)
+{
+	emulator->write_register<x86::reg::rax>(0);
+}
+
+static void write_dummy_handle(const std::shared_ptr<emulator_t>& emulator, const emulator_t::address_type handle_address)
+{
+	constexpr std::uint64_t handle_value = 0x1337;
+
+	const emulator_err_t error = emulator->write_virtual_memory(handle_address, &handle_value, sizeof(handle_value));
+
+	error.throw_if("write memory");
+}
+
+static void redirect_ntoskrnl_functions(const std::shared_ptr<emulator_t>& emulator, const mapped_image_t& mapped_image,
+                                        const portable_executable::image_t* const pe_image)
+{
+	redirect_image_export(
+		[emulator]
+		{
+			const auto r9 = emulator->read_register<x86::reg::r9, std::uint64_t>();
+
+			spdlog::info("RtlWriteRegistryValue called with type: 0x{:X}", r9);
+
+			write_nt_success(emulator);
+		},
+		pe_image,
+		mapped_image,
+		"RtlWriteRegistryValue"
+	);
+
+	redirect_image_export(
+		[emulator]
+		{
+			spdlog::info("RtlDeleteRegistryValue called");
+
+			write_nt_success(emulator);
+		},
+		pe_image,
+		mapped_image,
+		"RtlDeleteRegistryValue"
+	);
+
+	redirect_image_export(
+		[emulator]
+		{
+			const auto rcx = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto rdx = emulator->read_register<x86::reg::rdx, std::uint32_t>();
+
+			spdlog::info("ZwOpenKey called (desired access=0x{:X})", rdx);
+
+			write_dummy_handle(emulator, rcx);
+
+			write_nt_success(emulator);
+		},
+		pe_image,
+		mapped_image,
+		"ZwOpenKey"
+	);
+
+	redirect_image_export(
+		[emulator]
+		{
+			const auto rcx = emulator->read_register<x86::reg::rcx, std::uint64_t>();
+
+			spdlog::info("ZwFlushKey called (key handle=0x{:X})", rcx);
+
+			write_nt_success(emulator);
+		},
+		pe_image,
+		mapped_image,
+		"ZwFlushKey"
+	);
+
+	redirect_image_export(
+		[emulator]
+		{
+			const auto rcx = emulator->read_register<x86::reg::rcx, std::uint64_t>();
+
+			spdlog::info("ZwClose called (handle=0x{:X})", rcx);
+
+			write_nt_success(emulator);
+		},
+		pe_image,
+		mapped_image,
+		"ZwClose"
+	);
+}
+
+static std::shared_ptr<mapped_image_t> map_kernel_image(const std::shared_ptr<emulator_t>& emulator,
+                                                        const std::string_view name)
 {
 	portable_executable::file_t pe_file(name);
 
@@ -215,6 +346,11 @@ static std::shared_ptr<mapped_image_t> map_kernel_image(const std::shared_ptr<em
 	auto image = std::make_shared<mapped_image_t>(std::string(name), *base_address, image_size, *base_address + nt_headers->optional_header.address_of_entry_point);
 
 	add_to_loaded_module_list(emulator, image);
+
+	if (name == "ntoskrnl.exe")
+	{
+		redirect_ntoskrnl_functions(emulator, *image, pe_image);
+	}
 
 	return image;
 }
@@ -360,7 +496,6 @@ std::int32_t main()
 		set_up_idt(emulator, *nt_image);
 
 	    const emulator_t::address_type base_address = kernel::emulated_module->base_address;
-	    const emulator_t::address_type end_address = base_address + kernel::emulated_module->size;
 		const emulator_t::address_type entry_point_address = kernel::emulated_module->entry_point;
 
 		spdlog::info("mapped ntoskrnl at 0x{:X}", nt_image->base_address);
@@ -371,7 +506,29 @@ std::int32_t main()
 			{
 				const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
 
-				spdlog::info("basic block executed at 0x{:X}", rip);
+				if (const auto redirected_function = kernel::find_redirected_function(rip))
+				{
+					spdlog::info("redirecting function at 0x{:X}", rip);
+
+					(*redirected_function)();
+
+					const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
+
+					emulator_t::address_type return_address = 0;
+
+					const emulator_err_t read_error = emulator->read_virtual_memory(rsp, &return_address, sizeof(return_address));
+
+					read_error.throw_if("read from stack");
+
+					emulator->write_register<x86::reg::rsp>(rsp + 8);
+					emulator->write_register<x86::reg::rip>(return_address);
+				}
+				else
+				{
+					spdlog::error("unimplemented function at 0x{:X}", rip);
+
+					emulator->write_register<x86::reg::rip, emulator_t::address_type>(-1);
+				}
 			},
 			nt_image->base_address,
 			nt_image->base_address + nt_image->size
