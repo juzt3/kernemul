@@ -196,8 +196,10 @@ bool hm::emulator_t::handle_memory_access(guest_virtual_processor_t& processor, 
 	bool handled = false;
 	bool step_handled = false;
 
-	for (const auto& hook : hooks_)
+	for (size_type i = 0; i < hooks_.size(); i++)
 	{
+		const auto hook = hooks_[i];
+
 		switch (hook->type)
 		{
 		case hook_type_t::code:
@@ -225,10 +227,8 @@ void hm::emulator_t::set_block_code_hook_step(const std::shared_ptr<hook_t>& hoo
 
 			block_pending_single_step_exception(step_processor);
 
-			if (!hook->in_aligned_range(rip))
+			if (!hook->in_aligned_range(rip, step_context.processor_state.instruction_length))
 			{
-				//spdlog::info("left hooked page (rip=0x{:X})", step_context.processor_state.rip);
-
 				shadow_guest_interrupts(step_processor, false);
 
 				protect_block_code_hook_memory_range(hook->start_address, hook->end_address, false);
@@ -339,11 +339,8 @@ bool hm::emulator_t::memory_process_block_code_hook(guest_virtual_processor_t& p
 	const memory_vmexit_t& info = context.memory_access;
 	const address_type rip = context.processor_state.physical_rip(processor);
 
-	if (info.type == memory_vmexit_t::access::execute &&
-		hook->in_aligned_range(rip))
+	if (info.type == memory_vmexit_t::access::execute && hook->in_aligned_range(rip, max_instruction_length))
 	{
-		//spdlog::info("entered hooked page (rip=0x{:X})", context.processor_state.rip);
-
 		protect_block_code_hook_memory_range(hook->start_address, hook->end_address, true);
 
 		set_block_code_hook_step(hook);
@@ -353,11 +350,14 @@ bool hm::emulator_t::memory_process_block_code_hook(guest_virtual_processor_t& p
 			handle_block_hook_overflow(hook, rip);
 		}
 
-		invoke_block_code_hook_step_callback(hook, rip, info.instruction_bytes);
-
 		set_trap_flag(processor, true);
 		shadow_guest_interrupts(processor, true);
 		block_pending_single_step_exception(processor);
+
+		if (hook->in_aligned_range(rip))
+		{
+			invoke_block_code_hook_step_callback(hook, rip, info.instruction_bytes);
+		}
 
 		return true;
 	}

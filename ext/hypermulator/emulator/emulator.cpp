@@ -26,12 +26,12 @@ bool hm::hook_t::in_range(const address_type address) const
 	return start_address <= address && (!end_address || address < end_address);
 }
 
-bool hm::hook_t::in_aligned_range(const address_type address) const
+bool hm::hook_t::in_aligned_range(const address_type address, const address_type size) const
 {
 	const address_type aligned_start = align_down(start_address, emulator_t::page_size);
 	const address_type aligned_end = align_up(end_address, emulator_t::page_size);
 
-	return aligned_start <= address && (!end_address || address < aligned_end);
+	return aligned_start <= address + size && (!end_address || address - size < aligned_end);
 }
 
 hm::emulator_t::emulator_t(const machine_mode_t mode)

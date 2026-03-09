@@ -49,6 +49,7 @@ namespace portable_executable
     class relocations_iterator_t
     {
     private:
+        const raw_relocation_block_descriptor_t* m_raw_end_relocation_block_descriptor = nullptr;
         const raw_relocation_block_descriptor_t* m_current_raw_relocation_block_descriptor = nullptr;
         relocation_block_t m_current_relocation_block = { };
 
@@ -60,7 +61,7 @@ namespace portable_executable
         relocations_iterator_t() = default;
 
         // ReSharper disable once CppNonExplicitConvertingConstructor
-        relocations_iterator_t(const raw_relocation_block_descriptor_t* raw_relocation_block_descriptor);
+        relocations_iterator_t(const raw_relocation_block_descriptor_t* raw_relocation_block_descriptor, const raw_relocation_block_descriptor_t* raw_end_relocation_block_descriptor);
 
         using iterator_category = std::forward_iterator_tag;
         using difference_type = std::ptrdiff_t;
@@ -87,25 +88,27 @@ namespace portable_executable
         pointer_type m_module = nullptr;
 
         const raw_relocation_block_descriptor_t* m_raw_relocation_block_descriptor = nullptr;
+        const raw_relocation_block_descriptor_t* m_raw_end_relocation_block_descriptor = nullptr;
 
     public:
         relocations_range_t() = default;
 
-        relocations_range_t(pointer_type module, std::uint32_t relocations_rva) :
-            m_module(module), m_raw_relocation_block_descriptor(reinterpret_cast<relocation_descriptor_type>(module + relocations_rva))
+        relocations_range_t(pointer_type module, std::uint32_t relocations_rva, std::uint32_t relocations_size) :
+            m_module(module), m_raw_relocation_block_descriptor(reinterpret_cast<relocation_descriptor_type>(module + relocations_rva)),
+            m_raw_end_relocation_block_descriptor(reinterpret_cast<relocation_descriptor_type>(module + relocations_rva + relocations_size))
         {
 
         }
 
         T begin() const
         {
-            return { this->m_raw_relocation_block_descriptor };
+            return { this->m_raw_relocation_block_descriptor, m_raw_end_relocation_block_descriptor };
         }
 
         // ReSharper disable once CppMemberFunctionMayBeStatic
         T end()
         {
-            return { nullptr };
+            return { nullptr, nullptr };
         }
     };
 }

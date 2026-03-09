@@ -17,7 +17,8 @@ void portable_executable::relocations_iterator_t::load_block(const raw_relocatio
         this->m_current_descriptor = nullptr;
 }
 
-portable_executable::relocations_iterator_t::relocations_iterator_t(const raw_relocation_block_descriptor_t* raw_relocation_block_descriptor)
+portable_executable::relocations_iterator_t::relocations_iterator_t(const raw_relocation_block_descriptor_t* raw_relocation_block_descriptor, const raw_relocation_block_descriptor_t* raw_end_relocation_block_descriptor)
+	: m_raw_end_relocation_block_descriptor(raw_end_relocation_block_descriptor)
 {
     if (raw_relocation_block_descriptor)
     {
@@ -32,6 +33,13 @@ portable_executable::relocations_iterator_t::value_type portable_executable::rel
 
 portable_executable::relocations_iterator_t& portable_executable::relocations_iterator_t::operator++()
 {
+    if (this->m_raw_end_relocation_block_descriptor <= this->m_current_raw_relocation_block_descriptor)
+    {
+	    this->m_current_descriptor = nullptr;
+
+        return *this;
+    }
+
     if (this->m_current_descriptor && this->m_current_relocation_block.current_entry_index < this->m_current_relocation_block.max_entry_index)
     {
         ++this->m_current_descriptor;

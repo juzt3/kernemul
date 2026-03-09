@@ -14,6 +14,7 @@ struct mapped_image_t
 	using string_type = std::string;
 	using address_type = emulator_t::address_type;
 	using size_type = emulator_t::size_type;
+	using export_list_type = std::unordered_map<std::string, address_type>;
 
 	mapped_image_t(string_type _name, const address_type _base_address, const size_type _size, const address_type _entry_point)
 			:	name(std::move(_name)),
@@ -21,12 +22,26 @@ struct mapped_image_t
 				size(_size),
 				entry_point(_entry_point) { }
 
+	[[nodiscard]] std::optional<address_type> find_export(const std::string& export_name)
+	{
+		const auto it = exports.find(export_name);
+
+		if (it != std::ranges::end(exports))
+		{
+			return it->second;
+		}
+
+		return std::nullopt;
+	}
+
 	string_type name;
 
 	address_type base_address;
 	size_type size;
 
 	address_type entry_point;
+
+	export_list_type exports;
 
 	emulator_object_t<_KLDR_DATA_TABLE_ENTRY> table_entry;
 };
@@ -67,6 +82,99 @@ namespace kernel
 	}
 }
 
+template <class T>
+static emulator_t::address_type allocate_basic_string(emulator_t& emulator, const std::basic_string_view<T> str,
+                                                      const bool terminate)
+{
+	if (str.empty())
+	{
+		throw std::runtime_error("unable to allocate empty string");
+	}
+
+	const std::span<const std::uint8_t> buffer = {
+		reinterpret_cast<const std::uint8_t*>(str.data()),
+		str.size() * sizeof(T)
+	};
+
+	const std::size_t buffer_size = buffer.size() + (terminate ? sizeof(T) : 0);
+
+	const auto allocation = emulator.heap_allocate(buffer_size, prot_read_write);
+
+	emulator_err_t error = allocation.error_or({});
+
+	error.throw_if("string heap allocation");
+
+	error = emulator.write_virtual_memory(*allocation, buffer);
+
+	error.throw_if("write memory");
+
+	if (terminate)
+	{
+		constexpr T terminator = { };
+
+		error = emulator.write_virtual_memory(*allocation + buffer.size(), &terminator, sizeof(terminator));
+
+		error.throw_if("write memory");
+	}
+
+	const char ch = static_cast<char>(str[0]);
+
+	error = emulator.hook_memory(
+		[&emulator, ch](const emulator_t::address_type accessed_address, const protection_t access) -> bool
+		{
+			const auto rip = emulator.read_register<x86::reg::rip, emulator_t::address_type>();
+
+			spdlog::info("instruction at 0x{:X} accessed allocated string (string address=0x{:X}) (first byte: {})", rip, accessed_address, ch);
+
+			return false;
+		},
+		prot_read_write,
+		*allocation,
+		*allocation + buffer_size
+	).error_or({});
+
+	error.throw_if("object hook attach");
+
+	return *allocation;
+}
+
+static emulator_t::address_type allocate_string(emulator_t& emulator, const std::string_view str,
+	                                            const bool terminate)
+{
+	return allocate_basic_string(emulator, str, terminate);
+}
+
+static emulator_t::address_type allocate_wstring(emulator_t& emulator, const std::wstring_view str,
+                                                 const bool terminate)
+{
+	return allocate_basic_string(emulator, str, terminate);
+}
+
+static UNICODE_STRING init_unicode_string(emulator_t& emulator, const std::wstring_view str)
+{
+	const emulator_t::address_type buffer = allocate_wstring(emulator, str, true);
+
+	const std::uint16_t length = static_cast<std::uint16_t>(str.size() * sizeof(wchar_t));
+	const std::uint16_t max_length = length + sizeof(wchar_t);
+
+	const UNICODE_STRING result = {
+		.Length = length,
+		.MaximumLength = max_length,
+		.Buffer = reinterpret_cast<PWSTR>(buffer)
+	};
+
+	return result;
+}
+
+static emulator_object_t<UNICODE_STRING> allocate_unicode_string_object(const std::shared_ptr<emulator_t>& emulator,
+	const std::wstring_view str,
+	const std::string& object_name = {})
+{
+	const UNICODE_STRING contents = init_unicode_string(*emulator, str);
+
+	return emulator_object_t<UNICODE_STRING>::allocate(emulator, contents, object_name);
+}
+
 static void relocate_image(portable_executable::image_t* const image, const emulator_t::address_type runtime_base_address)
 {
 	const auto nt_headers = image->nt_headers();
@@ -80,6 +188,28 @@ static void relocate_image(portable_executable::image_t* const image, const emul
 
 			*patch += delta;
 		}
+	}
+}
+
+static void fix_image_imports(portable_executable::image_t* const image)
+{
+	for (const auto current_import : image->imports())
+	{
+		const auto import_module = kernel::find_module(current_import.module_name);
+
+		if (!import_module)
+		{
+			throw std::runtime_error("unable to find import module");
+		}
+
+		const auto module_export = import_module->find_export(current_import.import_name);
+
+		if (!module_export)
+		{
+			throw std::runtime_error("unable to find export in module");
+		}
+
+		current_import.address = reinterpret_cast<std::uint8_t*>(*module_export);
 	}
 }
 
@@ -152,13 +282,29 @@ static void set_loaded_module_list_blink(const emulator_object_t<_KLDR_DATA_TABL
 	set_list_entry_blink(kernel::ps_loaded_module_list, list_entry);
 }
 
-static void add_to_loaded_module_list(const std::shared_ptr<emulator_t>& emulator, const std::shared_ptr<mapped_image_t>& image)
+static void collect_module_exports(portable_executable::image_t* const pe_image, mapped_image_t& mapped_image)
+{
+	const auto local_image_address = pe_image->as<const std::uint8_t*>();
+
+	for (const auto current_export : pe_image->exports())
+	{
+		const std::uint32_t rva = static_cast<std::uint32_t>(current_export.address - local_image_address);
+		const emulator_t::address_type runtime_address = mapped_image.base_address + rva;
+
+		mapped_image.exports[current_export.name] = runtime_address;
+	}
+}
+
+static void add_to_loaded_module_list(const std::shared_ptr<emulator_t>& emulator, const std::shared_ptr<mapped_image_t>& mapped_image)
 {
 	_KLDR_DATA_TABLE_ENTRY contents = { };
 
-	contents.DllBase = reinterpret_cast<void*>(image->base_address);
-	contents.SizeOfImage = static_cast<std::uint32_t>(image->size);
-	contents.EntryPoint = reinterpret_cast<void*>(image->entry_point);
+	contents.DllBase = reinterpret_cast<void*>(mapped_image->base_address);
+	contents.SizeOfImage = static_cast<std::uint32_t>(mapped_image->size);
+	contents.EntryPoint = reinterpret_cast<void*>(mapped_image->entry_point);
+
+	contents.BaseDllName = init_unicode_string(*emulator, L"test_bin.sys");
+	contents.FullDllName = init_unicode_string(*emulator, L"\\??\\C:\\Program Files\\test_bin.sys");
 
 	const auto module_list = reinterpret_cast<PLIST_ENTRY>(kernel::ps_loaded_module_list.address());
 
@@ -171,7 +317,7 @@ static void add_to_loaded_module_list(const std::shared_ptr<emulator_t>& emulato
 		                                  ? get_module_list_entry_address(last_entry->table_entry)
 		                                  : module_list;
 
-	auto object = emulator_object_t<_KLDR_DATA_TABLE_ENTRY>::allocate(emulator, contents, image->name);
+	auto object = emulator_object_t<_KLDR_DATA_TABLE_ENTRY>::allocate(emulator, contents, mapped_image->name);
 
 	if (last_entry)
 	{
@@ -184,9 +330,9 @@ static void add_to_loaded_module_list(const std::shared_ptr<emulator_t>& emulato
 
 	set_loaded_module_list_blink(object);
 
-	image->table_entry = std::move(object);
+	mapped_image->table_entry = std::move(object);
 
-	kernel::module_entries.push_back(image);
+	kernel::module_entries.push_back(mapped_image);
 }
 
 static void redirect_image_export(const kernel::function_implementation_t& function_impl,
@@ -207,9 +353,19 @@ static void redirect_image_export(const kernel::function_implementation_t& funct
 	kernel::redirected_functions[export_runtime_address] = function_impl;
 }
 
+static void write_return_value(const std::shared_ptr<emulator_t>& emulator, const std::uint64_t value)
+{
+	emulator->write_register<x86::reg::rax>(value);
+}
+
+static void write_nt_status(const std::shared_ptr<emulator_t>& emulator, const std::uint32_t code)
+{
+	write_return_value(emulator, code);
+}
+
 static void write_nt_success(const std::shared_ptr<emulator_t>& emulator)
 {
-	emulator->write_register<x86::reg::rax>(0);
+	write_nt_status(emulator, 0);
 }
 
 static void write_dummy_handle(const std::shared_ptr<emulator_t>& emulator, const emulator_t::address_type handle_address)
@@ -294,10 +450,195 @@ static void redirect_ntoskrnl_functions(const std::shared_ptr<emulator_t>& emula
 		mapped_image,
 		"ZwClose"
 	);
+
+	redirect_image_export(
+		[emulator]
+		{
+			const auto ecx = emulator->read_register<x86::reg::rcx, std::uint32_t>();
+			const auto rdx = emulator->read_register<x86::reg::rdx, std::uint64_t>();
+			const auto r8 = emulator->read_register<x86::reg::r8, std::uint64_t>();
+
+			spdlog::info("RtlDuplicateUnicodeString called (string in=0x{:X})", rdx);
+
+			if ((ecx & 0xFFFFFFFC) != 0 ||
+				((ecx & 2) != 0 && (ecx & 1) == 0) ||
+				!r8)
+			{
+				write_nt_status(emulator, 0xC000000D);
+
+				return;
+			}
+
+			auto destination_string_object = emulator_object_t<UNICODE_STRING>::view_at(emulator, r8);
+
+			std::uint16_t length = 0;
+			std::uint16_t max_length = 0;
+
+			if (rdx)
+			{
+				const auto source_string_object = emulator_object_t<UNICODE_STRING>::view_at(emulator, rdx);
+				const auto source_string = source_string_object.read();
+
+				if ((source_string.Length & 1) != 0 ||
+					(source_string.MaximumLength & 1) != 0 ||
+					source_string.Length > source_string.MaximumLength ||
+					source_string.MaximumLength == 0xFFFF ||
+					(!source_string.Buffer && (source_string.Length || source_string.MaximumLength)))
+				{
+					write_nt_status(emulator, 0xC000000D);
+
+					return;
+				}
+
+				length = source_string.Length;
+			}
+
+			if (ecx & 1)
+			{
+				if (length == 0xFFFE)
+				{
+					write_nt_status(emulator, 0xC0000106);
+
+					return;
+				}
+
+				max_length = length + 2;
+			}
+			else
+			{
+				max_length = length;
+			}
+
+			if ((ecx & 2) == 0 && !length)
+			{
+				max_length = 0;
+			}
+
+			PWSTR guest_buffer = nullptr;
+
+			if (max_length)
+			{
+				const auto buffer_allocation = emulator->heap_allocate(max_length, prot_read_write);
+
+				emulator_err_t error = buffer_allocation.error_or({});
+
+				error.throw_if("string heap allocation");
+
+				std::vector<std::uint8_t> buffer(max_length);
+
+				error = emulator->read_virtual_memory(*buffer_allocation, buffer);
+
+				error.throw_if("read memory");
+
+				if (ecx & 1)
+				{
+					*reinterpret_cast<std::uint16_t*>(buffer.data() + length) = 0;
+				}
+
+				error = emulator->write_virtual_memory(*buffer_allocation, buffer);
+
+				error.throw_if("write memory");
+
+				guest_buffer = reinterpret_cast<PWSTR>(*buffer_allocation);
+			}
+
+			const UNICODE_STRING destination_string = {
+				.Length = length,
+				.MaximumLength = max_length,
+				.Buffer = guest_buffer
+			};
+
+			destination_string_object.write(destination_string);
+
+			write_nt_success(emulator);
+		},
+		pe_image,
+		mapped_image,
+		"RtlDuplicateUnicodeString"
+	);
+
+	redirect_image_export(
+		[emulator]
+		{
+			spdlog::info("ExSystemTimeToLocalTime called");
+		},
+		pe_image,
+		mapped_image,
+		"ExSystemTimeToLocalTime"
+	);
+
+	redirect_image_export(
+		[emulator]
+		{
+			spdlog::info("RtlTimeToTimeFields called");
+		},
+		pe_image,
+		mapped_image,
+		"RtlTimeToTimeFields"
+	);
+
+	redirect_image_export(
+		[emulator]
+		{
+			spdlog::info("vswprintf_s called");
+
+			write_return_value(emulator, 0);
+		},
+		pe_image,
+		mapped_image,
+		"vswprintf_s"
+	);
+
+	redirect_image_export(
+		[emulator]
+		{
+			spdlog::info("swprintf_s called");
+
+			write_return_value(emulator, 0);
+		},
+		pe_image,
+		mapped_image,
+		"swprintf_s"
+	);
+
+	redirect_image_export(
+		[emulator]
+		{
+			const auto ecx = emulator->read_register<x86::reg::rcx, std::uint32_t>();
+			const auto rdx = emulator->read_register<x86::reg::rdx, std::uint64_t>();
+			const auto r8d = emulator->read_register<x86::reg::r8, std::uint32_t>();
+
+			spdlog::info("ExAllocatePoolWithTag called (type={}, size=0x{:X}, tag={})", ecx, rdx, r8d);
+
+			const auto allocation = emulator->heap_allocate(rdx, prot_read_write, true);
+
+			const emulator_err_t error = allocation.error_or({});
+
+			error.throw_if("pool heap allocation");
+
+			emulator->write_register<x86::reg::rax>(*allocation);
+		},
+		pe_image,
+		mapped_image,
+		"ExAllocatePoolWithTag"
+	);
+
+	redirect_image_export(
+		[emulator]
+		{
+			const auto rcx = emulator->read_register<x86::reg::rcx, std::uint64_t>();
+			const auto rdx = emulator->read_register<x86::reg::rdx, std::uint64_t>();
+	
+			spdlog::info("ExFreePoolWithTag called (buffer=0x{:X}, tag={})", rcx, rdx);
+		},
+		pe_image,
+		mapped_image,
+		"ExFreePoolWithTag"
+	);
 }
 
 static std::shared_ptr<mapped_image_t> map_kernel_image(const std::shared_ptr<emulator_t>& emulator,
-                                                        const std::string_view name)
+                                                        const std::string_view name, const bool fix_imports = true)
 {
 	portable_executable::file_t pe_file(name);
 
@@ -322,16 +663,22 @@ static std::shared_ptr<mapped_image_t> map_kernel_image(const std::shared_ptr<em
 		return { };
 	}
 
-	const auto load_config = pe_image->load_config();
-
-	if (const auto security_cookie_absolute = load_config->security_cookie)
+	if (const auto load_config = pe_image->load_config())
 	{
-		const auto security_cookie_rva = security_cookie_absolute - nt_headers->optional_header.image_base;
+		if (const auto security_cookie_absolute = load_config->security_cookie)
+		{
+			const auto security_cookie_rva = security_cookie_absolute - nt_headers->optional_header.image_base;
 
-		*reinterpret_cast<std::uint64_t*>(pe_image->as<std::uint64_t>() + security_cookie_rva) += *base_address;
+			*reinterpret_cast<std::uint64_t*>(pe_image->as<std::uint64_t>() + security_cookie_rva) += *base_address;
+		}
 	}
 
 	relocate_image(pe_image, *base_address);
+
+	if (fix_imports)
+	{
+		fix_image_imports(pe_image);
+	}
 
 	const auto image_start = pe_image->as<const std::uint8_t*>();
 	const std::span image_buffer(image_start, image_start + nt_headers->optional_header.size_of_image);
@@ -343,16 +690,17 @@ static std::shared_ptr<mapped_image_t> map_kernel_image(const std::shared_ptr<em
 		return { };
 	}
 
-	auto image = std::make_shared<mapped_image_t>(std::string(name), *base_address, image_size, *base_address + nt_headers->optional_header.address_of_entry_point);
+	auto mapped_image = std::make_shared<mapped_image_t>(std::string(name), *base_address, image_size, *base_address + nt_headers->optional_header.address_of_entry_point);
 
-	add_to_loaded_module_list(emulator, image);
+	add_to_loaded_module_list(emulator, mapped_image);
+	collect_module_exports(pe_image, *mapped_image);
 
 	if (name == "ntoskrnl.exe")
 	{
-		redirect_ntoskrnl_functions(emulator, *image, pe_image);
+		redirect_ntoskrnl_functions(emulator, *mapped_image, pe_image);
 	}
 
-	return image;
+	return mapped_image;
 }
 
 static void set_up_user_shared_data(const std::shared_ptr<emulator_t>& emulator)
@@ -380,8 +728,10 @@ static emulator_object_t<_DRIVER_OBJECT> set_up_driver_object(const std::shared_
 static void set_up_driver_entry(const std::shared_ptr<emulator_t>& emulator)
 {
 	const auto driver_object = set_up_driver_object(emulator, *kernel::emulated_module);
+	const auto registry_path = allocate_unicode_string_object(emulator, L"\\REGISTRY\\MACHINE\\SYSTEM\\ControlSet001\\Services\\testbin", "RegistryPath");
 
 	emulator->write_register<x86::reg::rcx>(driver_object.address());
+	emulator->write_register<x86::reg::rdx>(registry_path.address());
 }
 
 static void set_up_ps_loaded_module_list(const std::shared_ptr<emulator_t>& emulator)
@@ -457,7 +807,7 @@ static void set_up_idt(const std::shared_ptr<emulator_t>& emulator, const mapped
 
 		const std::string name = std::format("IDT vector #{:X}", i);
 
-		auto entry_object = emulator_object_t<segment_descriptor_interrupt_gate_64>(emulator, *idt_base_address + offset, name);
+		auto entry_object = emulator_object_t<segment_descriptor_interrupt_gate_64>::view_at(emulator, *idt_base_address + offset, name);
 
 		segment_descriptor_interrupt_gate_64 contents = { };
 
@@ -489,7 +839,9 @@ std::int32_t main()
 		set_up_ps_loaded_module_list(emulator);
 		set_up_user_shared_data(emulator);
 
-		const auto nt_image = map_kernel_image(emulator, nt_file_name);
+		const auto nt_image = map_kernel_image(emulator, nt_file_name, false);
+		map_kernel_image(emulator, "HAL.dll", false);
+		map_kernel_image(emulator, "cng.sys", false);
 
 		kernel::emulated_module = map_kernel_image(emulator, pe_file_name);
 
@@ -505,27 +857,26 @@ std::int32_t main()
 			[emulator]()
 			{
 				const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
+				const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
+
+				emulator_t::address_type return_address = 0;
+
+				const emulator_err_t read_error = emulator->read_virtual_memory(rsp, &return_address, sizeof(return_address));
+
+				read_error.throw_if("read from stack");
 
 				if (const auto redirected_function = kernel::find_redirected_function(rip))
 				{
-					spdlog::info("redirecting function at 0x{:X}", rip);
+					spdlog::info("redirecting function at 0x{:X} (return address=0x{:X})", rip, return_address);
 
 					(*redirected_function)();
-
-					const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
-
-					emulator_t::address_type return_address = 0;
-
-					const emulator_err_t read_error = emulator->read_virtual_memory(rsp, &return_address, sizeof(return_address));
-
-					read_error.throw_if("read from stack");
 
 					emulator->write_register<x86::reg::rsp>(rsp + 8);
 					emulator->write_register<x86::reg::rip>(return_address);
 				}
 				else
 				{
-					spdlog::error("unimplemented function at 0x{:X}", rip);
+					spdlog::error("unimplemented function at 0x{:X} (return address=0x{:X})", rip, return_address);
 
 					emulator->write_register<x86::reg::rip, emulator_t::address_type>(-1);
 				}
@@ -552,28 +903,12 @@ std::int32_t main()
 
 		error.throw_if("instruction hook attach");
 
-		error = emulator->hook_invalid_memory(
-			[emulator](const emulator_t::address_type faulting_address, const protection_t access) -> bool
-			{
-				const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
-
-				spdlog::info("instruction at 0x{:X} accessed invalid memory address 0x{:X} with access type of {}", rip, faulting_address, static_cast<std::uint32_t>(access));
-
-				return false;
-			},
-			prot_all,
-			emulator_t::default_start_address,
-			emulator_t::default_end_address
-		).error_or({});
-
-		error.throw_if("invalid memory hook attach");
-
 		set_up_driver_entry(emulator);
 
 		error = emulator->run_at(entry_point_address, emulator_t::thread_return_address);
 
 		const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
-	
+
 		spdlog::info("emulation finished at rip=0x{:X}", rip);
 
 		error.throw_if("emulation running");

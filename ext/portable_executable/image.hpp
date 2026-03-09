@@ -182,7 +182,7 @@ namespace portable_executable
 
 			auto module = reinterpret_cast<std::uint8_t*>(this);
 
-			return { module, data_directory.virtual_address };
+			return { module, data_directory.virtual_address, data_directory.size };
 		}
 
 		[[nodiscard]] relocations_range_t<const relocations_iterator_t> relocations() const
@@ -196,7 +196,7 @@ namespace portable_executable
 
 			auto module = reinterpret_cast<const std::uint8_t*>(this);
 
-			return { module, data_directory.virtual_address };
+			return { module, data_directory.virtual_address, data_directory.size };
 		}
 
 		[[nodiscard]] debug_info_iterator_t<debug_directory_t> debug_info()

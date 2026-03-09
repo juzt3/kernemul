@@ -42,6 +42,7 @@ namespace hm
 	struct hook_t
 	{
 		using address_type = guest_partition_t::address_type;
+		using size_type = guest_partition_t::size_type;
 		using instruction_callback = std::function<bool()>; // returns true = skip instruction
 		using code_callback = std::function<void()>;
 		using memory_access_callback = std::function<void(address_type address, memory_vmexit_t::access access)>;
@@ -59,7 +60,7 @@ namespace hm
 		data_type extra_data;
 
 		[[nodiscard]] bool in_range(address_type address) const;
-		[[nodiscard]] bool in_aligned_range(address_type address) const;
+		[[nodiscard]] bool in_aligned_range(address_type address, size_type size = 0) const;
 	};
 
 	class emulator_t

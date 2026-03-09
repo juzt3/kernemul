@@ -204,7 +204,7 @@ public:
 	static constexpr address_type default_start_address = 0;
 	static constexpr address_type default_end_address = std::numeric_limits<address_type>::max();
 
-	static constexpr address_type thread_return_address = 0xFFFFFFFF00000000;
+	static constexpr address_type thread_return_address = 0xFFFFFFFFFFFFFFFF;
 	static constexpr size_type page_size = 0x1000;
 
 	[[nodiscard]] virtual emulator_err_t run_at(address_type start_address, address_type end_address = 0) = 0;
@@ -237,7 +237,8 @@ public:
 
 	std::optional<address_type> translate_virtual_address(address_type address);
 
-	[[nodiscard]] std::expected<address_type, emulator_err_t> heap_allocate(size_type size, protection_type protection, bool page_aligned = false);
+	[[nodiscard]] std::expected<address_type, emulator_err_t> heap_allocate(
+		size_type size, protection_type protection, bool page_aligned = false);
 
 	[[nodiscard]] virtual emulator_err_t read_register(x86::register_t reg, void* value) const = 0;
 	[[nodiscard]] virtual emulator_err_t write_register(x86::register_t reg, const void* value) = 0;

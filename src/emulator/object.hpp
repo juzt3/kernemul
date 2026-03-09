@@ -12,27 +12,30 @@ public:
 
 	emulator_object_t() = default;
 
-	explicit emulator_object_t(const std::shared_ptr<emulator_t>& emulator, const address_type address, const std::string& name = { })
+	explicit emulator_object_t(const std::shared_ptr<emulator_t>& emulator, const address_type address, const std::string& name, const bool monitor)
 			:	emulator_(emulator),
 				name_(name),
 				address_(address)
 	{
-		const emulator_err_t error = emulator_->hook_memory(
-			[emulator, address, name](const emulator_t::address_type accessed_address, const protection_t access) -> bool
-			{
-				const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
-				const size_type offset = accessed_address - address;
+		if (monitor)
+		{
+			const emulator_err_t error = emulator_->hook_memory(
+				[emulator, address, name](const emulator_t::address_type accessed_address, const protection_t access) -> bool
+				{
+					const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
+					const size_type offset = accessed_address - address;
 
-				spdlog::info("instruction at 0x{:X} accessed ({} '{}')+0x{:X} (type={})", rip, get_type_name(), name, offset, static_cast<std::uint32_t>(access));
+					spdlog::info("instruction at 0x{:X} accessed ({} '{}')+0x{:X} (type={})", rip, get_type_name(), name, offset, static_cast<std::uint32_t>(access));
 
-				return false;
-			},
-			prot_read_write,
-			address,
-			address + sizeof(T)
-		).error_or({});
+					return false;
+				},
+				prot_read_write,
+				address,
+				address + sizeof(T)
+			).error_or({});
 
-		error.throw_if("object hook attach");
+			error.throw_if("object hook attach");
+		}
 	}
 
 	void write(const T& value)
@@ -64,7 +67,7 @@ public:
 
 		error.throw_if("object allocation");
 
-		return emulator_object_t{ emulator, address, name };
+		return emulator_object_t{ emulator, address, name, true };
 	}
 
 	static emulator_object_t allocate_at(const std::shared_ptr<emulator_t>& emulator, const T& value, const address_type address, const std::string& name = { })
@@ -85,7 +88,7 @@ public:
 			throw std::runtime_error("unable to allocate object on heap");
 		}
 
-		return emulator_object_t{ emulator, *allocation, name };
+		return emulator_object_t{ emulator, *allocation, name, true };
 	}
 
 	static emulator_object_t allocate(const std::shared_ptr<emulator_t>& emulator, const T& value, const std::string& name = { })
@@ -95,6 +98,11 @@ public:
 		object.write(value);
 
 		return std::move(object);
+	}
+
+	static emulator_object_t view_at(const std::shared_ptr<emulator_t>& emulator, const address_type address, const std::string& name = { })
+	{
+		return emulator_object_t{ emulator, address, name, false };
 	}
 
 protected:
