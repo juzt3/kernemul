@@ -8,25 +8,27 @@
 #include <spdlog/spdlog.h>
 
 #include "kernel_def.hpp"
+#include "disassembler/disassembler.hpp"
 
-struct mapped_image_t
+class mapped_image_t
 {
+public:
 	using string_type = std::string;
 	using address_type = emulator_t::address_type;
 	using size_type = emulator_t::size_type;
-	using export_list_type = std::unordered_map<std::string, address_type>;
+	using export_list_type = std::unordered_map<string_type, address_type>;
 
-	mapped_image_t(string_type _name, const address_type _base_address, const size_type _size, const address_type _entry_point)
-			:	name(std::move(_name)),
-				base_address(_base_address),
-				size(_size),
-				entry_point(_entry_point) { }
+	mapped_image_t(string_type name, const address_type base_address, const address_type entry_point, std::vector<std::uint8_t> buffer)
+			:	name_(std::move(name)),
+				base_address_(base_address),
+				entry_point_(entry_point),
+				buffer_(std::move(buffer)) { }
 
-	[[nodiscard]] std::optional<address_type> find_export(const std::string& export_name)
+	[[nodiscard]] std::optional<address_type> find_export(const string_type& export_name)
 	{
-		const auto it = exports.find(export_name);
+		const auto it = exports_.find(export_name);
 
-		if (it != std::ranges::end(exports))
+		if (it != std::ranges::end(exports_))
 		{
 			return it->second;
 		}
@@ -34,16 +36,66 @@ struct mapped_image_t
 		return std::nullopt;
 	}
 
-	string_type name;
+	void register_export(const string_type& export_name, const address_type address)
+	{
+		exports_[export_name] = address;
+	}
 
-	address_type base_address;
-	size_type size;
+	[[nodiscard]] const string_type& name() const
+	{
+		return name_;
+	}
 
-	address_type entry_point;
+	[[nodiscard]] address_type base_address() const
+	{
+		return base_address_;
+	}
 
-	export_list_type exports;
+	[[nodiscard]] address_type entry_point() const
+	{
+		return entry_point_;
+	}
 
-	emulator_object_t<_KLDR_DATA_TABLE_ENTRY> table_entry;
+	[[nodiscard]] size_type size() const
+	{
+		return buffer_.size();
+	}
+
+	[[nodiscard]] std::span<std::uint8_t> buffer()
+	{
+		return buffer_;
+	}
+
+	[[nodiscard]] std::span<const std::uint8_t> buffer() const
+	{
+		return buffer_;
+	}
+
+	[[nodiscard]] emulator_object_t<_KLDR_DATA_TABLE_ENTRY>& table_entry()
+	{
+		return table_entry_;
+	}
+
+	[[nodiscard]] const emulator_object_t<_KLDR_DATA_TABLE_ENTRY>& table_entry() const
+	{
+		return table_entry_;
+	}
+
+	void set_table_entry(emulator_object_t<_KLDR_DATA_TABLE_ENTRY> object)
+	{
+		table_entry_ = std::move(object);
+	}
+
+protected:
+	string_type name_;
+
+	address_type base_address_;
+	address_type entry_point_;
+
+	std::vector<std::uint8_t> buffer_;
+	export_list_type exports_;
+
+	emulator_object_t<_KLDR_DATA_TABLE_ENTRY> table_entry_;
 };
 
 namespace kernel
@@ -117,14 +169,12 @@ static emulator_t::address_type allocate_basic_string(emulator_t& emulator, cons
 		error.throw_if("write memory");
 	}
 
-	const char ch = static_cast<char>(str[0]);
-
 	error = emulator.hook_memory(
-		[&emulator, ch](const emulator_t::address_type accessed_address, const protection_t access) -> bool
+		[&emulator](const emulator_t::address_type accessed_address, const protection_t access) -> bool
 		{
 			const auto rip = emulator.read_register<x86::reg::rip, emulator_t::address_type>();
 
-			spdlog::info("instruction at 0x{:X} accessed allocated string (string address=0x{:X}) (first byte: {})", rip, accessed_address, ch);
+			spdlog::info("instruction at 0x{:X} accessed allocated string (string address=0x{:X})", rip, accessed_address);
 
 			return false;
 		},
@@ -289,9 +339,9 @@ static void collect_module_exports(portable_executable::image_t* const pe_image,
 	for (const auto current_export : pe_image->exports())
 	{
 		const std::uint32_t rva = static_cast<std::uint32_t>(current_export.address - local_image_address);
-		const emulator_t::address_type runtime_address = mapped_image.base_address + rva;
+		const emulator_t::address_type runtime_address = mapped_image.base_address() + rva;
 
-		mapped_image.exports[current_export.name] = runtime_address;
+		mapped_image.register_export(current_export.name, runtime_address);
 	}
 }
 
@@ -299,9 +349,9 @@ static void add_to_loaded_module_list(const std::shared_ptr<emulator_t>& emulato
 {
 	_KLDR_DATA_TABLE_ENTRY contents = { };
 
-	contents.DllBase = reinterpret_cast<void*>(mapped_image->base_address);
-	contents.SizeOfImage = static_cast<std::uint32_t>(mapped_image->size);
-	contents.EntryPoint = reinterpret_cast<void*>(mapped_image->entry_point);
+	contents.DllBase = reinterpret_cast<void*>(mapped_image->base_address());
+	contents.SizeOfImage = static_cast<std::uint32_t>(mapped_image->size());
+	contents.EntryPoint = reinterpret_cast<void*>(mapped_image->entry_point());
 
 	contents.BaseDllName = init_unicode_string(*emulator, L"test_bin.sys");
 	contents.FullDllName = init_unicode_string(*emulator, L"\\??\\C:\\Program Files\\test_bin.sys");
@@ -314,14 +364,14 @@ static void add_to_loaded_module_list(const std::shared_ptr<emulator_t>& emulato
 
 	contents.InLoadOrderLinks.Flink = module_list;
 	contents.InLoadOrderLinks.Blink = last_entry
-		                                  ? get_module_list_entry_address(last_entry->table_entry)
+		                                  ? get_module_list_entry_address(last_entry->table_entry())
 		                                  : module_list;
 
-	auto object = emulator_object_t<_KLDR_DATA_TABLE_ENTRY>::allocate(emulator, contents, mapped_image->name);
+	auto object = emulator_object_t<_KLDR_DATA_TABLE_ENTRY>::allocate(emulator, contents, mapped_image->name());
 
 	if (last_entry)
 	{
-		set_module_list_entry_flink(last_entry->table_entry, object);
+		set_module_list_entry_flink(last_entry->table_entry(), object);
 	}
 	else
 	{
@@ -330,7 +380,7 @@ static void add_to_loaded_module_list(const std::shared_ptr<emulator_t>& emulato
 
 	set_loaded_module_list_blink(object);
 
-	mapped_image->table_entry = std::move(object);
+	mapped_image->table_entry() = std::move(object);
 
 	kernel::module_entries.push_back(mapped_image);
 }
@@ -348,7 +398,7 @@ static void redirect_image_export(const kernel::function_implementation_t& funct
 
 	const std::uint32_t rva = static_cast<std::uint32_t>(local_export_address - pe_image->as<const std::uint8_t*>());
 
-	const emulator_t::address_type export_runtime_address = mapped_image.base_address + rva;
+	const emulator_t::address_type export_runtime_address = mapped_image.base_address() + rva;
 
 	kernel::redirected_functions[export_runtime_address] = function_impl;
 }
@@ -681,7 +731,7 @@ static std::shared_ptr<mapped_image_t> map_kernel_image(const std::shared_ptr<em
 	}
 
 	const auto image_start = pe_image->as<const std::uint8_t*>();
-	const std::span image_buffer(image_start, image_start + nt_headers->optional_header.size_of_image);
+	const std::vector image_buffer(image_start, image_start + nt_headers->optional_header.size_of_image);
 
 	if (const auto error = emulator->write_virtual_memory(*base_address, image_buffer))
 	{
@@ -690,7 +740,9 @@ static std::shared_ptr<mapped_image_t> map_kernel_image(const std::shared_ptr<em
 		return { };
 	}
 
-	auto mapped_image = std::make_shared<mapped_image_t>(std::string(name), *base_address, image_size, *base_address + nt_headers->optional_header.address_of_entry_point);
+	const mapped_image_t::address_type entry_point = *base_address + nt_headers->optional_header.address_of_entry_point;
+
+	auto mapped_image = std::make_shared<mapped_image_t>(std::string(name), *base_address, entry_point, image_buffer);
 
 	add_to_loaded_module_list(emulator, mapped_image);
 	collect_module_exports(pe_image, *mapped_image);
@@ -718,11 +770,13 @@ static emulator_object_t<_DRIVER_OBJECT> set_up_driver_object(const std::shared_
 {
 	_DRIVER_OBJECT contents = { };
 
-	contents.DriverSection = reinterpret_cast<void*>(image.table_entry.address());
-	contents.DriverStart = reinterpret_cast<void*>(image.base_address);
-	contents.DriverSize = static_cast<std::uint32_t>(image.size);
+	const auto& table_entry = image.table_entry();
 
-	return emulator_object_t<_DRIVER_OBJECT>::allocate(emulator, contents, image.name);
+	contents.DriverSection = reinterpret_cast<void*>(table_entry.address());
+	contents.DriverStart = reinterpret_cast<void*>(image.base_address());
+	contents.DriverSize = static_cast<std::uint32_t>(image.size());
+
+	return emulator_object_t<_DRIVER_OBJECT>::allocate(emulator, contents, image.name());
 }
 
 static void set_up_driver_entry(const std::shared_ptr<emulator_t>& emulator)
@@ -799,7 +853,7 @@ static void set_up_idt(const std::shared_ptr<emulator_t>& emulator, const mapped
 
 	error.throw_if("map IDT");
 
-	const emulator_t::address_type handler_address = nt_image.base_address + (nt_image.size / 2);
+	const emulator_t::address_type handler_address = nt_image.base_address() + (nt_image.size() / 2);
 
 	for (std::uint32_t i = 0; i < handler_count; i++)
 	{
@@ -847,10 +901,10 @@ std::int32_t main()
 
 		set_up_idt(emulator, *nt_image);
 
-	    const emulator_t::address_type base_address = kernel::emulated_module->base_address;
-		const emulator_t::address_type entry_point_address = kernel::emulated_module->entry_point;
+	    const emulator_t::address_type base_address = kernel::emulated_module->base_address();
+		const emulator_t::address_type entry_point_address = kernel::emulated_module->entry_point();
 
-		spdlog::info("mapped ntoskrnl at 0x{:X}", nt_image->base_address);
+		spdlog::info("mapped ntoskrnl at 0x{:X}", nt_image->base_address());
 		spdlog::info("mapped image at 0x{:X}", base_address);
 
 		emulator_err_t error = emulator->hook_basic_block(
@@ -881,8 +935,8 @@ std::int32_t main()
 					emulator->write_register<x86::reg::rip, emulator_t::address_type>(-1);
 				}
 			},
-			nt_image->base_address,
-			nt_image->base_address + nt_image->size
+			nt_image->base_address(),
+			nt_image->base_address() + nt_image->size()
 		).error_or({});
 		 
 		error.throw_if("basic block hook attach");
