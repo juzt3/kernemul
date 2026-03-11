@@ -187,13 +187,26 @@ std::expected<emulator_t::address_type, emulator_err_t> emulator_t::heap_allocat
 		current_heap_virtual_address_ = align_up(current_heap_virtual_address_, page_size);
 	}
 
-	if (!translate_virtual_address(current_heap_virtual_address_))
+	size_type size_left_of_allocation = size;
+	address_type current_address = current_heap_virtual_address_;
+
+	do
 	{
-		if (const auto error = map_virtual_memory(current_heap_virtual_address_, size, protection))
+		const size_type size_left_of_page = page_size - (current_address % page_size);
+		const size_type current_size = std::min(size_left_of_allocation, size_left_of_page);
+
+		if (!translate_virtual_address(current_address))
 		{
-			return std::unexpected(error);
+			if (const auto error = map_virtual_memory(current_address, current_size, protection))
+			{
+				return std::unexpected(error);
+			}
 		}
-	}
+
+		current_address += current_size;
+		size_left_of_allocation -= current_size;
+
+	} while (size_left_of_allocation);
 
 	const address_type address = current_heap_virtual_address_;
 

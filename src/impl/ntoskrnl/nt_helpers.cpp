@@ -1,0 +1,85 @@
+#include "nt_helpers.hpp"
+
+namespace kernel
+{
+	extern std::unordered_map<emulator_t::address_type, function_implementation_t> redirected_functions;
+}
+
+void redirect_image_export(const function_implementation_t& function_impl,
+	const portable_executable::image_t* const pe_image,
+	const mapped_image_t& mapped_image, const std::string_view name)
+{
+	const auto local_export_address = pe_image->find_export(name);
+
+	if (!local_export_address)
+	{
+		throw std::runtime_error("unable to find export");
+	}
+
+	const std::uint32_t rva = static_cast<std::uint32_t>(local_export_address - pe_image->as<const std::uint8_t*>());
+
+	const emulator_t::address_type export_runtime_address = mapped_image.base_address() + rva;
+
+	kernel::redirected_functions[export_runtime_address] = function_impl;
+}
+
+void write_return_value(const std::shared_ptr<emulator_t>& emulator, const std::uint64_t value)
+{
+	emulator->write_register<x86::reg::rax>(value);
+}
+
+void write_nt_status(const std::shared_ptr<emulator_t>& emulator, const std::uint32_t code)
+{
+	write_return_value(emulator, code);
+}
+
+void write_nt_success(const std::shared_ptr<emulator_t>& emulator)
+{
+	write_nt_status(emulator, 0);
+}
+
+void write_dummy_handle(const std::shared_ptr<emulator_t>& emulator, const emulator_t::address_type handle_address)
+{
+	constexpr std::uint64_t handle_value = 0x1337;
+
+	const emulator_err_t error = emulator->write_virtual_memory(handle_address, &handle_value, sizeof(handle_value));
+
+	error.throw_if("write memory");
+}
+
+std::uint64_t read_guest_vararg(const emulator_t& emulator, const emulator_t::address_type va_list_address,
+	std::size_t& index)
+{
+	const emulator_t::address_type arg_address = va_list_address + index * sizeof(std::uint64_t);
+
+	std::uint64_t value = 0;
+
+	const emulator_err_t error = emulator.read_virtual_memory(arg_address, &value, sizeof(value));
+
+	error.throw_if("read vararg");
+
+	++index;
+
+	return value;
+}
+
+void write_guest_wstring_buffer(emulator_t& emulator, const emulator_t::address_type buffer_address,
+	const std::size_t buffer_count, const std::wstring_view str)
+{
+	const std::size_t chars_to_write = std::min(str.size(), buffer_count - 1);
+
+	if (chars_to_write > 0)
+	{
+		const emulator_err_t error = emulator.write_virtual_memory(
+			buffer_address, str.data(), chars_to_write * sizeof(wchar_t));
+
+		error.throw_if("write memory");
+	}
+
+	constexpr wchar_t terminator = L'\0';
+
+	const emulator_err_t error = emulator.write_virtual_memory(
+		buffer_address + chars_to_write * sizeof(wchar_t), &terminator, sizeof(terminator));
+
+	error.throw_if("write memory");
+}

@@ -1,0 +1,76 @@
+#include "nt_helpers.hpp"
+
+void redirect_ntoskrnl_registry_functions(const std::shared_ptr<emulator_t>& emulator,
+	const mapped_image_t& mapped_image, const portable_executable::image_t* const pe_image)
+{
+	redirect_image_export(
+		[emulator]
+		{
+			const auto r9 = emulator->read_register<x86::reg::r9, std::uint64_t>();
+
+			spdlog::info("RtlWriteRegistryValue called with type: 0x{:X}", r9);
+
+			write_nt_success(emulator);
+		},
+		pe_image,
+		mapped_image,
+		"RtlWriteRegistryValue"
+	);
+
+	redirect_image_export(
+		[emulator]
+		{
+			spdlog::info("RtlDeleteRegistryValue called");
+
+			write_nt_success(emulator);
+		},
+		pe_image,
+		mapped_image,
+		"RtlDeleteRegistryValue"
+	);
+
+	redirect_image_export(
+		[emulator]
+		{
+			const auto rcx = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto rdx = emulator->read_register<x86::reg::rdx, std::uint32_t>();
+
+			spdlog::info("ZwOpenKey called (desired access=0x{:X})", rdx);
+
+			write_dummy_handle(emulator, rcx);
+
+			write_nt_success(emulator);
+		},
+		pe_image,
+		mapped_image,
+		"ZwOpenKey"
+	);
+
+	redirect_image_export(
+		[emulator]
+		{
+			const auto rcx = emulator->read_register<x86::reg::rcx, std::uint64_t>();
+
+			spdlog::info("ZwFlushKey called (key handle=0x{:X})", rcx);
+
+			write_nt_success(emulator);
+		},
+		pe_image,
+		mapped_image,
+		"ZwFlushKey"
+	);
+
+	redirect_image_export(
+		[emulator]
+		{
+			const auto rcx = emulator->read_register<x86::reg::rcx, std::uint64_t>();
+
+			spdlog::info("ZwClose called (handle=0x{:X})", rcx);
+
+			write_nt_success(emulator);
+		},
+		pe_image,
+		mapped_image,
+		"ZwClose"
+	);
+}

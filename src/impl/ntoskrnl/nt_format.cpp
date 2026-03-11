@@ -1,0 +1,605 @@
+#include "nt_helpers.hpp"
+
+std::wstring guest_vswprintf(const emulator_t& emulator, const std::wstring_view format,
+	const emulator_t::address_type va_list_address)
+{
+	std::wstring result;
+	std::size_t arg_index = 0;
+
+	for (std::size_t i = 0; i < format.size(); ++i)
+	{
+		if (format[i] != L'%')
+		{
+			result += format[i];
+
+			continue;
+		}
+
+		const std::size_t spec_start = i;
+
+		++i;
+
+		if (i >= format.size())
+		{
+			break;
+		}
+
+		if (format[i] == L'%')
+		{
+			result += L'%';
+
+			continue;
+		}
+
+		while (i < format.size() && (format[i] == L'-' || format[i] == L'+' ||
+			format[i] == L' ' || format[i] == L'0' || format[i] == L'#'))
+		{
+			++i;
+		}
+
+		int width = 0;
+
+		if (i < format.size() && format[i] == L'*')
+		{
+			width = static_cast<int>(read_guest_vararg(emulator, va_list_address, arg_index));
+			++i;
+		}
+		else
+		{
+			while (i < format.size() && format[i] >= L'0' && format[i] <= L'9')
+			{
+				++i;
+			}
+		}
+
+		int precision = -1;
+
+		if (i < format.size() && format[i] == L'.')
+		{
+			++i;
+
+			if (i < format.size() && format[i] == L'*')
+			{
+				precision = static_cast<int>(read_guest_vararg(emulator, va_list_address, arg_index));
+				++i;
+			}
+			else
+			{
+				while (i < format.size() && format[i] >= L'0' && format[i] <= L'9')
+				{
+					++i;
+				}
+			}
+		}
+
+		enum class length_mod_t { none, h, hh, l, ll, I64, I32, z };
+		length_mod_t length_mod = length_mod_t::none;
+
+		if (i < format.size())
+		{
+			if (format[i] == L'h')
+			{
+				length_mod = length_mod_t::h;
+				++i;
+
+				if (i < format.size() && format[i] == L'h')
+				{
+					length_mod = length_mod_t::hh;
+					++i;
+				}
+			}
+			else if (format[i] == L'l')
+			{
+				length_mod = length_mod_t::l;
+				++i;
+
+				if (i < format.size() && format[i] == L'l')
+				{
+					length_mod = length_mod_t::ll;
+					++i;
+				}
+			}
+			else if (format[i] == L'I')
+			{
+				if (i + 2 < format.size() && format[i + 1] == L'6' && format[i + 2] == L'4')
+				{
+					length_mod = length_mod_t::I64;
+					i += 3;
+				}
+				else if (i + 2 < format.size() && format[i + 1] == L'3' && format[i + 2] == L'2')
+				{
+					length_mod = length_mod_t::I32;
+					i += 3;
+				}
+			}
+			else if (format[i] == L'z')
+			{
+				length_mod = length_mod_t::z;
+				++i;
+			}
+		}
+
+		if (i >= format.size())
+		{
+			break;
+		}
+
+		const wchar_t specifier = format[i];
+		const std::wstring spec_str(format.substr(spec_start, i - spec_start + 1));
+
+		wchar_t buffer[256] = { };
+
+		switch (specifier)
+		{
+		case L'd':
+		case L'i':
+		case L'u':
+		case L'x':
+		case L'X':
+		case L'o':
+		{
+			const auto raw_arg = read_guest_vararg(emulator, va_list_address, arg_index);
+
+			switch (length_mod)
+			{
+			case length_mod_t::ll:
+			case length_mod_t::I64:
+			case length_mod_t::z:
+				swprintf_s(buffer, spec_str.c_str(), static_cast<std::uint64_t>(raw_arg));
+				break;
+			default:
+				swprintf_s(buffer, spec_str.c_str(), static_cast<std::uint32_t>(raw_arg));
+				break;
+			}
+
+			result += buffer;
+
+			break;
+		}
+		case L'p':
+		{
+			const auto raw_arg = read_guest_vararg(emulator, va_list_address, arg_index);
+
+			swprintf_s(buffer, spec_str.c_str(), reinterpret_cast<void*>(raw_arg));
+
+			result += buffer;
+
+			break;
+		}
+		case L's':
+		{
+			const auto raw_arg = read_guest_vararg(emulator, va_list_address, arg_index);
+
+			if (raw_arg)
+			{
+				if (length_mod == length_mod_t::h)
+				{
+					result += std::wstring(read_guest_string(emulator, raw_arg).begin(),
+						read_guest_string(emulator, raw_arg).end());
+				}
+				else
+				{
+					result += read_guest_wstring(emulator, raw_arg);
+				}
+			}
+			else
+			{
+				result += L"(null)";
+			}
+
+			break;
+		}
+		case L'S':
+		{
+			const auto raw_arg = read_guest_vararg(emulator, va_list_address, arg_index);
+
+			if (raw_arg)
+			{
+				const auto narrow = read_guest_string(emulator, raw_arg);
+
+				result += std::wstring(narrow.begin(), narrow.end());
+			}
+			else
+			{
+				result += L"(null)";
+			}
+
+			break;
+		}
+		case L'c':
+		{
+			const auto raw_arg = read_guest_vararg(emulator, va_list_address, arg_index);
+
+			result += static_cast<wchar_t>(raw_arg);
+
+			break;
+		}
+		case L'C':
+		{
+			const auto raw_arg = read_guest_vararg(emulator, va_list_address, arg_index);
+
+			result += static_cast<wchar_t>(static_cast<char>(raw_arg));
+
+			break;
+		}
+		default:
+		{
+			result += spec_str;
+
+			break;
+		}
+		}
+	}
+
+	return result;
+}
+
+std::string guest_vsprintf(const emulator_t& emulator, const std::string_view format,
+	const emulator_t::address_type va_list_address)
+{
+	std::string result;
+	std::size_t arg_index = 0;
+
+	for (std::size_t i = 0; i < format.size(); ++i)
+	{
+		if (format[i] != '%')
+		{
+			result += format[i];
+
+			continue;
+		}
+
+		const std::size_t spec_start = i;
+
+		++i;
+
+		if (i >= format.size())
+		{
+			break;
+		}
+
+		if (format[i] == '%')
+		{
+			result += '%';
+
+			continue;
+		}
+
+		while (i < format.size() && (format[i] == '-' || format[i] == '+' ||
+		       format[i] == ' ' || format[i] == '0' || format[i] == '#'))
+		{
+			++i;
+		}
+
+		if (i < format.size() && format[i] == '*')
+		{
+			read_guest_vararg(emulator, va_list_address, arg_index);
+			++i;
+		}
+		else
+		{
+			while (i < format.size() && format[i] >= '0' && format[i] <= '9')
+			{
+				++i;
+			}
+		}
+
+		if (i < format.size() && format[i] == '.')
+		{
+			++i;
+
+			if (i < format.size() && format[i] == '*')
+			{
+				read_guest_vararg(emulator, va_list_address, arg_index);
+				++i;
+			}
+			else
+			{
+				while (i < format.size() && format[i] >= '0' && format[i] <= '9')
+				{
+					++i;
+				}
+			}
+		}
+
+		enum class length_mod_t { none, h, hh, l, ll, I64, I32, z };
+		length_mod_t length_mod = length_mod_t::none;
+
+		if (i < format.size())
+		{
+			if (format[i] == 'h')
+			{
+				length_mod = length_mod_t::h;
+				++i;
+
+				if (i < format.size() && format[i] == 'h')
+				{
+					length_mod = length_mod_t::hh;
+					++i;
+				}
+			}
+			else if (format[i] == 'l')
+			{
+				length_mod = length_mod_t::l;
+				++i;
+
+				if (i < format.size() && format[i] == 'l')
+				{
+					length_mod = length_mod_t::ll;
+					++i;
+				}
+			}
+			else if (format[i] == 'I')
+			{
+				if (i + 2 < format.size() && format[i + 1] == '6' && format[i + 2] == '4')
+				{
+					length_mod = length_mod_t::I64;
+					i += 3;
+				}
+				else if (i + 2 < format.size() && format[i + 1] == '3' && format[i + 2] == '2')
+				{
+					length_mod = length_mod_t::I32;
+					i += 3;
+				}
+			}
+			else if (format[i] == 'z')
+			{
+				length_mod = length_mod_t::z;
+				++i;
+			}
+		}
+
+		if (i >= format.size())
+		{
+			break;
+		}
+
+		const char specifier = format[i];
+		const std::string spec_str(format.substr(spec_start, i - spec_start + 1));
+
+		char buffer[256] = { };
+
+		switch (specifier)
+		{
+		case 'd':
+		case 'i':
+		case 'u':
+		case 'x':
+		case 'X':
+		case 'o':
+		{
+			const auto raw_arg = read_guest_vararg(emulator, va_list_address, arg_index);
+
+			switch (length_mod)
+			{
+			case length_mod_t::ll:
+			case length_mod_t::I64:
+			case length_mod_t::z:
+				sprintf_s(buffer, spec_str.c_str(), static_cast<std::uint64_t>(raw_arg));
+				break;
+			default:
+				sprintf_s(buffer, spec_str.c_str(), static_cast<std::uint32_t>(raw_arg));
+				break;
+			}
+
+			result += buffer;
+
+			break;
+		}
+		case 'p':
+		{
+			const auto raw_arg = read_guest_vararg(emulator, va_list_address, arg_index);
+
+			sprintf_s(buffer, spec_str.c_str(), reinterpret_cast<void*>(raw_arg));
+
+			result += buffer;
+
+			break;
+		}
+		case 's':
+		{
+			const auto raw_arg = read_guest_vararg(emulator, va_list_address, arg_index);
+
+			if (raw_arg)
+			{
+				if (length_mod == length_mod_t::l)
+				{
+					const auto wide = read_guest_wstring(emulator, raw_arg);
+
+					result += std::string(wide.begin(), wide.end());
+				}
+				else
+				{
+					result += read_guest_string(emulator, raw_arg);
+				}
+			}
+			else
+			{
+				result += "(null)";
+			}
+
+			break;
+		}
+		case 'S':
+		{
+			const auto raw_arg = read_guest_vararg(emulator, va_list_address, arg_index);
+
+			if (raw_arg)
+			{
+				const auto wide = read_guest_wstring(emulator, raw_arg);
+
+				result += std::string(wide.begin(), wide.end());
+			}
+			else
+			{
+				result += "(null)";
+			}
+
+			break;
+		}
+		case 'c':
+		{
+			const auto raw_arg = read_guest_vararg(emulator, va_list_address, arg_index);
+
+			result += static_cast<char>(raw_arg);
+
+			break;
+		}
+		case 'C':
+		{
+			const auto raw_arg = read_guest_vararg(emulator, va_list_address, arg_index);
+
+			result += static_cast<char>(static_cast<wchar_t>(raw_arg));
+
+			break;
+		}
+		default:
+		{
+			result += spec_str;
+
+			break;
+		}
+		}
+	}
+
+	return result;
+}
+
+void redirect_ntoskrnl_format_functions(const std::shared_ptr<emulator_t>& emulator,
+	const mapped_image_t& mapped_image, const portable_executable::image_t* const pe_image)
+{
+	redirect_image_export(
+		[emulator]
+		{
+			const auto rcx = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
+			const auto rdx = emulator->read_register<x86::reg::rdx, std::uint64_t>();
+			const auto r8 = emulator->read_register<x86::reg::r8, std::uint64_t>();
+			const auto r9 = emulator->read_register<x86::reg::r9, std::uint64_t>();
+
+			// spill rdx/r8/r9 into shadow space to form contiguous va_list at rsp+0x10
+			const emulator_t::address_type va_list_address = rsp + 0x10;
+
+			emulator->write_virtual_memory(rsp + 0x10, &rdx, sizeof(rdx)).throw_if("write memory");
+			emulator->write_virtual_memory(rsp + 0x18, &r8, sizeof(r8)).throw_if("write memory");
+			emulator->write_virtual_memory(rsp + 0x20, &r9, sizeof(r9)).throw_if("write memory");
+
+			const auto format_string = read_guest_string(*emulator, rcx);
+			const auto formatted = guest_vsprintf(*emulator, format_string, va_list_address);
+
+			spdlog::info("DbgPrint: {}", formatted);
+
+			write_nt_success(emulator);
+		},
+		pe_image,
+		mapped_image,
+		"DbgPrint"
+	);
+
+	redirect_image_export(
+		[emulator]
+		{
+			const auto rcx = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto rdx = emulator->read_register<x86::reg::rdx, std::uint64_t>();
+			const auto r8 = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
+			const auto r9 = emulator->read_register<x86::reg::r9, emulator_t::address_type>();
+
+			if (!rcx || !rdx || !r8)
+			{
+				spdlog::warn("vswprintf_s called with invalid parameters");
+
+				write_return_value(emulator, static_cast<std::uint64_t>(-1));
+
+				return;
+			}
+
+			const auto format_string = read_guest_wstring(*emulator, r8);
+			const auto formatted = guest_vswprintf(*emulator, format_string, r9);
+
+			if (formatted.size() >= rdx)
+			{
+				constexpr wchar_t null_terminator = L'\0';
+
+				const emulator_err_t error = emulator->write_virtual_memory(
+					rcx, &null_terminator, sizeof(null_terminator));
+
+				error.throw_if("write memory");
+
+				spdlog::warn("vswprintf_s called (result truncated, format='{}')",
+					std::string(format_string.begin(), format_string.end()));
+
+				write_return_value(emulator, static_cast<std::uint64_t>(-1));
+
+				return;
+			}
+
+			write_guest_wstring_buffer(*emulator, rcx, rdx, formatted);
+
+			spdlog::info("vswprintf_s called (result='{}')",
+				std::string(formatted.begin(), formatted.end()));
+
+			write_return_value(emulator, static_cast<std::uint64_t>(formatted.size()));
+		},
+		pe_image,
+		mapped_image,
+		"vswprintf_s"
+	);
+
+	redirect_image_export(
+		[emulator]
+		{
+			const auto rcx = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto rdx = emulator->read_register<x86::reg::rdx, std::uint64_t>();
+			const auto r8 = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
+			const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
+			const auto r9 = emulator->read_register<x86::reg::r9, std::uint64_t>();
+
+			// spill r9 into its shadow space slot so va_list at rsp+0x20 is contiguous
+			const emulator_t::address_type va_list_address = rsp + 0x20;
+
+			const emulator_err_t error = emulator->write_virtual_memory(
+				va_list_address, &r9, sizeof(r9));
+
+			error.throw_if("write memory");
+
+			if (!rcx || !rdx || !r8)
+			{
+				spdlog::warn("swprintf_s called with invalid parameters");
+
+				write_return_value(emulator, static_cast<std::uint64_t>(-1));
+
+				return;
+			}
+
+			const auto format_string = read_guest_wstring(*emulator, r8);
+			const auto formatted = guest_vswprintf(*emulator, format_string, va_list_address);
+
+			if (formatted.size() >= rdx)
+			{
+				constexpr wchar_t null_terminator = L'\0';
+
+				const emulator_err_t error = emulator->write_virtual_memory(
+					rcx, &null_terminator, sizeof(null_terminator));
+
+				error.throw_if("write memory");
+
+				spdlog::warn("swprintf_s called (result truncated, format='{}')",
+					std::string(format_string.begin(), format_string.end()));
+
+				write_return_value(emulator, static_cast<std::uint64_t>(-1));
+
+				return;
+			}
+
+			write_guest_wstring_buffer(*emulator, rcx, rdx, formatted);
+
+			spdlog::info("swprintf_s called (result='{}')",
+				std::string(formatted.begin(), formatted.end()));
+
+			write_return_value(emulator, static_cast<std::uint64_t>(formatted.size()));
+		},
+		pe_image,
+		mapped_image,
+		"swprintf_s"
+	);
+}

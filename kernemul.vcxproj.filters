@@ -161,5 +161,8 @@
     <ClInclude Include="src\emulator\object.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="src\image\mapped_image.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>
