@@ -170,6 +170,7 @@
     <ClCompile Include="src\emulator\backend\hypermulator_backend.cpp" />
     <ClCompile Include="src\emulator\backend\unicorn_backend.cpp" />
     <ClCompile Include="src\emulator\emulator_memory.cpp" />
+    <ClCompile Include="src\filesystem\filesystem.cpp" />
     <ClCompile Include="src\impl\ntoskrnl\nt_format.cpp" />
     <ClCompile Include="src\impl\ntoskrnl\nt_helpers.cpp" />
     <ClCompile Include="src\impl\ntoskrnl\nt_memory.cpp" />
@@ -205,6 +206,7 @@
     <ClInclude Include="src\emulator\backend\unicorn_backend.hpp" />
     <ClInclude Include="src\emulator\emulator.hpp" />
     <ClInclude Include="src\emulator\object.hpp" />
+    <ClInclude Include="src\filesystem\filesystem.hpp" />
     <ClInclude Include="src\image\mapped_image.hpp" />
     <ClInclude Include="src\impl\ntoskrnl\nt_helpers.hpp" />
     <ClInclude Include="src\kernel_def.hpp" />
