@@ -31,7 +31,7 @@ void redirect_ntoskrnl_string_functions(const std::shared_ptr<emulator_t>& emula
 				destination.MaximumLength = static_cast<std::uint16_t>(byte_length + sizeof(wchar_t));
 
 				spdlog::info("RtlInitUnicodeString called (destination=0x{:X}, source='{}')",
-					rcx, std::string(source_string.begin(), source_string.end()));
+					rcx, narrow_wstring(source_string));
 			}
 			else
 			{
@@ -180,5 +180,30 @@ void redirect_ntoskrnl_string_functions(const std::shared_ptr<emulator_t>& emula
 		pe_image,
 		mapped_image,
 		"RtlFreeUnicodeString"
+	);
+
+	redirect_image_export(
+		[emulator]
+		{
+			const auto rcx = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+
+			if (!rcx)
+			{
+				spdlog::info("wcslen called (str=null, result=0)");
+
+				write_return_value(emulator, 0);
+
+				return;
+			}
+
+			const auto str = read_guest_wstring(*emulator, rcx);
+
+			spdlog::info("wcslen called (str='{}', result={})", narrow_wstring(str), str.size());
+
+			write_return_value(emulator, str.size());
+		},
+		pe_image,
+		mapped_image,
+		"wcslen"
 	);
 }

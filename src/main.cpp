@@ -1,6 +1,7 @@
 #include "emulator/backend/hypermulator_backend.hpp"
 #include "emulator/backend/unicorn_backend.hpp"
 #include "emulator/object.hpp"
+#include "filesystem/filesystem.hpp"
 #include "image/mapped_image.hpp"
 #include "impl/ntoskrnl/nt_helpers.hpp"
 #include "kernel_def.hpp"
@@ -21,6 +22,7 @@ namespace kernel
 	static std::vector<std::shared_ptr<mapped_image_t>> module_entries;
 
 	static std::shared_ptr<mapped_image_t> emulated_module;
+	static std::shared_ptr<filesystem_t> filesystem;
 
 	using function_implementation_t = std::function<void()>;
 
@@ -364,6 +366,8 @@ static std::shared_ptr<mapped_image_t> map_kernel_image(const std::shared_ptr<em
 		redirect_ntoskrnl_time_functions(emulator, *mapped_image, pe_image);
 		redirect_ntoskrnl_registry_functions(emulator, *mapped_image, pe_image);
 		redirect_ntoskrnl_format_functions(emulator, *mapped_image, pe_image);
+		redirect_ntoskrnl_misc_functions(emulator, *mapped_image, pe_image);
+		redirect_ntoskrnl_file_functions(emulator, *mapped_image, pe_image, kernel::filesystem);
 	}
 
 	return mapped_image;
@@ -501,6 +505,8 @@ std::int32_t main()
 	try
 	{
 		const auto emulator = std::static_pointer_cast<emulator_t>(std::make_shared<hypermulator_t>());
+
+		kernel::filesystem = std::make_shared<filesystem_t>();
 
 		set_up_stack(*emulator);
 		set_up_kernel_gs(emulator);

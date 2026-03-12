@@ -59,6 +59,19 @@ inline std::string read_guest_string(const emulator_t& emulator, const emulator_
 	return read_guest_basic_string<char>(emulator, address);
 }
 
+inline std::string narrow_wstring(const std::wstring_view wide)
+{
+	std::string result;
+	result.reserve(wide.size());
+
+	for (const auto wc : wide)
+	{
+		result += static_cast<char>(wc & 0xFF);
+	}
+
+	return result;
+}
+
 std::uint64_t read_guest_vararg(const emulator_t& emulator, emulator_t::address_type va_list_address,
 	std::size_t& index);
 
@@ -85,3 +98,12 @@ void redirect_ntoskrnl_registry_functions(const std::shared_ptr<emulator_t>& emu
 
 void redirect_ntoskrnl_format_functions(const std::shared_ptr<emulator_t>& emulator,
 	const mapped_image_t& mapped_image, const portable_executable::image_t* pe_image);
+
+void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulator,
+	const mapped_image_t& mapped_image, const portable_executable::image_t* pe_image);
+
+class filesystem_t;
+
+void redirect_ntoskrnl_file_functions(const std::shared_ptr<emulator_t>& emulator,
+	const mapped_image_t& mapped_image, const portable_executable::image_t* pe_image,
+	const std::shared_ptr<filesystem_t>& filesystem);

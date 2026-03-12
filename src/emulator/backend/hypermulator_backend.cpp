@@ -30,6 +30,7 @@
 		CASE_REG(cr2)
 		CASE_REG(cr3)
 		CASE_REG(cr4)
+		CASE_REG(cr8)
 		//
 		CASE_REG(rip)
 		CASE_REG(rflags)

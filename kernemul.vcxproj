@@ -171,9 +171,11 @@
     <ClCompile Include="src\emulator\backend\unicorn_backend.cpp" />
     <ClCompile Include="src\emulator\emulator_memory.cpp" />
     <ClCompile Include="src\filesystem\filesystem.cpp" />
+    <ClCompile Include="src\impl\ntoskrnl\nt_file.cpp" />
     <ClCompile Include="src\impl\ntoskrnl\nt_format.cpp" />
     <ClCompile Include="src\impl\ntoskrnl\nt_helpers.cpp" />
     <ClCompile Include="src\impl\ntoskrnl\nt_memory.cpp" />
+    <ClCompile Include="src\impl\ntoskrnl\nt_misc.cpp" />
     <ClCompile Include="src\impl\ntoskrnl\nt_registry.cpp" />
     <ClCompile Include="src\impl\ntoskrnl\nt_string.cpp" />
     <ClCompile Include="src\impl\ntoskrnl\nt_time.cpp" />

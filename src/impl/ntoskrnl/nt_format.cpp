@@ -406,7 +406,7 @@ std::string guest_vsprintf(const emulator_t& emulator, const std::string_view fo
 				{
 					const auto wide = read_guest_wstring(emulator, raw_arg);
 
-					result += std::string(wide.begin(), wide.end());
+					result += narrow_wstring(wide);
 				}
 				else
 				{
@@ -428,7 +428,7 @@ std::string guest_vsprintf(const emulator_t& emulator, const std::string_view fo
 			{
 				const auto wide = read_guest_wstring(emulator, raw_arg);
 
-				result += std::string(wide.begin(), wide.end());
+				result += narrow_wstring(wide);
 			}
 			else
 			{
@@ -526,7 +526,7 @@ void redirect_ntoskrnl_format_functions(const std::shared_ptr<emulator_t>& emula
 				error.throw_if("write memory");
 
 				spdlog::warn("vswprintf_s called (result truncated, format='{}')",
-					std::string(format_string.begin(), format_string.end()));
+					narrow_wstring(format_string));
 
 				write_return_value(emulator, static_cast<std::uint64_t>(-1));
 
@@ -536,7 +536,7 @@ void redirect_ntoskrnl_format_functions(const std::shared_ptr<emulator_t>& emula
 			write_guest_wstring_buffer(*emulator, rcx, rdx, formatted);
 
 			spdlog::info("vswprintf_s called (result='{}')",
-				std::string(formatted.begin(), formatted.end()));
+				narrow_wstring(formatted));
 
 			write_return_value(emulator, static_cast<std::uint64_t>(formatted.size()));
 		},
@@ -584,7 +584,7 @@ void redirect_ntoskrnl_format_functions(const std::shared_ptr<emulator_t>& emula
 				error.throw_if("write memory");
 
 				spdlog::warn("swprintf_s called (result truncated, format='{}')",
-					std::string(format_string.begin(), format_string.end()));
+					narrow_wstring(format_string));
 
 				write_return_value(emulator, static_cast<std::uint64_t>(-1));
 
@@ -594,12 +594,75 @@ void redirect_ntoskrnl_format_functions(const std::shared_ptr<emulator_t>& emula
 			write_guest_wstring_buffer(*emulator, rcx, rdx, formatted);
 
 			spdlog::info("swprintf_s called (result='{}')",
-				std::string(formatted.begin(), formatted.end()));
+				narrow_wstring(formatted));
 
 			write_return_value(emulator, static_cast<std::uint64_t>(formatted.size()));
 		},
 		pe_image,
 		mapped_image,
 		"swprintf_s"
+	);
+
+	redirect_image_export(
+		[emulator]
+		{
+			const auto rcx = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto rdx = emulator->read_register<x86::reg::rdx, std::uint64_t>();
+			const auto r8 = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
+			const auto r9 = emulator->read_register<x86::reg::r9, emulator_t::address_type>();
+
+			if (!r8)
+			{
+				spdlog::warn("_vsnwprintf called with null format");
+
+				write_return_value(emulator, static_cast<std::uint64_t>(-1));
+
+				return;
+			}
+
+			if (rdx && !rcx)
+			{
+				spdlog::warn("_vsnwprintf called with null dest but nonzero count");
+
+				write_return_value(emulator, static_cast<std::uint64_t>(-1));
+
+				return;
+			}
+
+			const auto format_string = read_guest_wstring(*emulator, r8);
+			const auto formatted = guest_vswprintf(*emulator, format_string, r9);
+
+			if (!rcx || !rdx)
+			{
+				spdlog::info("_vsnwprintf called with null dest (format='{}', would need {} chars)",
+					narrow_wstring(format_string), formatted.size());
+
+				write_return_value(emulator, static_cast<std::uint64_t>(formatted.size()));
+
+				return;
+			}
+
+			if (formatted.size() >= rdx)
+			{
+				write_guest_wstring_buffer(*emulator, rcx, rdx + 1, formatted.substr(0, rdx));
+
+				spdlog::warn("_vsnwprintf called (result truncated, format='{}')",
+					narrow_wstring(format_string));
+
+				write_return_value(emulator, static_cast<std::uint64_t>(-1));
+
+				return;
+			}
+
+			write_guest_wstring_buffer(*emulator, rcx, rdx, formatted);
+
+			spdlog::info("_vsnwprintf called (result='{}')",
+				narrow_wstring(formatted));
+
+			write_return_value(emulator, static_cast<std::uint64_t>(formatted.size()));
+		},
+		pe_image,
+		mapped_image,
+		"_vsnwprintf"
 	);
 }

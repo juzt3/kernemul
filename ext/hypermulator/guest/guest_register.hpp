@@ -71,6 +71,7 @@ namespace hm
 		constexpr guest_register_t cr2(WHvX64RegisterCr2, 8);
 		constexpr guest_register_t cr3(WHvX64RegisterCr3, 8);
 		constexpr guest_register_t cr4(WHvX64RegisterCr4, 8);
+		constexpr guest_register_t cr8(WHvX64RegisterCr8, 8);
 
 		constexpr guest_register_t dr0(WHvX64RegisterDr0, 8);
 		constexpr guest_register_t dr1(WHvX64RegisterDr1, 8);

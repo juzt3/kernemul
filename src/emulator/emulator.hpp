@@ -40,6 +40,7 @@ namespace x86
 			cr2,
 			cr3,
 			cr4,
+			cr8,
 
 			rip,
 			rflags,
@@ -82,6 +83,7 @@ namespace x86
 		DEF_REG_64(cr2);
 		DEF_REG_64(cr3);
 		DEF_REG_64(cr4);
+		DEF_REG_64(cr8);
 
 		DEF_REG_64(rip);
 		DEF_REG_64(rflags);

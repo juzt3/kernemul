@@ -99,6 +99,7 @@
 		CASE_REG(cr2, CR2)
 		CASE_REG(cr3, CR3)
 		CASE_REG(cr4, CR4)
+		CASE_REG(cr8, CR8)
 		//
 		CASE_REG(rip, RIP)
 		CASE_REG(rflags, RFLAGS)
