@@ -23,6 +23,15 @@ void redirect_image_export(const function_implementation_t& function_impl,
 	kernel::redirected_functions[export_runtime_address] = function_impl;
 }
 
+void redirect_image_export(const std::function<void()>& function_impl,
+	const portable_executable::image_t* const pe_image,
+	const mapped_image_t& mapped_image, const std::string_view name)
+{
+	redirect_image_export(
+		function_implementation_t([function_impl](bool&) { function_impl(); }),
+		pe_image, mapped_image, name);
+}
+
 void write_return_value(const std::shared_ptr<emulator_t>& emulator, const std::uint64_t value)
 {
 	emulator->write_register<x86::reg::rax>(value);

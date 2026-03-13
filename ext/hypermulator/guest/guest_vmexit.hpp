@@ -51,7 +51,7 @@ namespace hm
 
 		explicit vmexit_processor_state_t(const WHV_VP_EXIT_CONTEXT& whv_context);
 
-		[[nodiscard]] address_type physical_rip(const guest_virtual_processor_t& processor) const;
+		[[nodiscard]] std::optional<address_type> physical_rip(const guest_virtual_processor_t& processor) const;
 
 		address_type rip = 0;
 		std::uint8_t instruction_length : 4 = 0;

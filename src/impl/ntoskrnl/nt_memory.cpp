@@ -3,16 +3,42 @@
 void redirect_ntoskrnl_memory_functions(const std::shared_ptr<emulator_t>& emulator,
 	const mapped_image_t& mapped_image, const portable_executable::image_t* const pe_image)
 {
+	const auto pool_allocate_handler = [emulator](const std::string_view caller_name)
+	{
+		const auto pool_type = emulator->read_register<x86::reg::rcx, std::uint32_t>();
+		const auto size = emulator->read_register<x86::reg::rdx, std::uint64_t>();
+		const auto tag = emulator->read_register<x86::reg::r8, std::uint32_t>();
+
+		spdlog::info("{} called (type={}, size=0x{:X}, tag=0x{:X})", caller_name, pool_type, size, tag);
+
+		const auto allocation = emulator->heap_allocate(size, prot_read_write, true);
+
+		const emulator_err_t error = allocation.error_or({});
+
+		error.throw_if("pool heap allocation");
+
+		emulator->write_register<x86::reg::rax>(*allocation);
+	};
+
+	redirect_image_export(
+		[pool_allocate_handler] { pool_allocate_handler("ExAllocatePoolWithTag"); },
+		pe_image,
+		mapped_image,
+		"ExAllocatePoolWithTag"
+	);
+
 	redirect_image_export(
 		[emulator]
 		{
-			const auto ecx = emulator->read_register<x86::reg::rcx, std::uint32_t>();
-			const auto rdx = emulator->read_register<x86::reg::rdx, std::uint64_t>();
-			const auto r8d = emulator->read_register<x86::reg::r8, std::uint32_t>();
+			const auto pool_type = emulator->read_register<x86::reg::rcx, std::uint32_t>();
+			const auto size = emulator->read_register<x86::reg::rdx, std::uint64_t>();
 
-			spdlog::info("ExAllocatePoolWithTag called (type={}, size=0x{:X}, tag={})", ecx, rdx, r8d);
+			spdlog::info("ExAllocatePool called (type={}, size=0x{:X})", pool_type, size);
 
-			const auto allocation = emulator->heap_allocate(rdx, prot_read_write, true);
+			constexpr std::uint32_t default_tag = 0x656E6F4E;
+			emulator->write_register<x86::reg::r8>(static_cast<std::uint64_t>(default_tag));
+
+			const auto allocation = emulator->heap_allocate(size, prot_read_write, true);
 
 			const emulator_err_t error = allocation.error_or({});
 
@@ -22,7 +48,7 @@ void redirect_ntoskrnl_memory_functions(const std::shared_ptr<emulator_t>& emula
 		},
 		pe_image,
 		mapped_image,
-		"ExAllocatePoolWithTag"
+		"ExAllocatePool"
 	);
 
 	redirect_image_export(

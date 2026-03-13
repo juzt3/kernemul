@@ -12,6 +12,13 @@ hm::guest_virtual_processor_t::id_type hm::guest_virtual_processor_t::id() const
 
 void hm::guest_virtual_processor_t::run()
 {
+	constexpr std::uint64_t zero_8 = 0;
+	constexpr std::uint8_t zero_16[16] = { };
+
+	write_register(reg::pending_interruption, &zero_8, sizeof(zero_8));
+	write_register(reg::pending_event, &zero_16, sizeof(zero_16));
+	write_register(reg::interrupt_state, &zero_8, sizeof(zero_8));
+
 	vmexit_context_t vmexit_context;
 
 	do

@@ -12,9 +12,13 @@
 #include <string>
 #include <unordered_map>
 
-using function_implementation_t = std::function<void()>;
+using function_implementation_t = std::function<void(bool& skip_return)>;
 
 void redirect_image_export(const function_implementation_t& function_impl,
+	const portable_executable::image_t* pe_image,
+	const mapped_image_t& mapped_image, std::string_view name);
+
+void redirect_image_export(const std::function<void()>& function_impl,
 	const portable_executable::image_t* pe_image,
 	const mapped_image_t& mapped_image, std::string_view name);
 
@@ -100,6 +104,9 @@ void redirect_ntoskrnl_format_functions(const std::shared_ptr<emulator_t>& emula
 	const mapped_image_t& mapped_image, const portable_executable::image_t* pe_image);
 
 void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulator,
+	const mapped_image_t& mapped_image, const portable_executable::image_t* pe_image);
+
+void redirect_ntoskrnl_sysinfo_functions(const std::shared_ptr<emulator_t>& emulator,
 	const mapped_image_t& mapped_image, const portable_executable::image_t* pe_image);
 
 class filesystem_t;

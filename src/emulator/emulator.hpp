@@ -111,6 +111,16 @@ namespace x86
 		efer = 0xC0000080
 	};
 
+	enum class segment_reg : std::uint8_t
+	{
+		cs,
+		ss,
+		ds,
+		es,
+		fs,
+		gs
+	};
+
 	enum class insn : std::uint8_t
 	{
 		cpuid,
@@ -245,8 +255,10 @@ public:
 	[[nodiscard]] virtual emulator_err_t read_register(x86::register_t reg, void* value) const = 0;
 	[[nodiscard]] virtual emulator_err_t write_register(x86::register_t reg, const void* value) = 0;
 
-	[[nodiscard]] virtual emulator_err_t write_gs_base(address_type value) = 0;
 	[[nodiscard]] virtual emulator_err_t write_idt(address_type base, size_type limit) = 0;
+	[[nodiscard]] virtual emulator_err_t write_gdt(address_type base, size_type limit) = 0;
+	[[nodiscard]] virtual emulator_err_t write_tr(uint16_t selector, address_type base, size_type limit, uint16_t attributes) = 0;
+	[[nodiscard]] virtual emulator_err_t write_segment(x86::segment_reg seg, uint16_t selector, address_type base, uint32_t limit, uint16_t attributes) = 0;
 
 	virtual std::expected<hook_type, emulator_err_t> hook_instruction(
 		x86::insn instruction, const emulator_hook_t::instruction_callback& callback, address_type start_address,

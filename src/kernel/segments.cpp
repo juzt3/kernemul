@@ -1,0 +1,240 @@
+#include "segments.hpp"
+#include "../emulator/object.hpp"
+#include "../impl/ntoskrnl/nt_helpers.hpp"
+
+#include <ia32-doc/ia32.hpp>
+#include <spdlog/spdlog.h>
+
+#include <array>
+#include <format>
+
+namespace kernel
+{
+	extern std::unordered_map<emulator_t::address_type, function_implementation_t> redirected_functions;
+}
+
+segment_descriptor_32 make_gdt_descriptor(const std::uint32_t privilege_level)
+{
+	segment_descriptor_32 descriptor = { };
+
+	descriptor.present = 1;
+	descriptor.granularity = 1;
+	descriptor.descriptor_privilege_level = privilege_level;
+	descriptor.descriptor_type = SEGMENT_DESCRIPTOR_TYPE_CODE_OR_DATA;
+	descriptor.segment_limit_low = segment_limit & 0xFFFF;
+	descriptor.segment_limit_high = (segment_limit >> 16) & 0xF;
+
+	return descriptor;
+}
+
+segment_descriptor_32 make_code_gdt_descriptor(const std::uint32_t privilege_level, const bool is_long)
+{
+	auto descriptor = make_gdt_descriptor(privilege_level);
+
+	descriptor.type = SEGMENT_DESCRIPTOR_TYPE_CODE_EXECUTE_READ_ACCESSED;
+	descriptor.long_mode = is_long;
+	descriptor.default_big = !is_long;
+
+	return descriptor;
+}
+
+segment_descriptor_32 make_data_gdt_descriptor(const std::uint32_t privilege_level)
+{
+	auto descriptor = make_gdt_descriptor(privilege_level);
+
+	descriptor.type = SEGMENT_DESCRIPTOR_TYPE_DATA_READ_WRITE_ACCESSED;
+	descriptor.default_big = 1;
+
+	return descriptor;
+}
+
+void set_up_segments(const std::shared_ptr<emulator_t>& emulator)
+{
+	auto error = emulator->write_segment(x86::segment_reg::cs, kernel_cs_selector, 0, segment_limit, code_segment_attributes);
+	error.throw_if("write CS");
+
+	error = emulator->write_segment(x86::segment_reg::ss, kernel_ds_selector, 0, segment_limit, data_segment_attributes);
+	error.throw_if("write SS");
+
+	error = emulator->write_segment(x86::segment_reg::ds, kernel_ds_selector, 0, segment_limit, data_segment_attributes);
+	error.throw_if("write DS");
+
+	error = emulator->write_segment(x86::segment_reg::es, kernel_ds_selector, 0, segment_limit, data_segment_attributes);
+	error.throw_if("write ES");
+
+	error = emulator->write_segment(x86::segment_reg::fs, kernel_ds_selector, 0, segment_limit, data_segment_attributes);
+	error.throw_if("write FS");
+
+	spdlog::info("configured segment registers: CS=0x{:X} SS/DS/ES/FS=0x{:X}", kernel_cs_selector, kernel_ds_selector);
+}
+
+void set_up_kernel_gs(const std::shared_ptr<emulator_t>& emulator, const emulator_t::address_type kpcr_address)
+{
+	const emulator_err_t error = emulator->write_segment(
+		x86::segment_reg::gs, kernel_ds_selector, kpcr_address, segment_limit, data_segment_attributes);
+
+	error.throw_if("write kernel gs segment");
+
+	spdlog::info("mapped kernel gs at 0x{:X}", kpcr_address);
+}
+
+void set_up_gdt(const std::shared_ptr<emulator_t>& emulator)
+{
+	constexpr segment_descriptor_32 null_descriptor = { };
+
+	const auto tss_allocation = emulator->heap_allocate(sizeof(task_state_segment_64), prot_read_write, true);
+
+	emulator_err_t error = tss_allocation.error_or({});
+	error.throw_if("allocate TSS");
+
+	const auto tss_address = *tss_allocation;
+
+	task_state_segment_64 tss = { };
+	tss.rsp0 = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
+
+	error = emulator->write_virtual_memory(tss_address, &tss, sizeof(tss));
+	error.throw_if("write TSS");
+
+	constexpr std::uint32_t tss_limit = sizeof(task_state_segment_64) - 1;
+
+	segment_descriptor_64 tss_descriptor = { };
+	tss_descriptor.segment_limit_low = tss_limit & 0xFFFF;
+	tss_descriptor.segment_limit_high = (tss_limit >> 16) & 0xF;
+	tss_descriptor.base_address_low = tss_address & 0xFFFF;
+	tss_descriptor.base_address_middle = (tss_address >> 16) & 0xFF;
+	tss_descriptor.base_address_high = (tss_address >> 24) & 0xFF;
+	tss_descriptor.base_address_upper = static_cast<std::uint32_t>(tss_address >> 32);
+	tss_descriptor.type = SEGMENT_DESCRIPTOR_TYPE_TSS_AVAILABLE;
+	tss_descriptor.present = 1;
+
+	segment_descriptor_32 tss_slots[2] = { };
+	std::memcpy(tss_slots, &tss_descriptor, sizeof(tss_descriptor));
+
+	std::array gdt_entries = {
+		null_descriptor,                               // 0: null
+		null_descriptor,                               // 1: reserved
+		make_code_gdt_descriptor(kernel_cpl),          // 2: kernel CS (selector 0x10)
+		make_data_gdt_descriptor(kernel_cpl),          // 3: kernel DS (selector 0x18)
+		null_descriptor,                                             // 4: reserved (contains similar to user CS)
+		make_data_gdt_descriptor(usermode_cpl),        // 5: user DS
+		make_code_gdt_descriptor(usermode_cpl, false), // 6: user CS (compat)
+		null_descriptor,                               // 7: reserved
+		tss_slots[0],                                  // 8: TSS64 (low)
+		tss_slots[1],                                  // 9: TSS64 (high)
+		null_descriptor                    // 10: reserved (contains similar to user DS)
+	};
+
+	constexpr emulator_t::size_type gdt_size = sizeof(gdt_entries);
+
+	const auto gdt_allocation = emulator->heap_allocate(gdt_size, prot_read_write, true);
+	error = gdt_allocation.error_or({});
+	error.throw_if("allocate GDT");
+
+	const auto gdt_base = *gdt_allocation;
+
+	error = emulator->write_virtual_memory(gdt_base, gdt_entries.data(), gdt_size);
+	error.throw_if("write GDT entries");
+
+	error = emulator->write_gdt(gdt_base, gdt_size - 1);
+	error.throw_if("load GDTR");
+
+	error = emulator->write_tr(tss_selector_value, tss_address, tss_limit, tss_attributes);
+	error.throw_if("load TR");
+
+	spdlog::info("mapped GDT at 0x{:X} ({} entries), TSS at 0x{:X}, TR selector=0x{:X}",
+		gdt_base, gdt_entries.size(), tss_address, tss_selector_value);
+}
+
+void set_up_idt(const std::shared_ptr<emulator_t>& emulator, const mapped_image_t& nt_image)
+{
+	constexpr std::uint32_t handler_count = 256;
+	constexpr emulator_t::size_type idt_size = handler_count * sizeof(segment_descriptor_interrupt_gate_64);
+	constexpr emulator_t::size_type handler_stride = 0x10;
+
+	const auto idt_base_address = emulator->heap_allocate(idt_size, prot_read_write, true);
+
+	emulator_err_t error = idt_base_address.error_or({});
+	error.throw_if("map IDT");
+
+	const auto handler_base = nt_image.base_address() + 0x404630;
+
+	constexpr auto error_code_bitmap = []
+	{
+		std::array<bool, handler_count> bitmap = {};
+		for (const auto v : std::array{ 8u, 10u, 11u, 12u, 13u, 14u, 17u, 21u, 29u, 30u })
+			bitmap[v] = true;
+		return bitmap;
+	}();
+
+	for (std::uint32_t i = 0; i < handler_count; i++)
+	{
+		const auto handler_address = handler_base + i * handler_stride;
+		const bool has_error_code = error_code_bitmap[i];
+
+		kernel::redirected_functions[handler_address] = [emulator, i, has_error_code](bool& skip_return)
+			{
+				auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
+
+				std::uint64_t error_code = 0;
+
+				if (has_error_code)
+				{
+					const auto error = emulator->read_virtual_memory(rsp, &error_code, sizeof(error_code));
+					error.throw_if("read interrupt error code");
+					rsp += 8;
+				}
+
+				struct interrupt_frame
+				{
+					std::uint64_t rip;
+					std::uint64_t cs;
+					std::uint64_t rflags;
+					std::uint64_t rsp;
+					std::uint64_t ss;
+				};
+
+				interrupt_frame frame = { };
+				const auto error = emulator->read_virtual_memory(rsp, &frame, sizeof(frame));
+				error.throw_if("read interrupt frame");
+
+				if (has_error_code)
+				{
+					spdlog::info("interrupt vector 0x{:X} (error_code=0x{:X}): rip=0x{:X} cs=0x{:X} rflags=0x{:X} rsp=0x{:X} ss=0x{:X}",
+						i, error_code, frame.rip, frame.cs, frame.rflags, frame.rsp, frame.ss);
+				}
+				else
+				{
+					spdlog::info("interrupt vector 0x{:X}: rip=0x{:X} cs=0x{:X} rflags=0x{:X} rsp=0x{:X} ss=0x{:X}",
+						i, frame.rip, frame.cs, frame.rflags, frame.rsp, frame.ss);
+				}
+
+				emulator->write_register<x86::reg::rip>(frame.rip);
+				emulator->write_register<x86::reg::rsp>(frame.rsp);
+				emulator->write_register<x86::reg::rflags>(frame.rflags);
+
+				skip_return = true;
+			};
+
+		const std::uint32_t offset = i * sizeof(segment_descriptor_interrupt_gate_64);
+		const std::string name = std::format("IDT vector #{:X}", i);
+
+		auto entry_object = emulator_object_t<segment_descriptor_interrupt_gate_64>::view_at(emulator, *idt_base_address + offset, name);
+
+		segment_descriptor_interrupt_gate_64 contents = { };
+
+		contents.present = 1;
+		contents.segment_selector = kernel_cs_selector;
+		contents.type = SEGMENT_DESCRIPTOR_TYPE_INTERRUPT_GATE;
+
+		contents.offset_low = handler_address & 0xFFFF;
+		contents.offset_middle = (handler_address >> 16) & 0xFFFF;
+		contents.offset_high = (handler_address >> 32) & 0xFFFF'FFFF;
+
+		entry_object.write(contents);
+	}
+
+	error = emulator->write_idt(*idt_base_address, idt_size - 1);
+	error.throw_if("load IDT");
+
+	spdlog::info("mapped IDT at 0x{:X}", *idt_base_address);
+}

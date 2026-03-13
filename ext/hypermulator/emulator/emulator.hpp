@@ -194,6 +194,7 @@ namespace hm
 		bool load_cpu_mode_default_state();
 
 		[[nodiscard]] bool create_default_page_tables();
+		[[nodiscard]] bool create_default_gdt();
 
 		std::shared_ptr<guest_partition_t> partition_ = { };
 		machine_mode_t mode_ = machine_mode_16;

@@ -36,8 +36,10 @@ public:
 	[[nodiscard]] emulator_err_t read_register(x86::register_t reg, void* value) const override;
 	[[nodiscard]] emulator_err_t write_register(x86::register_t reg, const void* value) override;
 
-	[[nodiscard]] emulator_err_t write_gs_base(address_type value) override;
 	[[nodiscard]] emulator_err_t write_idt(address_type base, size_type limit) override;
+	[[nodiscard]] emulator_err_t write_gdt(address_type base, size_type limit) override;
+	[[nodiscard]] emulator_err_t write_tr(uint16_t selector, address_type base, size_type limit, uint16_t attributes) override;
+	[[nodiscard]] emulator_err_t write_segment(x86::segment_reg seg, uint16_t selector, address_type base, uint32_t limit, uint16_t attributes) override;
 
 	std::expected<hook_type, emulator_err_t> hook_instruction(x86::insn instruction,
 	                                                          const emulator_hook_t::instruction_callback& callback, address_type start_address,

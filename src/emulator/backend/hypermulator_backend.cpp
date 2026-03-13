@@ -134,22 +134,6 @@ emulator_err_t hypermulator_t::write_register(const x86::register_t reg, const v
 	return emulator_err_t{ backend_->write_register(guest_reg, value, guest_reg.size) };
 }
 
-emulator_err_t hypermulator_t::write_gs_base(const address_type value)
-{
-	hm::guest_segment_register_t gs_segment = { };
-
-	const bool status = backend_->read_register(hm::reg::gs, &gs_segment, sizeof(gs_segment));
-
-	if (!status)
-	{
-		return emulator_err_t{ false };
-	}
-
-	gs_segment.base = value;
-
-	return emulator_err_t{ backend_->write_register(hm::reg::gs, &gs_segment, sizeof(gs_segment)) };
-}
-
 emulator_err_t hypermulator_t::write_idt(const address_type base, const size_type limit)
 {
 	const hm::guest_table_register_t idtr = {
@@ -159,6 +143,52 @@ emulator_err_t hypermulator_t::write_idt(const address_type base, const size_typ
 	};
 
 	return emulator_err_t{ backend_->write_register(hm::reg::idtr, &idtr, sizeof(idtr)) };
+}
+
+emulator_err_t hypermulator_t::write_gdt(const address_type base, const size_type limit)
+{
+	const hm::guest_table_register_t gdtr = {
+		.pad = { },
+		.limit = static_cast<std::uint16_t>(limit),
+		.base = base
+	};
+
+	return emulator_err_t{ backend_->write_register(hm::reg::gdtr, &gdtr, sizeof(gdtr)) };
+}
+
+emulator_err_t hypermulator_t::write_tr(const uint16_t selector, const address_type base, const size_type limit, const uint16_t attributes)
+{
+	const hm::guest_segment_register_t tr = {
+		.base = base,
+		.limit = static_cast<std::uint32_t>(limit),
+		.selector = selector,
+		.attributes = attributes
+	};
+
+	return emulator_err_t{ backend_->write_register(hm::reg::tr, &tr, sizeof(tr)) };
+}
+
+emulator_err_t hypermulator_t::write_segment(const x86::segment_reg seg, const uint16_t selector, const address_type base, const uint32_t limit, const uint16_t attributes)
+{
+	static constexpr std::array segment_map = {
+		hm::reg::cs,
+		hm::reg::ss,
+		hm::reg::ds,
+		hm::reg::es,
+		hm::reg::fs,
+		hm::reg::gs
+	};
+
+	const auto& guest_reg = segment_map[static_cast<std::uint8_t>(seg)];
+
+	const hm::guest_segment_register_t segment = {
+		.base = base,
+		.limit = limit,
+		.selector = selector,
+		.attributes = attributes
+	};
+
+	return emulator_err_t{ backend_->write_register(guest_reg, &segment, sizeof(segment)) };
 }
 
 std::expected<emulator_t::hook_type, emulator_err_t> hypermulator_t::hook_instruction(

@@ -23,6 +23,7 @@ static segment_descriptor_32 make_base_gdt_descriptor()
 
 	descriptor.present = 1;
 	descriptor.granularity = 1;
+	descriptor.default_big = 1;
 	descriptor.descriptor_type = SEGMENT_DESCRIPTOR_TYPE_CODE_OR_DATA;
 	descriptor.segment_limit_low = limit & 0xFFFF;
 	descriptor.segment_limit_high = (limit >> 16) & 0xF;
@@ -34,10 +35,10 @@ template <hm::guest_register_t Register>
 static void set_table_register(hm::guest_virtual_processor_t& processor, const hm::guest_partition_t::address_type base,
                                const hm::guest_partition_t::size_type limit)
 {
-	const WHV_X64_TABLE_REGISTER table = {
-		.Pad = { },
-		.Limit = static_cast<std::uint16_t>(limit),
-		.Base = base
+	const hm::guest_table_register_t table = {
+		.pad = { },
+		.limit = static_cast<std::uint16_t>(limit),
+		.base = base
 	};
 
 	processor.write_register<Register>(table);
@@ -90,22 +91,6 @@ static void set_up_segments(hm::guest_virtual_processor_t& processor, const bool
 	segment.Long = is_long;
 
 	processor.write_register<hm::reg::cs>(segment);
-}
-
-static bool set_up_gdt(hm::guest_partition_t& partition, hm::guest_virtual_processor_t& processor)
-{
-	segment_descriptor_32 base_gdt_descriptor = make_base_gdt_descriptor();
-
-	base_gdt_descriptor.default_big = 1;
-
-	// 1 - kernel code segment descriptor
-	// 2 - kernel data segment descriptor
-	std::array gdt_descriptors = { base_gdt_descriptor, base_gdt_descriptor };
-
-	gdt_descriptors[cs_selector.index - 1].type = SEGMENT_DESCRIPTOR_TYPE_CODE_EXECUTE_READ_ACCESSED;
-	gdt_descriptors[ds_selector.index - 1].type = SEGMENT_DESCRIPTOR_TYPE_DATA_READ_WRITE_ACCESSED;
-
-	return set_up_gdt_descriptors(partition, processor, gdt_descriptors);
 }
 
 static void enable_ia32e_mode(hm::guest_virtual_processor_t& processor)
@@ -265,11 +250,6 @@ bool hm::emulator_t::load_cpu_mode_default_state()
 
 	if (mode_ != machine_mode_16) // mode_32, mode_64
 	{
-		if (!set_up_gdt(*partition_, processor))
-		{
-			return false;
-		}
-
 		enable_protected_mode(processor);
 
 		if (mode_ == machine_mode_64)
@@ -280,15 +260,71 @@ bool hm::emulator_t::load_cpu_mode_default_state()
 			enable_ia32e_mode(processor);
 			enable_execute_disable_bit(processor);
 
-			set_up_segments(processor, true, true);
-
 			enable_sse(processor);
 		}
-		else // mode_32
-		{
-			set_up_segments(processor, false, true);
-		}
 	}
+
+	return true;
+}
+
+bool hm::emulator_t::create_default_gdt()
+{
+	const segment_descriptor_32 base_gdt_descriptor = make_base_gdt_descriptor();
+
+	// 1 - kernel code segment descriptor
+	// 2 - kernel data segment descriptor
+	std::array gdt_descriptors = { base_gdt_descriptor, base_gdt_descriptor };
+
+	gdt_descriptors[cs_selector.index - 1].type = SEGMENT_DESCRIPTOR_TYPE_CODE_EXECUTE_READ_ACCESSED;
+	gdt_descriptors[ds_selector.index - 1].type = SEGMENT_DESCRIPTOR_TYPE_DATA_READ_WRITE_ACCESSED;
+
+	auto processor = virtual_processor();
+
+	const bool is_long = mode_ == machine_mode_64;
+
+	set_up_segments(processor, is_long, true);
+
+	return set_up_gdt_descriptors(*partition_, processor, gdt_descriptors);
+}
+
+bool hm::emulator_t::create_default_page_tables()
+{
+	constexpr address_type pml4_mapping = reserved_base + page_size;
+	constexpr address_type pdpt_mapping = pml4_mapping + page_size;
+
+	if (!map_physical_memory(pml4_mapping, page_size * 2, prot_read_write))
+	{
+		return false;
+	}
+
+	constexpr size_type pte_count = 512;
+
+	std::array<pml4e_64, pte_count> pml4 = { };
+	std::array<pdpte_1gb_64, pte_count> pdpt = { };
+
+	pml4e_64& pml4e = pml4[0];
+
+	pml4e.present = 1;
+	pml4e.write = 1;
+	pml4e.page_frame_number = pdpt_mapping >> 12;
+
+	for (std::uint64_t i = 0; i < pte_count; i++)
+	{
+		pdpte_1gb_64& pdpte = pdpt[i];
+
+		pdpte.present = 1;
+		pdpte.write = 1;
+		pdpte.large_page = 1;
+		pdpte.page_frame_number = i;
+	}
+
+	if (!write_physical_memory(pml4_mapping, pml4.data(), sizeof(pml4)) ||
+		!write_physical_memory(pdpt_mapping, pdpt.data(), sizeof(pdpt)))
+	{
+		return false;
+	}
+
+	write_register<reg::cr3>(pml4_mapping);
 
 	return true;
 }

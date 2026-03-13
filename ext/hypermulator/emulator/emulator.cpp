@@ -58,6 +58,12 @@ bool hm::emulator_t::run_at(const address_type start_address, const address_type
 		return false;
 	}
 
+	if ((mode_ == machine_mode_32 || mode_ == machine_mode_64) &&
+		read_register<reg::gdtr, guest_table_register_t>().base == 0 && !create_default_gdt())
+	{
+		return false;
+	}
+
 	auto processor = virtual_processor();
 
 	set_program_counter(start_address);
@@ -198,46 +204,4 @@ hm::guest_virtual_processor_t hm::emulator_t::virtual_processor() const
 	}
 
 	return virtual_processors[0];
-}
-
-bool hm::emulator_t::create_default_page_tables()
-{
-	constexpr address_type pml4_mapping = reserved_base + page_size;
-	constexpr address_type pdpt_mapping = pml4_mapping + page_size;
-
-	if (!map_physical_memory(pml4_mapping, page_size * 2, prot_read_write))
-	{
-		return false;
-	}
-
-	constexpr size_type pte_count = 512;
-
-	std::array<pml4e_64, pte_count> pml4 = { };
-	std::array<pdpte_1gb_64, pte_count> pdpt = { };
-
-	pml4e_64& pml4e = pml4[0];
-
-	pml4e.present = 1;
-	pml4e.write = 1;
-	pml4e.page_frame_number = pdpt_mapping >> 12;
-
-	for (std::uint64_t i = 0; i < pte_count; i++)
-	{
-		pdpte_1gb_64& pdpte = pdpt[i];
-
-		pdpte.present = 1;
-		pdpte.write = 1;
-		pdpte.large_page = 1;
-		pdpte.page_frame_number = i;
-	}
-
-	if (!write_physical_memory(pml4_mapping, pml4.data(), sizeof(pml4)) ||
-		!write_physical_memory(pdpt_mapping, pdpt.data(), sizeof(pdpt)))
-	{
-		return false;
-	}
-
-	write_register<reg::cr3>(pml4_mapping);
-
-	return true;
 }

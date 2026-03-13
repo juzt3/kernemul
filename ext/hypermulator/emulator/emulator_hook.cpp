@@ -160,12 +160,21 @@ std::shared_ptr<hm::hook_t> hm::emulator_t::hook_basic_block(const hook_t::code_
 	const address_type aligned_start = align_down(start_physical_address, page_size);
 	const address_type aligned_end = align_up(end_physical_address, page_size);
 
-	const size_type aligned_size = aligned_end - aligned_start;
-
-	// todo: go page by page on the protections
-	if (!partition_->protect_physical_memory(aligned_start, aligned_size, prot_read_write))
+	for (address_type i = aligned_start; i < aligned_end; i += page_size)
 	{
-		return { };
+		const auto current_protection = partition_->query_physical_memory_protection(i);
+
+		if (!current_protection)
+		{
+			return { };
+		}
+
+		const protection_type new_protection = *current_protection & ~prot_execute;
+
+		if (!partition_->protect_physical_memory(i, page_size, new_protection))
+		{
+			return { };
+		}
 	}
 
 	constexpr hook_basic_block_t extra_data = {
@@ -196,6 +205,8 @@ bool hm::emulator_t::handle_memory_access(guest_virtual_processor_t& processor, 
 	bool handled = false;
 	bool step_handled = false;
 
+	const auto valid_rip = context.processor_state.physical_rip(processor).has_value();
+
 	for (size_type i = 0; i < hooks_.size(); i++)
 	{
 		const auto hook = hooks_[i];
@@ -207,6 +218,8 @@ bool hm::emulator_t::handle_memory_access(guest_virtual_processor_t& processor, 
 			handled |= memory_process_block_code_hook(processor, context, hook);
 			break;
 		case hook_type_t::memory_access:
+			handled |= valid_rip && memory_process_memory_hook(processor, context, hook, step_handled);
+			break;
 		case hook_type_t::invalid_memory:
 			handled |= memory_process_memory_hook(processor, context, hook, step_handled);
 			break;
@@ -223,11 +236,16 @@ void hm::emulator_t::set_block_code_hook_step(const std::shared_ptr<hook_t>& hoo
 	single_step_callbacks_.emplace_back([this, hook]
 		(guest_virtual_processor_t& step_processor, const vmexit_context_t& step_context) -> bool
 		{
-			const address_type rip = step_context.processor_state.physical_rip(step_processor);
+			const auto rip = step_context.processor_state.physical_rip(step_processor);
+
+			if (!rip)
+			{
+				return false;
+			}
 
 			block_pending_single_step_exception(step_processor);
 
-			if (!hook->in_aligned_range(rip, step_context.processor_state.instruction_length))
+			if (!hook->in_aligned_range(*rip, step_context.processor_state.instruction_length))
 			{
 				shadow_guest_interrupts(step_processor, false);
 
@@ -240,7 +258,7 @@ void hm::emulator_t::set_block_code_hook_step(const std::shared_ptr<hook_t>& hoo
 			{
 				const exception_vmexit_t info = step_context.exception;
 
-				invoke_block_code_hook_step_callback(hook, rip, info.instruction_bytes);
+				invoke_block_code_hook_step_callback(hook, *rip, info.instruction_bytes);
 			}
 			else
 			{
@@ -248,9 +266,9 @@ void hm::emulator_t::set_block_code_hook_step(const std::shared_ptr<hook_t>& hoo
 
 				std::ranges::fill(instruction_bytes, 0x90);
 
-				if (step_processor.read_memory(rip, instruction_bytes))
+				if (step_processor.read_memory(*rip, instruction_bytes))
 				{
-					invoke_block_code_hook_step_callback(hook, rip, instruction_bytes);
+					invoke_block_code_hook_step_callback(hook, *rip, instruction_bytes);
 				}
 			}
 
@@ -337,9 +355,14 @@ bool hm::emulator_t::memory_process_block_code_hook(guest_virtual_processor_t& p
                                                     const std::shared_ptr<hook_t>& hook)
 {
 	const memory_vmexit_t& info = context.memory_access;
-	const address_type rip = context.processor_state.physical_rip(processor);
+	const auto rip = context.processor_state.physical_rip(processor);
 
-	if (info.type == memory_vmexit_t::access::execute && hook->in_aligned_range(rip, max_instruction_length))
+	if (!rip)
+	{
+		return false;
+	}
+
+	if (info.type == memory_vmexit_t::access::execute && hook->in_aligned_range(*rip, max_instruction_length))
 	{
 		protect_block_code_hook_memory_range(hook->start_address, hook->end_address, true);
 
@@ -347,16 +370,16 @@ bool hm::emulator_t::memory_process_block_code_hook(guest_virtual_processor_t& p
 
 		if (hook->type == hook_type_t::basic_block)
 		{
-			handle_block_hook_overflow(hook, rip);
+			handle_block_hook_overflow(hook, *rip);
 		}
 
 		set_trap_flag(processor, true);
 		shadow_guest_interrupts(processor, true);
 		block_pending_single_step_exception(processor);
 
-		if (hook->in_aligned_range(rip))
+		if (hook->in_aligned_range(*rip))
 		{
-			invoke_block_code_hook_step_callback(hook, rip, info.instruction_bytes);
+			invoke_block_code_hook_step_callback(hook, *rip, info.instruction_bytes);
 		}
 
 		return true;
@@ -420,7 +443,6 @@ bool hm::emulator_t::memory_process_memory_hook(guest_virtual_processor_t& proce
 		return false;
 	}
 
-	const address_type real_phys_addr = processor.translate_virtual_address(info.virtual_address).value_or(1337);
 	const address_type physical_accessed_address = info.physical_address;
 
 	if (!hook->in_range(physical_accessed_address))

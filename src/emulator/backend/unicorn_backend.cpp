@@ -255,11 +255,63 @@ emulator_err_t unicorn_emulator_t::write_register(const x86::register_t reg, con
 	return emulator_err_t{ uc_reg_write(backend_, convert_reg(reg), value) };
 }
 
-emulator_err_t unicorn_emulator_t::write_gs_base(const address_type value)
+emulator_err_t unicorn_emulator_t::write_idt(const address_type base, const size_type limit)
 {
-	const std::uint64_t gs_base = value;
+	const uc_x86_mmr idtr = {
+		.selector = 0,
+		.base = base,
+		.limit = static_cast<std::uint16_t>(limit),
+		.flags = 0
+	};
 
-	return emulator_err_t{ uc_reg_write(backend_, UC_X86_REG_GS_BASE, &gs_base) };
+	return emulator_err_t{ uc_reg_write(backend_, UC_X86_REG_IDTR, &idtr) };
+}
+
+emulator_err_t unicorn_emulator_t::write_gdt(const address_type base, const size_type limit)
+{
+	const uc_x86_mmr gdtr = {
+		.selector = 0,
+		.base = base,
+		.limit = static_cast<std::uint16_t>(limit),
+		.flags = 0
+	};
+
+	return emulator_err_t{ uc_reg_write(backend_, UC_X86_REG_GDTR, &gdtr) };
+}
+
+emulator_err_t unicorn_emulator_t::write_tr(const uint16_t selector, const address_type base, const size_type limit, const uint16_t attributes)
+{
+	const uc_x86_mmr tr = {
+		.selector = selector,
+		.base = base,
+		.limit = static_cast<std::uint16_t>(limit),
+		.flags = attributes
+	};
+
+	return emulator_err_t{ uc_reg_write(backend_, UC_X86_REG_TR, &tr) };
+}
+
+emulator_err_t unicorn_emulator_t::write_segment(const x86::segment_reg seg, const uint16_t selector, const address_type base, const uint32_t limit, const uint16_t attributes)
+{
+	static constexpr std::int32_t segment_map[] = {
+		UC_X86_REG_CS,
+		UC_X86_REG_SS,
+		UC_X86_REG_DS,
+		UC_X86_REG_ES,
+		UC_X86_REG_FS,
+		UC_X86_REG_GS
+	};
+
+	const auto uc_reg = segment_map[static_cast<std::uint8_t>(seg)];
+
+	const uc_x86_mmr segment = {
+		.selector = selector,
+		.base = base,
+		.limit = static_cast<std::uint32_t>(limit),
+		.flags = attributes
+	};
+
+	return emulator_err_t{ uc_reg_write(backend_, uc_reg, &segment) };
 }
 
 static std::int32_t uc_wrapper_insn_hook([[maybe_unused]] const uc_engine* const engine,

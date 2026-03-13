@@ -8,7 +8,7 @@ hm::vmexit_processor_state_t::vmexit_processor_state_t(const WHV_VP_EXIT_CONTEXT
 
 }
 
-hm::vmexit_processor_state_t::address_type hm::vmexit_processor_state_t::physical_rip(
+std::optional<hm::vmexit_processor_state_t::address_type> hm::vmexit_processor_state_t::physical_rip(
 	const guest_virtual_processor_t& processor) const
 {
 	if (processor.uses_paging())
@@ -17,7 +17,7 @@ hm::vmexit_processor_state_t::address_type hm::vmexit_processor_state_t::physica
 
 		if (!translation)
 		{
-			throw std::runtime_error("unable to translate rip address");
+			return { };
 		}
 
 		return *translation;

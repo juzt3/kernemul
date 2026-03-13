@@ -170,6 +170,41 @@ struct _KUSER_SHARED_DATA
 };
 
 //0x18 bytes (sizeof)
+struct _DISPATCHER_HEADER
+{
+	union
+	{
+		volatile LONG Lock;                                                     //0x0
+		struct
+		{
+			UCHAR Type;                                                         //0x0
+			UCHAR Signalling;                                                   //0x1
+			UCHAR Size;                                                         //0x2
+			UCHAR Reserved1;                                                    //0x3
+		};
+	};
+	LONG SignalState;                                                           //0x4
+	struct _LIST_ENTRY WaitListHead;                                            //0x8
+};
+
+//0x18 bytes (sizeof)
+struct _KEVENT
+{
+	struct _DISPATCHER_HEADER Header;                                           //0x0
+};
+
+//0x40 bytes (sizeof)
+struct _KTIMER
+{
+	struct _DISPATCHER_HEADER Header;                                           //0x0
+	union _ULARGE_INTEGER DueTime;                                              //0x18
+	struct _LIST_ENTRY TimerListEntry;                                          //0x20
+	struct _KDPC* Dpc;                                                          //0x30
+	ULONG Processor;                                                            //0x38
+	ULONG Period;                                                               //0x3c
+};
+
+//0x18 bytes (sizeof)
 struct _RTL_BALANCED_NODE
 {
     union

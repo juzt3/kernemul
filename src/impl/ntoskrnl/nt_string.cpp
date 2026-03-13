@@ -206,4 +206,284 @@ void redirect_ntoskrnl_string_functions(const std::shared_ptr<emulator_t>& emula
 		mapped_image,
 		"wcslen"
 	);
+
+	redirect_image_export(
+		[emulator]
+		{
+			const auto dst_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto size_in_words = emulator->read_register<x86::reg::rdx, std::uint64_t>();
+			const auto src_address = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
+
+			constexpr std::uint32_t einval = 22;
+			constexpr std::uint32_t erange = 34;
+
+			if (!dst_address || !size_in_words)
+			{
+				spdlog::warn("wcscpy_s called with null dst or zero size (dst=0x{:X}, size={}, src=0x{:X})",
+					dst_address, size_in_words, src_address);
+
+				write_return_value(emulator, einval);
+
+				return;
+			}
+
+			if (!src_address)
+			{
+				spdlog::warn("wcscpy_s called with null src (dst=0x{:X}, size={})", dst_address, size_in_words);
+
+				const wchar_t null_term = 0;
+
+				emulator_err_t error = emulator->write_virtual_memory(dst_address, &null_term, sizeof(null_term));
+
+				error.throw_if("wcscpy_s write null terminator");
+
+				write_return_value(emulator, einval);
+
+				return;
+			}
+
+			const auto src_string = read_guest_wstring(*emulator, src_address);
+
+			spdlog::info("wcscpy_s called (dst=0x{:X}, size={}, src='{}')",
+				dst_address, size_in_words, narrow_wstring(src_string));
+
+			auto remaining = size_in_words;
+			emulator_t::address_type write_address = dst_address;
+
+			for (std::size_t i = 0; i < src_string.size(); ++i)
+			{
+				const wchar_t ch = src_string[i];
+
+				emulator_err_t error = emulator->write_virtual_memory(write_address, &ch, sizeof(ch));
+
+				error.throw_if("wcscpy_s write char");
+
+				write_address += sizeof(wchar_t);
+				--remaining;
+
+				if (!remaining)
+				{
+					spdlog::warn("wcscpy_s: buffer too small (needed {} words, had {})",
+						src_string.size() + 1, size_in_words);
+
+					const wchar_t null_term = 0;
+
+					error = emulator->write_virtual_memory(dst_address, &null_term, sizeof(null_term));
+
+					error.throw_if("wcscpy_s write null on truncation");
+
+					write_return_value(emulator, erange);
+
+					return;
+				}
+			}
+
+			const wchar_t null_term = 0;
+
+			emulator_err_t error = emulator->write_virtual_memory(write_address, &null_term, sizeof(null_term));
+
+			error.throw_if("wcscpy_s write final null");
+
+			write_return_value(emulator, 0);
+		},
+		pe_image,
+		mapped_image,
+		"wcscpy_s"
+	);
+
+	redirect_image_export(
+		[emulator]
+		{
+			const auto str1_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto str2_address = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+
+			const auto str1 = read_guest_string(*emulator, str1_address);
+			const auto str2 = read_guest_string(*emulator, str2_address);
+
+			spdlog::info("_stricmp called (str1='{}', str2='{}')", str1, str2);
+
+			auto a1 = reinterpret_cast<const std::uint8_t*>(str1.data());
+			auto a2 = reinterpret_cast<const std::uint8_t*>(str2.data());
+
+			std::int32_t v6;
+			std::int32_t v7;
+
+			do
+			{
+				const auto v4 = static_cast<std::int32_t>(*a1++);
+				const auto v5 = static_cast<std::int32_t>(*a2++);
+
+				v6 = (static_cast<std::uint32_t>(v4 - 65) <= 0x19) ? v4 + 32 : v4;
+				v7 = (static_cast<std::uint32_t>(v5 - 65) <= 0x19) ? v5 + 32 : v5;
+			} while (v6 && v6 == v7);
+
+			const auto result = static_cast<std::uint32_t>(v6 - v7);
+
+			spdlog::info("_stricmp returning {}", static_cast<std::int32_t>(result));
+
+			write_return_value(emulator, result);
+		},
+		pe_image,
+		mapped_image,
+		"_stricmp"
+	);
+
+	redirect_image_export(
+		[emulator]
+		{
+			const auto str1_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto str2_address = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+
+			const auto str1 = read_guest_string(*emulator, str1_address);
+			const auto str2 = read_guest_string(*emulator, str2_address);
+
+			spdlog::info("strcmp called (str1='{}', str2='{}')", str1, str2);
+
+			const auto* a = reinterpret_cast<const std::uint8_t*>(str1.data());
+			const auto* b = reinterpret_cast<const std::uint8_t*>(str2.data());
+
+			std::uint32_t c1;
+			std::uint32_t c2;
+
+			do
+			{
+				c1 = *a++;
+				c2 = *b++;
+			} while (c1 && c1 == c2);
+
+			std::int32_t result;
+
+			if (c1 < c2)
+				result = -1;
+			else if (c1 > c2)
+				result = 1;
+			else
+				result = 0;
+
+			spdlog::info("strcmp returning {}", result);
+
+			write_return_value(emulator, static_cast<std::uint32_t>(result));
+		},
+		pe_image,
+		mapped_image,
+		"strcmp"
+	);
+
+	redirect_image_export(
+		[emulator]
+		{
+			const auto dst_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto size_in_words = emulator->read_register<x86::reg::rdx, std::uint64_t>();
+			const auto src_address = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
+
+			constexpr std::uint32_t einval = 22;
+			constexpr std::uint32_t erange = 34;
+
+			if (!dst_address || !size_in_words)
+			{
+				spdlog::warn("wcscat_s called with null dst or zero size (dst=0x{:X}, size={}, src=0x{:X})",
+					dst_address, size_in_words, src_address);
+
+				write_return_value(emulator, einval);
+
+				return;
+			}
+
+			if (!src_address)
+			{
+				spdlog::warn("wcscat_s called with null src (dst=0x{:X}, size={})", dst_address, size_in_words);
+
+				const wchar_t null_term = 0;
+
+				emulator_err_t error = emulator->write_virtual_memory(dst_address, &null_term, sizeof(null_term));
+
+				error.throw_if("wcscat_s write null terminator");
+
+				write_return_value(emulator, einval);
+
+				return;
+			}
+
+			const auto dst_string = read_guest_wstring(*emulator, dst_address);
+			const auto src_string = read_guest_wstring(*emulator, src_address);
+
+			spdlog::info("wcscat_s called (dst=0x{:X}, dst_content='{}', size={}, src='{}')",
+				dst_address, narrow_wstring(dst_string), size_in_words, narrow_wstring(src_string));
+
+			auto remaining = size_in_words;
+
+			if (dst_string.size() >= remaining)
+			{
+				spdlog::warn("wcscat_s: dst string not null-terminated within size");
+
+				const wchar_t null_term = 0;
+
+				emulator_err_t error = emulator->write_virtual_memory(dst_address, &null_term, sizeof(null_term));
+
+				error.throw_if("wcscat_s write null on invalid dst");
+
+				write_return_value(emulator, einval);
+
+				return;
+			}
+
+			remaining -= dst_string.size();
+			auto write_address = dst_address + dst_string.size() * sizeof(wchar_t);
+
+			for (std::size_t i = 0; i < src_string.size(); ++i)
+			{
+				const wchar_t ch = src_string[i];
+
+				emulator_err_t error = emulator->write_virtual_memory(write_address, &ch, sizeof(ch));
+
+				error.throw_if("wcscat_s write char");
+
+				write_address += sizeof(wchar_t);
+				--remaining;
+
+				if (!remaining)
+				{
+					spdlog::warn("wcscat_s: buffer too small");
+
+					const wchar_t null_term = 0;
+
+					error = emulator->write_virtual_memory(dst_address, &null_term, sizeof(null_term));
+
+					error.throw_if("wcscat_s write null on truncation");
+
+					write_return_value(emulator, erange);
+
+					return;
+				}
+			}
+
+			const wchar_t null_term = 0;
+
+			emulator_err_t error = emulator->write_virtual_memory(write_address, &null_term, sizeof(null_term));
+
+			error.throw_if("wcscat_s write final null");
+
+			write_return_value(emulator, 0);
+		},
+		pe_image,
+		mapped_image,
+		"wcscat_s"
+	);
+
+	redirect_image_export(
+		[emulator]
+		{
+			const auto c = emulator->read_register<x86::reg::rcx, std::int32_t>();
+
+			const auto result = std::tolower(c);
+
+			spdlog::info("tolower called (c='{}', result='{}')",
+				static_cast<char>(c), static_cast<char>(result));
+
+			write_return_value(emulator, static_cast<std::uint32_t>(result));
+		},
+		pe_image,
+		mapped_image,
+		"tolower"
+	);
 }
