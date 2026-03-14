@@ -10,7 +10,7 @@ public:
 	using string_type = std::string;
 	using address_type = emulator_t::address_type;
 	using size_type = emulator_t::size_type;
-	using export_list_type = std::unordered_map<string_type, address_type>;
+	using symbol_map_type = std::unordered_map<string_type, address_type>;
 
 	mapped_image_t(string_type name, const address_type base_address, const address_type entry_point, std::vector<std::uint8_t> buffer)
 			:	name_(std::move(name)),
@@ -18,11 +18,11 @@ public:
 				entry_point_(entry_point),
 				buffer_(std::move(buffer)) { }
 
-	[[nodiscard]] std::optional<address_type> find_export(const string_type& export_name)
+	[[nodiscard]] std::optional<address_type> find_symbol(const string_type& symbol_name) const
 	{
-		const auto it = exports_.find(export_name);
+		const auto it = symbols_.find(symbol_name);
 
-		if (it != std::ranges::end(exports_))
+		if (it != std::ranges::end(symbols_))
 		{
 			return it->second;
 		}
@@ -30,9 +30,14 @@ public:
 		return std::nullopt;
 	}
 
-	void register_export(const string_type& export_name, const address_type address)
+	void register_symbol(const string_type& symbol_name, const address_type address)
 	{
-		exports_[export_name] = address;
+		symbols_.try_emplace(symbol_name, address);
+	}
+
+	[[nodiscard]] const symbol_map_type& symbols() const
+	{
+		return symbols_;
 	}
 
 	[[nodiscard]] const string_type& name() const
@@ -87,7 +92,7 @@ protected:
 	address_type entry_point_;
 
 	std::vector<std::uint8_t> buffer_;
-	export_list_type exports_;
+	symbol_map_type symbols_;
 
 	emulator_object_t<_KLDR_DATA_TABLE_ENTRY> table_entry_;
 };

@@ -354,18 +354,16 @@ static void handle_query_system_information(const std::shared_ptr<emulator_t>& e
 }
 
 void redirect_ntoskrnl_sysinfo_functions(const std::shared_ptr<emulator_t>& emulator,
-	const mapped_image_t& mapped_image, const portable_executable::image_t* const pe_image)
+	const mapped_image_t& mapped_image)
 {
-	redirect_image_export(
+	redirect_function(
 		[emulator] { handle_query_system_information(emulator); },
-		pe_image,
 		mapped_image,
 		"NtQuerySystemInformation"
 	);
 
-	redirect_image_export(
+	redirect_function(
 		[emulator] { handle_query_system_information(emulator); },
-		pe_image,
 		mapped_image,
 		"ZwQuerySystemInformation"
 	);

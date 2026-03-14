@@ -126,7 +126,7 @@
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>WinHvPlatform.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>WinHvPlatform.lib;crypt32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -146,7 +146,7 @@
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>WinHvPlatform.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>WinHvPlatform.lib;crypt32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
@@ -167,10 +167,32 @@
     <ClCompile Include="ext\portable_executable\nt_headers.cpp" />
     <ClCompile Include="ext\portable_executable\relocations_directory.cpp" />
     <ClCompile Include="ext\portable_executable\section_header.cpp" />
+    <ClCompile Include="ext\raw_pdb\PDB.cpp" />
+    <ClCompile Include="ext\raw_pdb\PDB_CoalescedMSFStream.cpp" />
+    <ClCompile Include="ext\raw_pdb\PDB_DBIStream.cpp" />
+    <ClCompile Include="ext\raw_pdb\PDB_DBITypes.cpp" />
+    <ClCompile Include="ext\raw_pdb\PDB_DirectMSFStream.cpp" />
+    <ClCompile Include="ext\raw_pdb\PDB_GlobalSymbolStream.cpp" />
+    <ClCompile Include="ext\raw_pdb\PDB_ImageSectionStream.cpp" />
+    <ClCompile Include="ext\raw_pdb\PDB_InfoStream.cpp" />
+    <ClCompile Include="ext\raw_pdb\PDB_IPIStream.cpp" />
+    <ClCompile Include="ext\raw_pdb\PDB_ModuleInfoStream.cpp" />
+    <ClCompile Include="ext\raw_pdb\PDB_ModuleLineStream.cpp" />
+    <ClCompile Include="ext\raw_pdb\PDB_ModuleSymbolStream.cpp" />
+    <ClCompile Include="ext\raw_pdb\PDB_NamesStream.cpp" />
+    <ClCompile Include="ext\raw_pdb\PDB_PCH.cpp" />
+    <ClCompile Include="ext\raw_pdb\PDB_PublicSymbolStream.cpp" />
+    <ClCompile Include="ext\raw_pdb\PDB_RawFile.cpp" />
+    <ClCompile Include="ext\raw_pdb\PDB_SectionContributionStream.cpp" />
+    <ClCompile Include="ext\raw_pdb\PDB_SourceFileStream.cpp" />
+    <ClCompile Include="ext\raw_pdb\PDB_TPIStream.cpp" />
+    <ClCompile Include="ext\raw_pdb\PDB_Types.cpp" />
     <ClCompile Include="src\emulator\backend\hypermulator_backend.cpp" />
     <ClCompile Include="src\emulator\backend\unicorn_backend.cpp" />
     <ClCompile Include="src\emulator\emulator_memory.cpp" />
     <ClCompile Include="src\filesystem\filesystem.cpp" />
+    <ClCompile Include="src\image\pdb\pdb_file.cpp" />
+    <ClCompile Include="src\image\pdb\symbol_server.cpp" />
     <ClCompile Include="src\impl\ntoskrnl\nt_file.cpp" />
     <ClCompile Include="src\impl\ntoskrnl\nt_format.cpp" />
     <ClCompile Include="src\impl\ntoskrnl\nt_helpers.cpp" />
@@ -207,12 +229,52 @@
     <ClInclude Include="ext\portable_executable\optional_header.hpp" />
     <ClInclude Include="ext\portable_executable\relocations_directory.hpp" />
     <ClInclude Include="ext\portable_executable\section_header.hpp" />
+    <ClInclude Include="ext\raw_pdb\Foundation\PDB_ArrayView.h" />
+    <ClInclude Include="ext\raw_pdb\Foundation\PDB_Assert.h" />
+    <ClInclude Include="ext\raw_pdb\Foundation\PDB_BitOperators.h" />
+    <ClInclude Include="ext\raw_pdb\Foundation\PDB_BitUtil.h" />
+    <ClInclude Include="ext\raw_pdb\Foundation\PDB_CRT.h" />
+    <ClInclude Include="ext\raw_pdb\Foundation\PDB_Forward.h" />
+    <ClInclude Include="ext\raw_pdb\Foundation\PDB_Log.h" />
+    <ClInclude Include="ext\raw_pdb\Foundation\PDB_Macros.h" />
+    <ClInclude Include="ext\raw_pdb\Foundation\PDB_Memory.h" />
+    <ClInclude Include="ext\raw_pdb\Foundation\PDB_Move.h" />
+    <ClInclude Include="ext\raw_pdb\Foundation\PDB_Platform.h" />
+    <ClInclude Include="ext\raw_pdb\Foundation\PDB_PointerUtil.h" />
+    <ClInclude Include="ext\raw_pdb\Foundation\PDB_TypeTraits.h" />
+    <ClInclude Include="ext\raw_pdb\Foundation\PDB_Warnings.h" />
+    <ClInclude Include="ext\raw_pdb\PDB.h" />
+    <ClInclude Include="ext\raw_pdb\PDB_CoalescedMSFStream.h" />
+    <ClInclude Include="ext\raw_pdb\PDB_DBIStream.h" />
+    <ClInclude Include="ext\raw_pdb\PDB_DBITypes.h" />
+    <ClInclude Include="ext\raw_pdb\PDB_DirectMSFStream.h" />
+    <ClInclude Include="ext\raw_pdb\PDB_ErrorCodes.h" />
+    <ClInclude Include="ext\raw_pdb\PDB_GlobalSymbolStream.h" />
+    <ClInclude Include="ext\raw_pdb\PDB_ImageSectionStream.h" />
+    <ClInclude Include="ext\raw_pdb\PDB_InfoStream.h" />
+    <ClInclude Include="ext\raw_pdb\PDB_IPIStream.h" />
+    <ClInclude Include="ext\raw_pdb\PDB_IPITypes.h" />
+    <ClInclude Include="ext\raw_pdb\PDB_ModuleInfoStream.h" />
+    <ClInclude Include="ext\raw_pdb\PDB_ModuleLineStream.h" />
+    <ClInclude Include="ext\raw_pdb\PDB_ModuleSymbolStream.h" />
+    <ClInclude Include="ext\raw_pdb\PDB_NamesStream.h" />
+    <ClInclude Include="ext\raw_pdb\PDB_PCH.h" />
+    <ClInclude Include="ext\raw_pdb\PDB_PublicSymbolStream.h" />
+    <ClInclude Include="ext\raw_pdb\PDB_RawFile.h" />
+    <ClInclude Include="ext\raw_pdb\PDB_SectionContributionStream.h" />
+    <ClInclude Include="ext\raw_pdb\PDB_SourceFileStream.h" />
+    <ClInclude Include="ext\raw_pdb\PDB_TPIStream.h" />
+    <ClInclude Include="ext\raw_pdb\PDB_TPITypes.h" />
+    <ClInclude Include="ext\raw_pdb\PDB_Types.h" />
+    <ClInclude Include="ext\raw_pdb\PDB_Util.h" />
     <ClInclude Include="src\emulator\backend\hypermulator_backend.hpp" />
     <ClInclude Include="src\emulator\backend\unicorn_backend.hpp" />
     <ClInclude Include="src\emulator\emulator.hpp" />
     <ClInclude Include="src\emulator\object.hpp" />
     <ClInclude Include="src\filesystem\filesystem.hpp" />
     <ClInclude Include="src\image\mapped_image.hpp" />
+    <ClInclude Include="src\image\pdb\pdb_file.hpp" />
+    <ClInclude Include="src\image\pdb\symbol_server.hpp" />
     <ClInclude Include="src\impl\ntoskrnl\nt_helpers.hpp" />
     <ClInclude Include="src\kernel\image_loader.hpp" />
     <ClInclude Include="src\kernel\segments.hpp" />

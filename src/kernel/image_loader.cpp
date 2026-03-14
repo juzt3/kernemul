@@ -1,5 +1,6 @@
 #include "image_loader.hpp"
 #include "../emulator/object.hpp"
+#include "../image/pdb/pdb_file.hpp"
 #include "../impl/ntoskrnl/nt_helpers.hpp"
 #include "../kernel_def.hpp"
 #include "../filesystem/filesystem.hpp"
@@ -129,14 +130,14 @@ static void fix_image_imports(portable_executable::image_t* const image)
 			throw std::runtime_error("unable to find import module");
 		}
 
-		const auto module_export = import_module->find_export(current_import.import_name);
+		const auto module_symbol = import_module->find_symbol(current_import.import_name);
 
-		if (!module_export)
+		if (!module_symbol)
 		{
-			throw std::runtime_error("unable to find export in module");
+			throw std::runtime_error("unable to find symbol in module");
 		}
 
-		current_import.address = reinterpret_cast<std::uint8_t*>(*module_export);
+		current_import.address = reinterpret_cast<std::uint8_t*>(*module_symbol);
 	}
 }
 
@@ -209,7 +210,7 @@ static void set_loaded_module_list_blink(const emulator_object_t<_KLDR_DATA_TABL
 	set_list_entry_blink(kernel::ps_loaded_module_list, list_entry);
 }
 
-static void collect_module_exports(portable_executable::image_t* const pe_image, mapped_image_t& mapped_image)
+static void collect_module_symbols(portable_executable::image_t* const pe_image, mapped_image_t& mapped_image)
 {
 	const auto local_image_address = pe_image->as<const std::uint8_t*>();
 
@@ -218,7 +219,28 @@ static void collect_module_exports(portable_executable::image_t* const pe_image,
 		const std::uint32_t rva = static_cast<std::uint32_t>(current_export.address - local_image_address);
 		const emulator_t::address_type runtime_address = mapped_image.base_address() + rva;
 
-		mapped_image.register_export(current_export.name, runtime_address);
+		mapped_image.register_symbol(current_export.name, runtime_address);
+	}
+
+	try
+	{
+		auto pdb = pdb::load_pdb_for_image_buffer(pe_image->as<const void*>());
+
+		for (const auto& symbol : pdb.symbols())
+		{
+			if (symbol.rva != 0)
+			{
+				const emulator_t::address_type runtime_address = mapped_image.base_address() + symbol.rva;
+
+				mapped_image.register_symbol(symbol.name, runtime_address);
+			}
+		}
+
+		spdlog::info("loaded {} pdb symbols for '{}'", pdb.symbol_count(), mapped_image.name());
+	}
+	catch (const std::exception& e)
+	{
+		spdlog::warn("failed to load pdb for '{}': {}", mapped_image.name(), e.what());
 	}
 }
 
@@ -326,18 +348,18 @@ std::shared_ptr<mapped_image_t> map_kernel_image(const std::shared_ptr<emulator_
 	auto mapped_image = std::make_shared<mapped_image_t>(std::string(name), *base_address, entry_point, image_buffer);
 
 	add_to_loaded_module_list(emulator, mapped_image, directory);
-	collect_module_exports(pe_image, *mapped_image);
+	collect_module_symbols(pe_image, *mapped_image);
 
 	if (name == "ntoskrnl.exe")
 	{
-		redirect_ntoskrnl_string_functions(emulator, *mapped_image, pe_image);
-		redirect_ntoskrnl_memory_functions(emulator, *mapped_image, pe_image);
-		redirect_ntoskrnl_time_functions(emulator, *mapped_image, pe_image);
-		redirect_ntoskrnl_registry_functions(emulator, *mapped_image, pe_image);
-		redirect_ntoskrnl_format_functions(emulator, *mapped_image, pe_image);
-		redirect_ntoskrnl_misc_functions(emulator, *mapped_image, pe_image);
-		redirect_ntoskrnl_file_functions(emulator, *mapped_image, pe_image, kernel::filesystem);
-		redirect_ntoskrnl_sysinfo_functions(emulator, *mapped_image, pe_image);
+		redirect_ntoskrnl_string_functions(emulator, *mapped_image);
+		redirect_ntoskrnl_memory_functions(emulator, *mapped_image);
+		redirect_ntoskrnl_time_functions(emulator, *mapped_image);
+		redirect_ntoskrnl_registry_functions(emulator, *mapped_image);
+		redirect_ntoskrnl_format_functions(emulator, *mapped_image);
+		redirect_ntoskrnl_misc_functions(emulator, *mapped_image);
+		redirect_ntoskrnl_file_functions(emulator, *mapped_image, kernel::filesystem);
+		redirect_ntoskrnl_sysinfo_functions(emulator, *mapped_image);
 	}
 
 	return mapped_image;

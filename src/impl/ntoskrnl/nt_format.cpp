@@ -466,9 +466,9 @@ std::string guest_vsprintf(const emulator_t& emulator, const std::string_view fo
 }
 
 void redirect_ntoskrnl_format_functions(const std::shared_ptr<emulator_t>& emulator,
-	const mapped_image_t& mapped_image, const portable_executable::image_t* const pe_image)
+	const mapped_image_t& mapped_image)
 {
-	redirect_image_export(
+	redirect_function(
 		[emulator]
 		{
 			const auto rcx = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
@@ -491,12 +491,11 @@ void redirect_ntoskrnl_format_functions(const std::shared_ptr<emulator_t>& emula
 
 			write_nt_success(emulator);
 		},
-		pe_image,
 		mapped_image,
 		"DbgPrint"
 	);
 
-	redirect_image_export(
+	redirect_function(
 		[emulator]
 		{
 			const auto rcx = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
@@ -540,12 +539,11 @@ void redirect_ntoskrnl_format_functions(const std::shared_ptr<emulator_t>& emula
 
 			write_return_value(emulator, static_cast<std::uint64_t>(formatted.size()));
 		},
-		pe_image,
 		mapped_image,
 		"vswprintf_s"
 	);
 
-	redirect_image_export(
+	redirect_function(
 		[emulator]
 		{
 			const auto rcx = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
@@ -598,12 +596,11 @@ void redirect_ntoskrnl_format_functions(const std::shared_ptr<emulator_t>& emula
 
 			write_return_value(emulator, static_cast<std::uint64_t>(formatted.size()));
 		},
-		pe_image,
 		mapped_image,
 		"swprintf_s"
 	);
 
-	redirect_image_export(
+	redirect_function(
 		[emulator]
 		{
 			const auto rcx = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
@@ -661,7 +658,6 @@ void redirect_ntoskrnl_format_functions(const std::shared_ptr<emulator_t>& emula
 
 			write_return_value(emulator, static_cast<std::uint64_t>(formatted.size()));
 		},
-		pe_image,
 		mapped_image,
 		"_vsnwprintf"
 	);

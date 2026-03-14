@@ -5,31 +5,25 @@ namespace kernel
 	extern std::unordered_map<emulator_t::address_type, function_implementation_t> redirected_functions;
 }
 
-void redirect_image_export(const function_implementation_t& function_impl,
-	const portable_executable::image_t* const pe_image,
+void redirect_function(const function_implementation_t& function_impl,
 	const mapped_image_t& mapped_image, const std::string_view name)
 {
-	const auto local_export_address = pe_image->find_export(name);
+	const auto symbol_address = mapped_image.find_symbol(std::string(name));
 
-	if (!local_export_address)
+	if (!symbol_address)
 	{
-		throw std::runtime_error("unable to find export");
+		throw std::runtime_error(std::format("unable to find symbol '{}'", name));
 	}
 
-	const std::uint32_t rva = static_cast<std::uint32_t>(local_export_address - pe_image->as<const std::uint8_t*>());
-
-	const emulator_t::address_type export_runtime_address = mapped_image.base_address() + rva;
-
-	kernel::redirected_functions[export_runtime_address] = function_impl;
+	kernel::redirected_functions[*symbol_address] = function_impl;
 }
 
-void redirect_image_export(const std::function<void()>& function_impl,
-	const portable_executable::image_t* const pe_image,
+void redirect_function(const std::function<void()>& function_impl,
 	const mapped_image_t& mapped_image, const std::string_view name)
 {
-	redirect_image_export(
+	redirect_function(
 		function_implementation_t([function_impl](bool&) { function_impl(); }),
-		pe_image, mapped_image, name);
+		mapped_image, name);
 }
 
 void write_return_value(const std::shared_ptr<emulator_t>& emulator, const std::uint64_t value)

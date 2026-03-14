@@ -4,7 +4,6 @@
 #include "../../image/mapped_image.hpp"
 #include "../../kernel_def.hpp"
 
-#include <portable_executable/image.hpp>
 #include <ia32-doc/ia32.hpp>
 #include <spdlog/spdlog.h>
 
@@ -14,12 +13,10 @@
 
 using function_implementation_t = std::function<void(bool& skip_return)>;
 
-void redirect_image_export(const function_implementation_t& function_impl,
-	const portable_executable::image_t* pe_image,
+void redirect_function(const function_implementation_t& function_impl,
 	const mapped_image_t& mapped_image, std::string_view name);
 
-void redirect_image_export(const std::function<void()>& function_impl,
-	const portable_executable::image_t* pe_image,
+void redirect_function(const std::function<void()>& function_impl,
 	const mapped_image_t& mapped_image, std::string_view name);
 
 void write_return_value(const std::shared_ptr<emulator_t>& emulator, std::uint64_t value);
@@ -89,28 +86,28 @@ std::string guest_vsprintf(const emulator_t& emulator, std::string_view format,
 	emulator_t::address_type va_list_address);
 
 void redirect_ntoskrnl_string_functions(const std::shared_ptr<emulator_t>& emulator,
-	const mapped_image_t& mapped_image, const portable_executable::image_t* pe_image);
+	const mapped_image_t& mapped_image);
 
 void redirect_ntoskrnl_memory_functions(const std::shared_ptr<emulator_t>& emulator,
-	const mapped_image_t& mapped_image, const portable_executable::image_t* pe_image);
+	const mapped_image_t& mapped_image);
 
 void redirect_ntoskrnl_time_functions(const std::shared_ptr<emulator_t>& emulator,
-	const mapped_image_t& mapped_image, const portable_executable::image_t* pe_image);
+	const mapped_image_t& mapped_image);
 
 void redirect_ntoskrnl_registry_functions(const std::shared_ptr<emulator_t>& emulator,
-	const mapped_image_t& mapped_image, const portable_executable::image_t* pe_image);
+	const mapped_image_t& mapped_image);
 
 void redirect_ntoskrnl_format_functions(const std::shared_ptr<emulator_t>& emulator,
-	const mapped_image_t& mapped_image, const portable_executable::image_t* pe_image);
+	const mapped_image_t& mapped_image);
 
 void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulator,
-	const mapped_image_t& mapped_image, const portable_executable::image_t* pe_image);
+	const mapped_image_t& mapped_image);
 
 void redirect_ntoskrnl_sysinfo_functions(const std::shared_ptr<emulator_t>& emulator,
-	const mapped_image_t& mapped_image, const portable_executable::image_t* pe_image);
+	const mapped_image_t& mapped_image);
 
 class filesystem_t;
 
 void redirect_ntoskrnl_file_functions(const std::shared_ptr<emulator_t>& emulator,
-	const mapped_image_t& mapped_image, const portable_executable::image_t* pe_image,
+	const mapped_image_t& mapped_image,
 	const std::shared_ptr<filesystem_t>& filesystem);

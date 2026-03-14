@@ -1,9 +1,9 @@
 #include "nt_helpers.hpp"
 
 void redirect_ntoskrnl_string_functions(const std::shared_ptr<emulator_t>& emulator,
-	const mapped_image_t& mapped_image, const portable_executable::image_t* const pe_image)
+	const mapped_image_t& mapped_image)
 {
-	redirect_image_export(
+	redirect_function(
 		[emulator]
 		{
 			const auto rcx = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
@@ -40,12 +40,11 @@ void redirect_ntoskrnl_string_functions(const std::shared_ptr<emulator_t>& emula
 
 			destination_object.write(destination);
 		},
-		pe_image,
 		mapped_image,
 		"RtlInitUnicodeString"
 	);
 
-	redirect_image_export(
+	redirect_function(
 		[emulator]
 		{
 			const auto ecx = emulator->read_register<x86::reg::rcx, std::uint32_t>();
@@ -151,12 +150,11 @@ void redirect_ntoskrnl_string_functions(const std::shared_ptr<emulator_t>& emula
 
 			write_nt_success(emulator);
 		},
-		pe_image,
 		mapped_image,
 		"RtlDuplicateUnicodeString"
 	);
 
-	redirect_image_export(
+	redirect_function(
 		[emulator]
 		{
 			const auto rcx = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
@@ -177,12 +175,11 @@ void redirect_ntoskrnl_string_functions(const std::shared_ptr<emulator_t>& emula
 				spdlog::info("RtlFreeUnicodeString called (buffer=null)");
 			}
 		},
-		pe_image,
 		mapped_image,
 		"RtlFreeUnicodeString"
 	);
 
-	redirect_image_export(
+	redirect_function(
 		[emulator]
 		{
 			const auto rcx = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
@@ -202,12 +199,11 @@ void redirect_ntoskrnl_string_functions(const std::shared_ptr<emulator_t>& emula
 
 			write_return_value(emulator, str.size());
 		},
-		pe_image,
 		mapped_image,
 		"wcslen"
 	);
 
-	redirect_image_export(
+	redirect_function(
 		[emulator]
 		{
 			const auto dst_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
@@ -286,12 +282,11 @@ void redirect_ntoskrnl_string_functions(const std::shared_ptr<emulator_t>& emula
 
 			write_return_value(emulator, 0);
 		},
-		pe_image,
 		mapped_image,
 		"wcscpy_s"
 	);
 
-	redirect_image_export(
+	redirect_function(
 		[emulator]
 		{
 			const auto str1_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
@@ -323,12 +318,11 @@ void redirect_ntoskrnl_string_functions(const std::shared_ptr<emulator_t>& emula
 
 			write_return_value(emulator, result);
 		},
-		pe_image,
 		mapped_image,
 		"_stricmp"
 	);
 
-	redirect_image_export(
+	redirect_function(
 		[emulator]
 		{
 			const auto str1_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
@@ -364,12 +358,11 @@ void redirect_ntoskrnl_string_functions(const std::shared_ptr<emulator_t>& emula
 
 			write_return_value(emulator, static_cast<std::uint32_t>(result));
 		},
-		pe_image,
 		mapped_image,
 		"strcmp"
 	);
 
-	redirect_image_export(
+	redirect_function(
 		[emulator]
 		{
 			const auto dst_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
@@ -465,12 +458,11 @@ void redirect_ntoskrnl_string_functions(const std::shared_ptr<emulator_t>& emula
 
 			write_return_value(emulator, 0);
 		},
-		pe_image,
 		mapped_image,
 		"wcscat_s"
 	);
 
-	redirect_image_export(
+	redirect_function(
 		[emulator]
 		{
 			const auto c = emulator->read_register<x86::reg::rcx, std::int32_t>();
@@ -482,7 +474,6 @@ void redirect_ntoskrnl_string_functions(const std::shared_ptr<emulator_t>& emula
 
 			write_return_value(emulator, static_cast<std::uint32_t>(result));
 		},
-		pe_image,
 		mapped_image,
 		"tolower"
 	);

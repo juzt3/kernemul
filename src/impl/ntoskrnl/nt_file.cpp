@@ -326,10 +326,10 @@ static void iop_create_file(const std::shared_ptr<emulator_t>& emulator,
 }
 
 void redirect_ntoskrnl_file_functions(const std::shared_ptr<emulator_t>& emulator,
-	const mapped_image_t& mapped_image, const portable_executable::image_t* const pe_image,
+	const mapped_image_t& mapped_image,
 	const std::shared_ptr<filesystem_t>& filesystem)
 {
-	redirect_image_export(
+	redirect_function(
 		[emulator, filesystem]
 		{
 			const auto rcx = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
@@ -352,12 +352,11 @@ void redirect_ntoskrnl_file_functions(const std::shared_ptr<emulator_t>& emulato
 
 			iop_create_file(emulator, filesystem, rcx, rdx, r8, r9, file_open, "NtOpenFile");
 		},
-		pe_image,
 		mapped_image,
 		"NtOpenFile"
 	);
 
-	redirect_image_export(
+	redirect_function(
 		[emulator, filesystem]
 		{
 			const auto rcx = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
@@ -400,12 +399,11 @@ void redirect_ntoskrnl_file_functions(const std::shared_ptr<emulator_t>& emulato
 
 			iop_create_file(emulator, filesystem, rcx, rdx, r8, r9, create_disposition, "NtCreateFile");
 		},
-		pe_image,
 		mapped_image,
 		"NtCreateFile"
 	);
 
-	redirect_image_export(
+	redirect_function(
 		[emulator, filesystem]
 		{
 			const auto rcx = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
@@ -464,7 +462,6 @@ void redirect_ntoskrnl_file_functions(const std::shared_ptr<emulator_t>& emulato
 
 			iop_create_file(emulator, filesystem, rcx, rdx, r8, r9, disposition, "IoCreateFileEx");
 		},
-		pe_image,
 		mapped_image,
 		"IoCreateFileEx"
 	);
@@ -556,17 +553,17 @@ void redirect_ntoskrnl_file_functions(const std::shared_ptr<emulator_t>& emulato
 		write_nt_success(emulator);
 	};
 
-	redirect_image_export(
+	redirect_function(
 		[write_file_handler] { write_file_handler("NtWriteFile"); },
-		pe_image, mapped_image, "NtWriteFile"
+		mapped_image, "NtWriteFile"
 	);
 
-	redirect_image_export(
+	redirect_function(
 		[write_file_handler] { write_file_handler("ZwWriteFile"); },
-		pe_image, mapped_image, "ZwWriteFile"
+		mapped_image, "ZwWriteFile"
 	);
 
-	redirect_image_export(
+	redirect_function(
 		[emulator]
 		{
 			const auto rcx = emulator->read_register<x86::reg::rcx, std::uint32_t>();
@@ -577,6 +574,6 @@ void redirect_ntoskrnl_file_functions(const std::shared_ptr<emulator_t>& emulato
 			write_io_status(emulator, rdx, 0, 0);
 			write_nt_success(emulator);
 		},
-		pe_image, mapped_image, "ZwFlushBuffersFile"
+		mapped_image, "ZwFlushBuffersFile"
 	);
 }

@@ -1,7 +1,7 @@
 #include "nt_helpers.hpp"
 
 void redirect_ntoskrnl_memory_functions(const std::shared_ptr<emulator_t>& emulator,
-	const mapped_image_t& mapped_image, const portable_executable::image_t* const pe_image)
+	const mapped_image_t& mapped_image)
 {
 	const auto pool_allocate_handler = [emulator](const std::string_view caller_name)
 	{
@@ -20,14 +20,13 @@ void redirect_ntoskrnl_memory_functions(const std::shared_ptr<emulator_t>& emula
 		emulator->write_register<x86::reg::rax>(*allocation);
 	};
 
-	redirect_image_export(
+	redirect_function(
 		[pool_allocate_handler] { pool_allocate_handler("ExAllocatePoolWithTag"); },
-		pe_image,
 		mapped_image,
 		"ExAllocatePoolWithTag"
 	);
 
-	redirect_image_export(
+	redirect_function(
 		[emulator]
 		{
 			const auto pool_type = emulator->read_register<x86::reg::rcx, std::uint32_t>();
@@ -46,12 +45,11 @@ void redirect_ntoskrnl_memory_functions(const std::shared_ptr<emulator_t>& emula
 
 			emulator->write_register<x86::reg::rax>(*allocation);
 		},
-		pe_image,
 		mapped_image,
 		"ExAllocatePool"
 	);
 
-	redirect_image_export(
+	redirect_function(
 		[emulator]
 		{
 			const auto rcx = emulator->read_register<x86::reg::rcx, std::uint64_t>();
@@ -59,12 +57,11 @@ void redirect_ntoskrnl_memory_functions(const std::shared_ptr<emulator_t>& emula
 
 			spdlog::info("ExFreePoolWithTag called (buffer=0x{:X}, tag={})", rcx, rdx);
 		},
-		pe_image,
 		mapped_image,
 		"ExFreePoolWithTag"
 	);
 
-	redirect_image_export(
+	redirect_function(
 		[emulator]
 		{
 			const auto rcx = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
@@ -103,7 +100,6 @@ void redirect_ntoskrnl_memory_functions(const std::shared_ptr<emulator_t>& emula
 
 			write_return_value(emulator, matching_bytes);
 		},
-		pe_image,
 		mapped_image,
 		"RtlCompareMemory"
 	);

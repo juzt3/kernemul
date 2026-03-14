@@ -2,6 +2,11 @@
   "dependencies": [
     "unicorn",
     "zydis",
-    "spdlog"
+    "spdlog",
+    "boost-beast",
+    {
+      "name": "boost-asio",
+      "features": [ "ssl" ]
+    }
   ]
 }

@@ -11,10 +11,10 @@ static std::uint8_t get_guest_irql(const std::shared_ptr<emulator_t>& emulator)
 }
 
 void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulator,
-	const mapped_image_t& mapped_image, const portable_executable::image_t* const pe_image)
+	const mapped_image_t& mapped_image)
 {
 	// todo: actually register callbacks into a list and invoke on bugcheck
-	redirect_image_export(
+	redirect_function(
 		[emulator]
 		{
 			const auto rcx = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
@@ -34,13 +34,12 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 
 			write_return_value(emulator, 1);
 		},
-		pe_image,
 		mapped_image,
 		"KeRegisterBugCheckReasonCallback"
 	);
 
 	// todo: actually deregister callbacks from the list
-	redirect_image_export(
+	redirect_function(
 		[emulator]
 		{
 			const auto record = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
@@ -49,12 +48,11 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 
 			write_return_value(emulator, 1);
 		},
-		pe_image,
 		mapped_image,
 		"KeDeregisterBugCheckReasonCallback"
 	);
 
-	redirect_image_export(
+	redirect_function(
 		[emulator]
 		{
 			const auto irql = get_guest_irql(emulator);
@@ -64,12 +62,11 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 
 			write_return_value(emulator, result);
 		},
-		pe_image,
 		mapped_image,
 		"KeAreAllApcsDisabled"
 	);
 
-	redirect_image_export(
+	redirect_function(
 		[emulator]
 		{
 			const auto irql = get_guest_irql(emulator);
@@ -78,12 +75,11 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 
 			write_return_value(emulator, irql);
 		},
-		pe_image,
 		mapped_image,
 		"KeGetCurrentIrql"
 	);
 
-	redirect_image_export(
+	redirect_function(
 		[emulator]
 		{
 			const auto event_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
@@ -112,12 +108,11 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 			error = emulator->write_virtual_memory(event_address + 1, &size_word, sizeof(size_word));
 			error.throw_if("KeInitializeEvent: write header size word");
 		},
-		pe_image,
 		mapped_image,
 		"KeInitializeEvent"
 	);
 
-	redirect_image_export(
+	redirect_function(
 		[emulator]
 		{
 			const auto timer_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
@@ -154,13 +149,12 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 				timer_address + offsetof(_KTIMER, Processor), &zero_processor, sizeof(zero_processor));
 			error.throw_if("KeInitializeTimer: zero Processor");
 		},
-		pe_image,
 		mapped_image,
 		"KeInitializeTimer"
 	);
 
 	// todo: actually insert timer into a timer queue and fire dpc when due
-	redirect_image_export(
+	redirect_function(
 		[emulator]
 		{
 			const auto timer_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
@@ -185,13 +179,12 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 
 			write_return_value(emulator, 0);
 		},
-		pe_image,
 		mapped_image,
 		"KeSetTimer"
 	);
 
 	// todo: actually track callback registrations and fire them on relevant events
-	redirect_image_export(
+	redirect_function(
 		[emulator]
 		{
 			const auto callback_object_out = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
@@ -263,12 +256,11 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 
 			write_nt_success(emulator);
 		},
-		pe_image,
 		mapped_image,
 		"ExCreateCallback"
 	);
 
-	redirect_image_export(
+	redirect_function(
 		[emulator]
 		{
 			const auto rcx = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
@@ -302,7 +294,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 
 			if (const auto ntoskrnl = kernel::find_module("ntoskrnl.exe"))
 			{
-				if (const auto address = ntoskrnl->find_export(routine_name))
+				if (const auto address = ntoskrnl->find_symbol(routine_name))
 				{
 					result = *address;
 				}
@@ -312,7 +304,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 			{
 				if (const auto hal = kernel::find_module("HAL.dll"))
 				{
-					if (const auto address = hal->find_export(routine_name))
+					if (const auto address = hal->find_symbol(routine_name))
 					{
 						result = *address;
 					}
@@ -330,12 +322,11 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 
 			write_return_value(emulator, result);
 		},
-		pe_image,
 		mapped_image,
 		"MmGetSystemRoutineAddress"
 	);
 
-	redirect_image_export(
+	redirect_function(
 		[emulator]
 		{
 			const auto broadcast_function = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
@@ -374,8 +365,19 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 
 			write_return_value(emulator, result);
 		},
-		pe_image,
 		mapped_image,
 		"KeIpiGenericCall"
+	);
+
+	// todo: actually dereference the adapter object
+	redirect_function(
+		[emulator]
+		{
+			const auto adapter = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+
+			spdlog::info("HalPutDmaAdapter called (adapter=0x{:X})", adapter);
+		},
+		mapped_image,
+		"HalPutDmaAdapter"
 	);
 }

@@ -139,9 +139,9 @@ static _TIME_FIELDS time_to_time_fields(const std::int64_t time)
 }
 
 void redirect_ntoskrnl_time_functions(const std::shared_ptr<emulator_t>& emulator,
-	const mapped_image_t& mapped_image, const portable_executable::image_t* const pe_image)
+	const mapped_image_t& mapped_image)
 {
-	redirect_image_export(
+	redirect_function(
 		[emulator]
 		{
 			const auto rcx = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
@@ -162,12 +162,11 @@ void redirect_ntoskrnl_time_functions(const std::shared_ptr<emulator_t>& emulato
 
 			spdlog::info("ExSystemTimeToLocalTime called (system_time=0x{:X})", system_time.QuadPart);
 		},
-		pe_image,
 		mapped_image,
 		"ExSystemTimeToLocalTime"
 	);
 
-	redirect_image_export(
+	redirect_function(
 		[emulator]
 		{
 			const auto rcx = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
@@ -185,7 +184,6 @@ void redirect_ntoskrnl_time_functions(const std::shared_ptr<emulator_t>& emulato
 				time.QuadPart, fields.Year, fields.Month, fields.Day,
 				fields.Hour, fields.Minute, fields.Second, fields.Milliseconds);
 		},
-		pe_image,
 		mapped_image,
 		"RtlTimeToTimeFields"
 	);
