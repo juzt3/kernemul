@@ -1,19 +1,12 @@
 #pragma once
-
-#include "../../emulator/object.hpp"
 #include "../../image/mapped_image.hpp"
-#include "../../kernel_def.hpp"
+#include "../../kernel/kernel.hpp"
 
 #include <ia32-doc/ia32.hpp>
 #include <spdlog/spdlog.h>
-
-#include <functional>
 #include <string>
-#include <unordered_map>
 
-using function_implementation_t = std::function<void(bool& skip_return)>;
-
-void redirect_function(const function_implementation_t& function_impl,
+void redirect_function(const kernel::function_implementation_t& function_impl,
 	const mapped_image_t& mapped_image, std::string_view name);
 
 void redirect_function(const std::function<void()>& function_impl,

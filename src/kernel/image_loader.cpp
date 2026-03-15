@@ -2,22 +2,14 @@
 #include "../emulator/object.hpp"
 #include "../image/pdb/pdb_file.hpp"
 #include "../impl/ntoskrnl/nt_helpers.hpp"
-#include "../kernel_def.hpp"
 #include "../filesystem/filesystem.hpp"
+#include "kernel.hpp"
 
 #include <portable_executable/image.hpp>
 #include <portable_executable/file.hpp>
+
 #include <spdlog/spdlog.h>
-
-namespace kernel
-{
-	extern emulator_object_t<_LIST_ENTRY> ps_loaded_module_list;
-	extern std::vector<std::shared_ptr<mapped_image_t>> module_entries;
-
-	std::shared_ptr<mapped_image_t> find_module(std::string_view name);
-
-	extern std::shared_ptr<filesystem_t> filesystem;
-}
+#include <set>
 
 template <class T>
 static emulator_t::address_type allocate_basic_string(emulator_t& emulator, const std::basic_string_view<T> str,

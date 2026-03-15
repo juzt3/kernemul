@@ -3,7 +3,7 @@
 #include "../emulator/emulator.hpp"
 #include "../emulator/object.hpp"
 #include "../image/mapped_image.hpp"
-#include "../kernel_def.hpp"
+#include "kernel_def.hpp"
 
 #include <memory>
 #include <string_view>

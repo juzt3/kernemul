@@ -1,12 +1,5 @@
 #include "nt_helpers.hpp"
-
 #include <Windows.h>
-
-namespace kernel
-{
-	extern emulator_object_t<_LIST_ENTRY> ps_loaded_module_list;
-	extern std::vector<std::shared_ptr<mapped_image_t>> module_entries;
-}
 
 // todo: remove this once all needed classes are implemented
 using nt_query_system_information_fn = NTSTATUS(NTAPI*)(ULONG, PVOID, ULONG, PULONG);

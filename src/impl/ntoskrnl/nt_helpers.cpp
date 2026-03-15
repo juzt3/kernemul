@@ -1,11 +1,6 @@
 #include "nt_helpers.hpp"
 
-namespace kernel
-{
-	extern std::unordered_map<emulator_t::address_type, function_implementation_t> redirected_functions;
-}
-
-void redirect_function(const function_implementation_t& function_impl,
+void redirect_function(const kernel::function_implementation_t& function_impl,
 	const mapped_image_t& mapped_image, const std::string_view name)
 {
 	const auto symbol_address = mapped_image.find_symbol(std::string(name));
@@ -22,7 +17,7 @@ void redirect_function(const std::function<void()>& function_impl,
 	const mapped_image_t& mapped_image, const std::string_view name)
 {
 	redirect_function(
-		function_implementation_t([function_impl](bool&) { function_impl(); }),
+		kernel::function_implementation_t([function_impl](bool&) { function_impl(); }),
 		mapped_image, name);
 }
 

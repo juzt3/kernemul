@@ -6,12 +6,9 @@
 #include <spdlog/spdlog.h>
 
 #include <array>
-#include <format>
+#include "kernel.hpp"
 
-namespace kernel
-{
-	extern std::unordered_map<emulator_t::address_type, function_implementation_t> redirected_functions;
-}
+#include <format>
 
 segment_descriptor_32 make_gdt_descriptor(const std::uint32_t privilege_level)
 {
@@ -157,19 +154,19 @@ void set_up_idt(const std::shared_ptr<emulator_t>& emulator, const mapped_image_
 	error.throw_if("map IDT");
 
 	const auto handler_base = nt_image.base_address() + 0x404630;
-
-	constexpr auto error_code_bitmap = []
-	{
-		std::array<bool, handler_count> bitmap = {};
-		for (const auto v : std::array{ 8u, 10u, 11u, 12u, 13u, 14u, 17u, 21u, 29u, 30u })
-			bitmap[v] = true;
-		return bitmap;
-	}();
-
+	
 	for (std::uint32_t i = 0; i < handler_count; i++)
 	{
 		const auto handler_address = handler_base + i * handler_stride;
-		const bool has_error_code = error_code_bitmap[i];
+
+		constexpr std::array<std::uint32_t, 10> error_code_handlers = {
+			8, 10, 11,
+			12, 13, 14,
+			17, 21, 29,
+			30
+		};
+
+		const bool has_error_code = std::ranges::contains(error_code_handlers, i);
 
 		kernel::redirected_functions[handler_address] = [emulator, i, has_error_code](bool& skip_return)
 			{

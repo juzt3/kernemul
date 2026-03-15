@@ -1,10 +1,5 @@
 #include "nt_helpers.hpp"
 
-namespace kernel
-{
-	std::shared_ptr<mapped_image_t> find_module(std::string_view name);
-}
-
 static std::uint8_t get_guest_irql(const std::shared_ptr<emulator_t>& emulator)
 {
 	return emulator->read_register<x86::reg::cr8, std::uint8_t>();

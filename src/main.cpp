@@ -1,51 +1,12 @@
 #include "emulator/backend/hypermulator_backend.hpp"
 #include "emulator/backend/unicorn_backend.hpp"
 #include "emulator/object.hpp"
-#include "filesystem/filesystem.hpp"
-#include "image/mapped_image.hpp"
-#include "impl/ntoskrnl/nt_helpers.hpp"
+#include "kernel/kernel.hpp"
 #include "kernel/image_loader.hpp"
 #include "kernel/segments.hpp"
-#include "kernel_def.hpp"
+#include "config.hpp"
 
 #include <spdlog/spdlog.h>
-
-namespace kernel
-{
-	static emulator_object_t<_KUSER_SHARED_DATA> user_shared_data;
-
-	static emulator_object_t<_KPCR> kpcr;
-	static emulator_object_t<_KPRCB> kprcb;
-
-	emulator_object_t<_LIST_ENTRY> ps_loaded_module_list;
-	std::vector<std::shared_ptr<mapped_image_t>> module_entries;
-
-	static std::shared_ptr<mapped_image_t> emulated_module;
-	std::shared_ptr<filesystem_t> filesystem;
-
-	using function_implementation_t = std::function<void(bool& skip_return)>;
-
-	std::unordered_map<emulator_t::address_type, function_implementation_t> redirected_functions;
-
-	[[nodiscard]] std::shared_ptr<mapped_image_t> find_module(const std::string_view name)
-	{
-		const auto it = std::ranges::find(module_entries, name, &mapped_image_t::name);
-
-		return it != std::ranges::end(module_entries) ? *it : nullptr;
-	}
-
-	[[nodiscard]] std::optional<function_implementation_t> find_redirected_function(const emulator_t::address_type address)
-	{
-		const auto it = redirected_functions.find(address);
-
-		if (it != std::ranges::end(redirected_functions))
-		{
-			return it->second;
-		}
-
-		return std::nullopt;
-	}
-}
 
 static void set_up_user_shared_data(const std::shared_ptr<emulator_t>& emulator)
 {
@@ -74,7 +35,7 @@ static emulator_object_t<_DRIVER_OBJECT> set_up_driver_object(const std::shared_
 static void set_up_driver_entry(const std::shared_ptr<emulator_t>& emulator)
 {
 	const auto driver_object = set_up_driver_object(emulator, *kernel::emulated_module);
-	const auto registry_path = allocate_unicode_string_object(emulator, L"\\REGISTRY\\MACHINE\\SYSTEM\\ControlSet001\\Services\\testbin", "RegistryPath");
+	const auto registry_path = allocate_unicode_string_object(emulator, EMULATED_MODULE_REG_PATH, "RegistryPath");
 
 	emulator->write_register<x86::reg::rcx>(driver_object.address());
 	emulator->write_register<x86::reg::rdx>(registry_path.address());
@@ -104,30 +65,29 @@ static void set_up_stack(emulator_t& emulator)
 	error.throw_if("set return address");
 }
 
-static void set_up_kprcb(const std::shared_ptr<emulator_t>& emulator)
+static emulator_object_t<_KPRCB> set_up_kprcb(const std::shared_ptr<emulator_t>& emulator)
 {
-	kernel::kprcb = emulator_object_t<_KPRCB>::allocate(emulator);
+	return emulator_object_t<_KPRCB>::allocate(emulator);
 }
 
-static void set_up_kpcr(const std::shared_ptr<emulator_t>& emulator)
+static emulator_object_t<_KPCR> set_up_kpcr(const std::shared_ptr<emulator_t>& emulator)
 {
-	set_up_kprcb(emulator);
+	const auto kprcb = set_up_kprcb(emulator);
 
-	kernel::kpcr = emulator_object_t<_KPCR>::allocate(emulator);
+	auto kpcr = emulator_object_t<_KPCR>::allocate(emulator);
 
 	_KPCR contents = { };
 
-	contents.Self = reinterpret_cast<_KPCR*>(kernel::kpcr.address());
-	contents.CurrentPrcb = reinterpret_cast<_KPRCB*>(kernel::kprcb.address());
+	contents.Self = reinterpret_cast<_KPCR*>(kpcr.address());
+	contents.CurrentPrcb = reinterpret_cast<_KPRCB*>(kprcb.address());
 
-	kernel::kpcr.write(contents);
+	kpcr.write(contents);
+
+	return kpcr;
 }
 
 std::int32_t main()
 {
-	constexpr std::string_view pe_file_name = "test.bin";
-	constexpr std::string_view nt_file_name = "ntoskrnl.exe";
-
 	try
 	{
 		const auto emulator = std::static_pointer_cast<emulator_t>(std::make_shared<hypermulator_t>());
@@ -138,19 +98,20 @@ std::int32_t main()
 		set_up_ps_loaded_module_list(emulator);
 		set_up_user_shared_data(emulator);
 
-		const auto nt_image = map_kernel_image(emulator, nt_file_name, false);
+		const auto nt_image = map_kernel_image(emulator, "ntoskrnl.exe", false);
 		map_kernel_image(emulator, "HAL.dll", false);
 		map_kernel_image(emulator, "CI.dll", false);
 		map_kernel_image(emulator, "cng.sys", false, L"\\SystemRoot\\System32\\drivers\\");
-		//map_kernel_image(emulator, "FLTMGR.sys", false, L"\\SystemRoot\\System32\\drivers\\");
+		map_kernel_image(emulator, "FLTMGR.SYS", false, L"\\SystemRoot\\System32\\drivers\\");
 
-		kernel::emulated_module = map_kernel_image(emulator, pe_file_name);
+		kernel::emulated_module = map_kernel_image(emulator, EMULATED_MODULE_NAME, true, EMULATED_MODULE_DIRECTORY);
 
 		set_up_gdt(emulator);
 		set_up_segments(emulator);
-		set_up_kpcr(emulator);
-		set_up_kernel_gs(emulator, kernel::kpcr.address());
 		set_up_idt(emulator, *nt_image);
+
+		const auto kpcr = set_up_kpcr(emulator);
+		set_up_kernel_gs(emulator, kpcr.address());
 
 	    const emulator_t::address_type base_address = kernel::emulated_module->base_address();
 		const emulator_t::address_type entry_point_address = kernel::emulated_module->entry_point();
@@ -186,12 +147,11 @@ std::int32_t main()
 				}
 				else
 				{
-					const auto rva = rip - nt_image->base_address();
 					std::string symbol_name;
 
-					for (const auto& [name, addr] : nt_image->symbols())
+					for (const auto& [name, address] : nt_image->symbols())
 					{
-						if (addr == rip)
+						if (address == rip)
 						{
 							symbol_name = name;
 							break;
@@ -229,6 +189,8 @@ std::int32_t main()
 			emulator_t::default_start_address,
 			emulator_t::default_end_address
 		).error_or({});
+
+		error.throw_if("instruction hook attach");
 
 		error = emulator->hook_instruction(x86::insn::rdtsc,
 			[emulator]()

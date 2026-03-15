@@ -1,7 +1,7 @@
 #pragma once
 #include "../emulator/emulator.hpp"
 #include "../emulator/object.hpp"
-#include "../kernel_def.hpp"
+#include "../kernel/kernel_def.hpp"
 #include <string>
 
 class mapped_image_t
