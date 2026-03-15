@@ -21,7 +21,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 
 			if (r9)
 			{
-				component_name = read_guest_string(*emulator, r9);
+				component_name = kernel::read_guest_string(*emulator, r9);
 			}
 
 			spdlog::info("KeRegisterBugCheckReasonCallback called (record=0x{:X}, routine=0x{:X}, reason=0x{:X}, component='{}')",
@@ -201,7 +201,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 
 					if (buffer_address && us.Length)
 					{
-						object_name = narrow_wstring(read_guest_wstring(*emulator, buffer_address));
+						object_name = util::narrow_wstring(kernel::read_guest_wstring(*emulator, buffer_address));
 					}
 				}
 			}
@@ -274,7 +274,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 
 			if (buffer_address && us.Length)
 			{
-				routine_name = narrow_wstring(read_guest_wstring(*emulator, buffer_address));
+				routine_name = util::narrow_wstring(kernel::read_guest_wstring(*emulator, buffer_address));
 			}
 
 			spdlog::info("MmGetSystemRoutineAddress called (name='{}')", routine_name);
@@ -376,7 +376,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 
 			if (prompt_address)
 			{
-				prompt = read_guest_string(*emulator, prompt_address);
+				prompt = kernel::read_guest_string(*emulator, prompt_address);
 			}
 
 			spdlog::info("DbgPrompt called (prompt='{}', response=0x{:X}, length={})",
@@ -521,7 +521,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 
 				if (buffer_address && us.Length)
 				{
-					link_name = narrow_wstring(read_guest_wstring(*emulator, buffer_address));
+					link_name = util::narrow_wstring(kernel::read_guest_wstring(*emulator, buffer_address));
 				}
 			}
 

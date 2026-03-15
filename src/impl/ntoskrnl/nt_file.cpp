@@ -1,5 +1,6 @@
 #include "nt_helpers.hpp"
 #include "../../filesystem/filesystem.hpp"
+#include "../../util/util.hpp"
 
 static file_handle_t::access_type map_desired_access(const std::uint32_t desired_access)
 {
@@ -32,7 +33,7 @@ static file_handle_t::access_type map_desired_access(const std::uint32_t desired
 
 static std::string normalize_path(const std::wstring& guest_path)
 {
-	auto path = narrow_wstring(guest_path);
+	auto path = util::narrow_wstring(guest_path);
 
 	for (auto& c : path)
 	{
@@ -116,8 +117,8 @@ static bool resolve_object_name(const std::shared_ptr<emulator_t>& emulator,
 		return false;
 	}
 
-	const auto guest_path = read_guest_wstring(*emulator, buffer_address);
-	const auto narrow_path = narrow_wstring(guest_path);
+	const auto guest_path = kernel::read_guest_wstring(*emulator, buffer_address);
+	const auto narrow_path = util::narrow_wstring(guest_path);
 
 	out_normalized_path = normalize_path(guest_path);
 

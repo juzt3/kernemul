@@ -1,14 +1,33 @@
 #include "segments.hpp"
 #include "../emulator/object.hpp"
 #include "../impl/ntoskrnl/nt_helpers.hpp"
+#include "kernel.hpp"
 
 #include <ia32-doc/ia32.hpp>
 #include <spdlog/spdlog.h>
-
 #include <array>
-#include "kernel.hpp"
-
 #include <format>
+
+constexpr std::uint16_t kernel_cs_selector = 2 * sizeof(segment_descriptor_32);
+constexpr std::uint16_t kernel_ds_selector = 3 * sizeof(segment_descriptor_32);
+constexpr std::uint16_t tss_selector_value = 8 * sizeof(segment_descriptor_32);
+
+constexpr std::uint32_t segment_limit = 0xFFFFF;
+
+constexpr std::uint16_t data_segment_attributes =
+	SEGMENT_DESCRIPTOR_TYPE_DATA_READ_WRITE_ACCESSED
+	| (1 << 4)
+	| (kernel::kernelmode_cpl << 5)
+	| (1 << 7);
+
+constexpr std::uint16_t code_segment_attributes =
+	SEGMENT_DESCRIPTOR_TYPE_CODE_EXECUTE_READ_ACCESSED
+	| (1 << 4)
+	| (kernel::kernelmode_cpl << 5)
+	| (1 << 7)
+	| (1 << 13);
+
+constexpr std::uint16_t tss_attributes = 0x008B;
 
 segment_descriptor_32 make_gdt_descriptor(const std::uint32_t privilege_level)
 {
@@ -24,7 +43,7 @@ segment_descriptor_32 make_gdt_descriptor(const std::uint32_t privilege_level)
 	return descriptor;
 }
 
-segment_descriptor_32 make_code_gdt_descriptor(const std::uint32_t privilege_level, const bool is_long)
+segment_descriptor_32 make_code_gdt_descriptor(const std::uint32_t privilege_level, const bool is_long = true)
 {
 	auto descriptor = make_gdt_descriptor(privilege_level);
 
@@ -45,7 +64,7 @@ segment_descriptor_32 make_data_gdt_descriptor(const std::uint32_t privilege_lev
 	return descriptor;
 }
 
-void set_up_segments(const std::shared_ptr<emulator_t>& emulator)
+void kernel::set_up_segments(const std::shared_ptr<emulator_t>& emulator)
 {
 	auto error = emulator->write_segment(x86::segment_reg::cs, kernel_cs_selector, 0, segment_limit, code_segment_attributes);
 	error.throw_if("write CS");
@@ -65,7 +84,7 @@ void set_up_segments(const std::shared_ptr<emulator_t>& emulator)
 	spdlog::info("configured segment registers: CS=0x{:X} SS/DS/ES/FS=0x{:X}", kernel_cs_selector, kernel_ds_selector);
 }
 
-void set_up_kernel_gs(const std::shared_ptr<emulator_t>& emulator, const emulator_t::address_type kpcr_address)
+void kernel::set_up_kernel_gs(const std::shared_ptr<emulator_t>& emulator, const emulator_t::address_type kpcr_address)
 {
 	const emulator_err_t error = emulator->write_segment(
 		x86::segment_reg::gs, kernel_ds_selector, kpcr_address, segment_limit, data_segment_attributes);
@@ -75,7 +94,7 @@ void set_up_kernel_gs(const std::shared_ptr<emulator_t>& emulator, const emulato
 	spdlog::info("mapped kernel gs at 0x{:X}", kpcr_address);
 }
 
-void set_up_gdt(const std::shared_ptr<emulator_t>& emulator)
+void kernel::set_up_gdt(const std::shared_ptr<emulator_t>& emulator)
 {
 	constexpr segment_descriptor_32 null_descriptor = { };
 
@@ -110,8 +129,8 @@ void set_up_gdt(const std::shared_ptr<emulator_t>& emulator)
 	std::array gdt_entries = {
 		null_descriptor,                               // 0: null
 		null_descriptor,                               // 1: reserved
-		make_code_gdt_descriptor(kernel_cpl),          // 2: kernel CS (selector 0x10)
-		make_data_gdt_descriptor(kernel_cpl),          // 3: kernel DS (selector 0x18)
+		make_code_gdt_descriptor(kernelmode_cpl),          // 2: kernel CS (selector 0x10)
+		make_data_gdt_descriptor(kernelmode_cpl),          // 3: kernel DS (selector 0x18)
 		null_descriptor,                                             // 4: reserved (contains similar to user CS)
 		make_data_gdt_descriptor(usermode_cpl),        // 5: user DS
 		make_code_gdt_descriptor(usermode_cpl, false), // 6: user CS (compat)
@@ -142,7 +161,7 @@ void set_up_gdt(const std::shared_ptr<emulator_t>& emulator)
 		gdt_base, gdt_entries.size(), tss_address, tss_selector_value);
 }
 
-void set_up_idt(const std::shared_ptr<emulator_t>& emulator, const mapped_image_t& nt_image)
+void kernel::set_up_idt(const std::shared_ptr<emulator_t>& emulator, const mapped_image_t& nt_image)
 {
 	constexpr std::uint32_t handler_count = 256;
 	constexpr emulator_t::size_type idt_size = handler_count * sizeof(segment_descriptor_interrupt_gate_64);
@@ -168,7 +187,7 @@ void set_up_idt(const std::shared_ptr<emulator_t>& emulator, const mapped_image_
 
 		const bool has_error_code = std::ranges::contains(error_code_handlers, i);
 
-		kernel::redirected_functions[handler_address] = [emulator, i, has_error_code](bool& skip_return)
+		redirected_functions[handler_address] = [emulator, i, has_error_code](bool& skip_return)
 			{
 				auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
 

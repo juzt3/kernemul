@@ -17,7 +17,7 @@ void redirect_ntoskrnl_string_functions(const std::shared_ptr<emulator_t>& emula
 
 			if (rdx)
 			{
-				const auto source_string = read_guest_wstring(*emulator, rdx);
+				const auto source_string = kernel::read_guest_wstring(*emulator, rdx);
 				const auto count = static_cast<std::int64_t>(source_string.size());
 
 				auto byte_length = static_cast<std::uint64_t>(sizeof(wchar_t) * count);
@@ -31,7 +31,7 @@ void redirect_ntoskrnl_string_functions(const std::shared_ptr<emulator_t>& emula
 				destination.MaximumLength = static_cast<std::uint16_t>(byte_length + sizeof(wchar_t));
 
 				spdlog::info("RtlInitUnicodeString called (destination=0x{:X}, source='{}')",
-					rcx, narrow_wstring(source_string));
+					rcx, util::narrow_wstring(source_string));
 			}
 			else
 			{
@@ -193,9 +193,9 @@ void redirect_ntoskrnl_string_functions(const std::shared_ptr<emulator_t>& emula
 				return;
 			}
 
-			const auto str = read_guest_wstring(*emulator, rcx);
+			const auto str = kernel::read_guest_wstring(*emulator, rcx);
 
-			spdlog::info("wcslen called (str='{}', result={})", narrow_wstring(str), str.size());
+			spdlog::info("wcslen called (str='{}', result={})", util::narrow_wstring(str), str.size());
 
 			write_return_value(emulator, str.size());
 		},
@@ -238,10 +238,10 @@ void redirect_ntoskrnl_string_functions(const std::shared_ptr<emulator_t>& emula
 				return;
 			}
 
-			const auto src_string = read_guest_wstring(*emulator, src_address);
+			const auto src_string = kernel::read_guest_wstring(*emulator, src_address);
 
 			spdlog::info("wcscpy_s called (dst=0x{:X}, size={}, src='{}')",
-				dst_address, size_in_words, narrow_wstring(src_string));
+				dst_address, size_in_words, util::narrow_wstring(src_string));
 
 			auto remaining = size_in_words;
 			emulator_t::address_type write_address = dst_address;
@@ -292,8 +292,8 @@ void redirect_ntoskrnl_string_functions(const std::shared_ptr<emulator_t>& emula
 			const auto str1_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
 			const auto str2_address = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
 
-			const auto str1 = read_guest_string(*emulator, str1_address);
-			const auto str2 = read_guest_string(*emulator, str2_address);
+			const auto str1 = kernel::read_guest_string(*emulator, str1_address);
+			const auto str2 = kernel::read_guest_string(*emulator, str2_address);
 
 			spdlog::info("_stricmp called (str1='{}', str2='{}')", str1, str2);
 
@@ -328,8 +328,8 @@ void redirect_ntoskrnl_string_functions(const std::shared_ptr<emulator_t>& emula
 			const auto str1_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
 			const auto str2_address = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
 
-			const auto str1 = read_guest_string(*emulator, str1_address);
-			const auto str2 = read_guest_string(*emulator, str2_address);
+			const auto str1 = kernel::read_guest_string(*emulator, str1_address);
+			const auto str2 = kernel::read_guest_string(*emulator, str2_address);
 
 			spdlog::info("strcmp called (str1='{}', str2='{}')", str1, str2);
 
@@ -395,11 +395,11 @@ void redirect_ntoskrnl_string_functions(const std::shared_ptr<emulator_t>& emula
 				return;
 			}
 
-			const auto dst_string = read_guest_wstring(*emulator, dst_address);
-			const auto src_string = read_guest_wstring(*emulator, src_address);
+			const auto dst_string = kernel::read_guest_wstring(*emulator, dst_address);
+			const auto src_string = kernel::read_guest_wstring(*emulator, src_address);
 
 			spdlog::info("wcscat_s called (dst=0x{:X}, dst_content='{}', size={}, src='{}')",
-				dst_address, narrow_wstring(dst_string), size_in_words, narrow_wstring(src_string));
+				dst_address, util::narrow_wstring(dst_string), size_in_words, util::narrow_wstring(src_string));
 
 			auto remaining = size_in_words;
 

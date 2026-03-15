@@ -2,6 +2,7 @@
 #include "emulator/backend/unicorn_backend.hpp"
 #include "emulator/object.hpp"
 #include "kernel/kernel.hpp"
+#include "kernel/kernel_string.hpp"
 #include "kernel/image_loader.hpp"
 #include "kernel/segments.hpp"
 #include "config.hpp"
@@ -35,7 +36,7 @@ static emulator_object_t<_DRIVER_OBJECT> set_up_driver_object(const std::shared_
 static void set_up_driver_entry(const std::shared_ptr<emulator_t>& emulator)
 {
 	const auto driver_object = set_up_driver_object(emulator, *kernel::emulated_module);
-	const auto registry_path = allocate_unicode_string_object(emulator, EMULATED_MODULE_REG_PATH, "RegistryPath");
+	const auto registry_path = kernel::allocate_unicode_string_object(emulator, EMULATED_MODULE_REG_PATH, "RegistryPath");
 
 	emulator->write_register<x86::reg::rcx>(driver_object.address());
 	emulator->write_register<x86::reg::rdx>(registry_path.address());
@@ -98,20 +99,20 @@ std::int32_t main()
 		set_up_ps_loaded_module_list(emulator);
 		set_up_user_shared_data(emulator);
 
-		const auto nt_image = map_kernel_image(emulator, "ntoskrnl.exe", false);
-		map_kernel_image(emulator, "HAL.dll", false);
-		map_kernel_image(emulator, "CI.dll", false);
-		map_kernel_image(emulator, "cng.sys", false, L"\\SystemRoot\\System32\\drivers\\");
-		map_kernel_image(emulator, "FLTMGR.SYS", false, L"\\SystemRoot\\System32\\drivers\\");
+		const auto nt_image = kernel::map_kernel_image(emulator, "ntoskrnl.exe", false);
+		kernel::map_kernel_image(emulator, "HAL.dll", false);
+		kernel::map_kernel_image(emulator, "CI.dll", false);
+		kernel::map_kernel_image(emulator, "cng.sys", false, L"\\SystemRoot\\System32\\drivers\\");
+		kernel::map_kernel_image(emulator, "FLTMGR.SYS", false, L"\\SystemRoot\\System32\\drivers\\");
 
-		kernel::emulated_module = map_kernel_image(emulator, EMULATED_MODULE_NAME, true, EMULATED_MODULE_DIRECTORY);
+		kernel::emulated_module = kernel::map_kernel_image(emulator, EMULATED_MODULE_NAME, true, EMULATED_MODULE_DIRECTORY);
 
-		set_up_gdt(emulator);
-		set_up_segments(emulator);
-		set_up_idt(emulator, *nt_image);
+		kernel::set_up_gdt(emulator);
+		kernel::set_up_segments(emulator);
+		kernel::set_up_idt(emulator, *nt_image);
 
 		const auto kpcr = set_up_kpcr(emulator);
-		set_up_kernel_gs(emulator, kpcr.address());
+		kernel::set_up_kernel_gs(emulator, kpcr.address());
 
 	    const emulator_t::address_type base_address = kernel::emulated_module->base_address();
 		const emulator_t::address_type entry_point_address = kernel::emulated_module->entry_point();

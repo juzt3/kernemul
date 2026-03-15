@@ -174,12 +174,12 @@ std::wstring guest_vswprintf(const emulator_t& emulator, const std::wstring_view
 			{
 				if (length_mod == length_mod_t::h)
 				{
-					result += std::wstring(read_guest_string(emulator, raw_arg).begin(),
-						read_guest_string(emulator, raw_arg).end());
+					result += std::wstring(kernel::read_guest_string(emulator, raw_arg).begin(),
+						kernel::read_guest_string(emulator, raw_arg).end());
 				}
 				else
 				{
-					result += read_guest_wstring(emulator, raw_arg);
+					result += kernel::read_guest_wstring(emulator, raw_arg);
 				}
 			}
 			else
@@ -195,7 +195,7 @@ std::wstring guest_vswprintf(const emulator_t& emulator, const std::wstring_view
 
 			if (raw_arg)
 			{
-				const auto narrow = read_guest_string(emulator, raw_arg);
+				const auto narrow = kernel::read_guest_string(emulator, raw_arg);
 
 				result += std::wstring(narrow.begin(), narrow.end());
 			}
@@ -404,13 +404,13 @@ std::string guest_vsprintf(const emulator_t& emulator, const std::string_view fo
 			{
 				if (length_mod == length_mod_t::l)
 				{
-					const auto wide = read_guest_wstring(emulator, raw_arg);
+					const auto wide = kernel::read_guest_wstring(emulator, raw_arg);
 
-					result += narrow_wstring(wide);
+					result += util::narrow_wstring(wide);
 				}
 				else
 				{
-					result += read_guest_string(emulator, raw_arg);
+					result += kernel::read_guest_string(emulator, raw_arg);
 				}
 			}
 			else
@@ -426,9 +426,9 @@ std::string guest_vsprintf(const emulator_t& emulator, const std::string_view fo
 
 			if (raw_arg)
 			{
-				const auto wide = read_guest_wstring(emulator, raw_arg);
+				const auto wide = kernel::read_guest_wstring(emulator, raw_arg);
 
-				result += narrow_wstring(wide);
+				result += util::narrow_wstring(wide);
 			}
 			else
 			{
@@ -484,7 +484,7 @@ void redirect_ntoskrnl_format_functions(const std::shared_ptr<emulator_t>& emula
 			emulator->write_virtual_memory(rsp + 0x18, &r8, sizeof(r8)).throw_if("write memory");
 			emulator->write_virtual_memory(rsp + 0x20, &r9, sizeof(r9)).throw_if("write memory");
 
-			const auto format_string = read_guest_string(*emulator, rcx);
+			const auto format_string = kernel::read_guest_string(*emulator, rcx);
 			const auto formatted = guest_vsprintf(*emulator, format_string, va_list_address);
 
 			spdlog::info("DbgPrint: {}", formatted);
@@ -512,7 +512,7 @@ void redirect_ntoskrnl_format_functions(const std::shared_ptr<emulator_t>& emula
 				return;
 			}
 
-			const auto format_string = read_guest_wstring(*emulator, r8);
+			const auto format_string = kernel::read_guest_wstring(*emulator, r8);
 			const auto formatted = guest_vswprintf(*emulator, format_string, r9);
 
 			if (formatted.size() >= rdx)
@@ -525,7 +525,7 @@ void redirect_ntoskrnl_format_functions(const std::shared_ptr<emulator_t>& emula
 				error.throw_if("write memory");
 
 				spdlog::warn("vswprintf_s called (result truncated, format='{}')",
-					narrow_wstring(format_string));
+					util::narrow_wstring(format_string));
 
 				write_return_value(emulator, static_cast<std::uint64_t>(-1));
 
@@ -535,7 +535,7 @@ void redirect_ntoskrnl_format_functions(const std::shared_ptr<emulator_t>& emula
 			write_guest_wstring_buffer(*emulator, rcx, rdx, formatted);
 
 			spdlog::info("vswprintf_s called (result='{}')",
-				narrow_wstring(formatted));
+				util::narrow_wstring(formatted));
 
 			write_return_value(emulator, static_cast<std::uint64_t>(formatted.size()));
 		},
@@ -569,7 +569,7 @@ void redirect_ntoskrnl_format_functions(const std::shared_ptr<emulator_t>& emula
 				return;
 			}
 
-			const auto format_string = read_guest_wstring(*emulator, r8);
+			const auto format_string = kernel::read_guest_wstring(*emulator, r8);
 			const auto formatted = guest_vswprintf(*emulator, format_string, va_list_address);
 
 			if (formatted.size() >= rdx)
@@ -582,7 +582,7 @@ void redirect_ntoskrnl_format_functions(const std::shared_ptr<emulator_t>& emula
 				error.throw_if("write memory");
 
 				spdlog::warn("swprintf_s called (result truncated, format='{}')",
-					narrow_wstring(format_string));
+					util::narrow_wstring(format_string));
 
 				write_return_value(emulator, static_cast<std::uint64_t>(-1));
 
@@ -592,7 +592,7 @@ void redirect_ntoskrnl_format_functions(const std::shared_ptr<emulator_t>& emula
 			write_guest_wstring_buffer(*emulator, rcx, rdx, formatted);
 
 			spdlog::info("swprintf_s called (result='{}')",
-				narrow_wstring(formatted));
+				util::narrow_wstring(formatted));
 
 			write_return_value(emulator, static_cast<std::uint64_t>(formatted.size()));
 		},
@@ -626,13 +626,13 @@ void redirect_ntoskrnl_format_functions(const std::shared_ptr<emulator_t>& emula
 				return;
 			}
 
-			const auto format_string = read_guest_wstring(*emulator, r8);
+			const auto format_string = kernel::read_guest_wstring(*emulator, r8);
 			const auto formatted = guest_vswprintf(*emulator, format_string, r9);
 
 			if (!rcx || !rdx)
 			{
 				spdlog::info("_vsnwprintf called with null dest (format='{}', would need {} chars)",
-					narrow_wstring(format_string), formatted.size());
+					util::narrow_wstring(format_string), formatted.size());
 
 				write_return_value(emulator, static_cast<std::uint64_t>(formatted.size()));
 
@@ -644,7 +644,7 @@ void redirect_ntoskrnl_format_functions(const std::shared_ptr<emulator_t>& emula
 				write_guest_wstring_buffer(*emulator, rcx, rdx + 1, formatted.substr(0, rdx));
 
 				spdlog::warn("_vsnwprintf called (result truncated, format='{}')",
-					narrow_wstring(format_string));
+					util::narrow_wstring(format_string));
 
 				write_return_value(emulator, static_cast<std::uint64_t>(-1));
 
@@ -654,7 +654,7 @@ void redirect_ntoskrnl_format_functions(const std::shared_ptr<emulator_t>& emula
 			write_guest_wstring_buffer(*emulator, rcx, rdx, formatted);
 
 			spdlog::info("_vsnwprintf called (result='{}')",
-				narrow_wstring(formatted));
+				util::narrow_wstring(formatted));
 
 			write_return_value(emulator, static_cast<std::uint64_t>(formatted.size()));
 		},

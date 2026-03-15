@@ -117,7 +117,7 @@ void hm::emulator_t::reset_guest_exit_state()
 	partition_->set_rdtsc_exiting(false);
 
 	partition_->set_debug_exception_exiting(false);
-	partition_->set_page_fault_exception_exiting(false);
+	partition_->set_page_fault_exception_exiting(true);
 }
 
 bool hm::emulator_t::map_physical_memory(const address_type physical_address, const size_type size,

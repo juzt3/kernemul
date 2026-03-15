@@ -203,6 +203,7 @@
     <ClCompile Include="src\impl\ntoskrnl\nt_string.cpp" />
     <ClCompile Include="src\impl\ntoskrnl\nt_time.cpp" />
     <ClCompile Include="src\kernel\kernel.cpp" />
+    <ClCompile Include="src\kernel\kernel_string.cpp" />
     <ClCompile Include="src\kernel\image_loader.cpp" />
     <ClCompile Include="src\kernel\segments.cpp" />
     <ClCompile Include="src\main.cpp" />
@@ -279,9 +280,11 @@
     <ClInclude Include="src\image\pdb\symbol_server.hpp" />
     <ClInclude Include="src\impl\ntoskrnl\nt_helpers.hpp" />
     <ClInclude Include="src\kernel\kernel.hpp" />
+    <ClInclude Include="src\kernel\kernel_string.hpp" />
     <ClInclude Include="src\kernel\image_loader.hpp" />
     <ClInclude Include="src\kernel\segments.hpp" />
     <ClInclude Include="src\kernel\kernel_def.hpp" />
+    <ClInclude Include="src\util\util.hpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
