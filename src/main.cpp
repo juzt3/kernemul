@@ -159,7 +159,7 @@ std::int32_t main()
 		spdlog::info("mapped image at 0x{:X}", base_address);
 
 		emulator_err_t error = emulator->hook_basic_block(
-			[emulator]()
+			[emulator, &nt_image]()
 			{
 				const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
 				const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
@@ -186,7 +186,26 @@ std::int32_t main()
 				}
 				else
 				{
-					spdlog::error("unimplemented function at 0x{:X} (return address=0x{:X})", rip, return_address);
+					const auto rva = rip - nt_image->base_address();
+					std::string symbol_name;
+
+					for (const auto& [name, addr] : nt_image->symbols())
+					{
+						if (addr == rip)
+						{
+							symbol_name = name;
+							break;
+						}
+					}
+
+					if (!symbol_name.empty())
+					{
+						spdlog::error("unimplemented function '{}' (address=0x{:X}, return address=0x{:X})", symbol_name, rip, return_address);
+					}
+					else
+					{
+						spdlog::error("unimplemented non-symbol function (address=0x{:X}, return address=0x{:X})", rip, return_address);
+					}
 
 					emulator->write_register<x86::reg::rip, emulator_t::address_type>(-1);
 				}
@@ -204,6 +223,19 @@ std::int32_t main()
 				const auto rax = emulator->read_register<x86::reg::rax, emulator_t::address_type>();
 
 				spdlog::info("cpuid executed at 0x{:X} (rax=0x{:X})", rip, rax);
+
+				return false;
+			},
+			emulator_t::default_start_address,
+			emulator_t::default_end_address
+		).error_or({});
+
+		error = emulator->hook_instruction(x86::insn::rdtsc,
+			[emulator]()
+			{
+				const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
+
+				spdlog::info("rdtsc executed at 0x{:X}", rip);
 
 				return false;
 			},

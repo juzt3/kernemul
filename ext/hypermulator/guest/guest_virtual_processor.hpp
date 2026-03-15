@@ -111,6 +111,8 @@ namespace hm
 	protected:
 		[[nodiscard]] bool process_vmexit(vmexit_context_t& context);
 
+		void reset_exception_state();
+
 		std::shared_ptr<guest_partition_t> partition_ = { };
 		id_type id_ = 0;
 	};

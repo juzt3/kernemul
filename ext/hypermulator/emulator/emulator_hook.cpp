@@ -567,13 +567,11 @@ bool hm::emulator_t::handle_rdtsc_instruction(guest_virtual_processor_t& process
 		const std::uint64_t tsc = info.tsc + info.virtual_offset;
 
 		write_register<reg::rax>(tsc & 0xFFFFFFFF);
-		write_register<reg::rdx>(tsc & 0xFFFFFFFF);
+		write_register<reg::rdx>((tsc >> 32) & 0xFFFFFFFF);
 
 		if (info.is_rdtscp)
 		{
-			const std::uint64_t tsc_aux = info.tsc_aux + info.virtual_offset;
-
-			write_register<reg::rcx>(tsc_aux);
+			write_register<reg::rcx>(info.tsc_aux);
 		}
 	}
 

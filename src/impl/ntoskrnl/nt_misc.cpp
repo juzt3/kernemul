@@ -369,6 +369,243 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 		"KeIpiGenericCall"
 	);
 
+	// todo: implement exception injection
+	redirect_function(
+		[emulator]
+		{
+			const auto prompt_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto response_address = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+			const auto length = emulator->read_register<x86::reg::r8, std::uint32_t>();
+
+			std::string prompt;
+
+			if (prompt_address)
+			{
+				prompt = read_guest_string(*emulator, prompt_address);
+			}
+
+			spdlog::info("DbgPrompt called (prompt='{}', response=0x{:X}, length={})",
+				prompt, response_address, length);
+
+			write_return_value(emulator, 0);
+		},
+		mapped_image,
+		"DbgPrompt"
+	);
+
+	// todo: wake waiting threads when signalstate transitions from 0 to 1
+	redirect_function(
+		[emulator]
+		{
+			const auto event_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto increment = emulator->read_register<x86::reg::rdx, std::int32_t>();
+			const auto wait = emulator->read_register<x86::reg::r8, std::uint8_t>();
+
+			std::int32_t previous_state = 0;
+
+			emulator_err_t error = emulator->read_virtual_memory(
+				event_address + offsetof(_KEVENT, Header.SignalState), &previous_state, sizeof(previous_state));
+			error.throw_if("KeSetEvent: read SignalState");
+
+			constexpr std::int32_t signaled = 1;
+
+			error = emulator->write_virtual_memory(
+				event_address + offsetof(_KEVENT, Header.SignalState), &signaled, sizeof(signaled));
+			error.throw_if("KeSetEvent: write SignalState");
+
+			spdlog::info("KeSetEvent called (event=0x{:X}, increment={}, wait={}, previous_state={})",
+				event_address, increment, wait, previous_state);
+
+			write_return_value(emulator, static_cast<std::uint32_t>(previous_state));
+		},
+		mapped_image,
+		"KeSetEvent"
+	);
+
+	// todo: actually track and unregister load image notify callbacks
+	redirect_function(
+		[emulator]
+		{
+			const auto routine = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+
+			spdlog::info("PsRemoveLoadImageNotifyRoutine called (routine=0x{:X})", routine);
+
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"PsRemoveLoadImageNotifyRoutine"
+	);
+
+	// todo: actually track and unregister create thread notify callbacks
+	redirect_function(
+		[emulator]
+		{
+			const auto routine = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+
+			spdlog::info("PsRemoveCreateThreadNotifyRoutine called (routine=0x{:X})", routine);
+
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"PsRemoveCreateThreadNotifyRoutine"
+	);
+
+	// todo: actually track process creation notify callbacks
+	redirect_function(
+		[emulator]
+		{
+			const auto routine = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto remove = emulator->read_register<x86::reg::rdx, std::uint8_t>();
+
+			spdlog::info("PsSetCreateProcessNotifyRoutine called (routine=0x{:X}, remove={})", routine, remove);
+
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"PsSetCreateProcessNotifyRoutine"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto routine = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto remove = emulator->read_register<x86::reg::rdx, std::uint8_t>();
+
+			spdlog::info("PsSetCreateProcessNotifyRoutineEx called (routine=0x{:X}, remove={})", routine, remove);
+
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"PsSetCreateProcessNotifyRoutineEx"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto spin_lock = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+
+			const auto old_irql = get_guest_irql(emulator);
+
+			constexpr std::uint64_t dispatch_level = 2;
+			emulator->write_register<x86::reg::cr8>(dispatch_level);
+
+			spdlog::info("KeAcquireSpinLockRaiseToDpc called (spin_lock=0x{:X}, old_irql={})", spin_lock, old_irql);
+
+			write_return_value(emulator, old_irql);
+		},
+		mapped_image,
+		"KeAcquireSpinLockRaiseToDpc"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto spin_lock = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto new_irql = emulator->read_register<x86::reg::rdx, std::uint8_t>();
+
+			spdlog::info("KeReleaseSpinLock called (spin_lock=0x{:X}, new_irql={})", spin_lock, new_irql);
+
+			emulator->write_register<x86::reg::cr8>(static_cast<std::uint64_t>(new_irql));
+		},
+		mapped_image,
+		"KeReleaseSpinLock"
+	);
+
+	// todo: actually delete the symbolic link from the object namespace
+	redirect_function(
+		[emulator]
+		{
+			const auto name_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+
+			std::string link_name;
+
+			if (name_address)
+			{
+				const auto us = emulator_object_t<UNICODE_STRING>::view_at(emulator, name_address).read();
+				const auto buffer_address = reinterpret_cast<emulator_t::address_type>(us.Buffer);
+
+				if (buffer_address && us.Length)
+				{
+					link_name = narrow_wstring(read_guest_wstring(*emulator, buffer_address));
+				}
+			}
+
+			spdlog::info("IoDeleteSymbolicLink called (name='{}')", link_name);
+
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"IoDeleteSymbolicLink"
+	);
+
+	// todo: actually wait for rundown protection references to drain
+	redirect_function(
+		[emulator]
+		{
+			const auto run_ref = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+
+			spdlog::info("ExWaitForRundownProtectionRelease called (run_ref=0x{:X})", run_ref);
+
+			constexpr std::uint64_t rundown_complete = 1;
+			emulator_err_t error = emulator->write_virtual_memory(run_ref, &rundown_complete, sizeof(rundown_complete));
+			error.throw_if("ExWaitForRundownProtectionRelease: write rundown value");
+		},
+		mapped_image,
+		"ExWaitForRundownProtectionRelease"
+	);
+
+	// todo: advance guest clock time when delaying execution
+	redirect_function(
+		[emulator]
+		{
+			const auto wait_mode = emulator->read_register<x86::reg::rcx, std::uint8_t>();
+			const auto alertable = emulator->read_register<x86::reg::rdx, std::uint8_t>();
+			const auto interval_address = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
+
+			std::int64_t interval = 0;
+
+			if (interval_address)
+			{
+				emulator_err_t error = emulator->read_virtual_memory(interval_address, &interval, sizeof(interval));
+				error.throw_if("KeDelayExecutionThread: read interval");
+			}
+
+			spdlog::info("KeDelayExecutionThread called (wait_mode={}, alertable={}, interval={})",
+				wait_mode, alertable, interval);
+
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"KeDelayExecutionThread"
+	);
+
+	// todo: actually remove timer from timer queue
+	redirect_function(
+		[emulator]
+		{
+			const auto timer_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+
+			std::int64_t due_time = 0;
+
+			emulator_err_t error = emulator->read_virtual_memory(
+				timer_address + offsetof(_KTIMER, DueTime), &due_time, sizeof(due_time));
+			error.throw_if("KeCancelTimer: read DueTime");
+
+			const auto was_set = due_time != 0;
+
+			constexpr std::int64_t zero_due_time = 0;
+			error = emulator->write_virtual_memory(
+				timer_address + offsetof(_KTIMER, DueTime), &zero_due_time, sizeof(zero_due_time));
+			error.throw_if("KeCancelTimer: zero DueTime");
+
+			spdlog::info("KeCancelTimer called (timer=0x{:X}, was_set={})", timer_address, was_set);
+
+			write_return_value(emulator, was_set);
+		},
+		mapped_image,
+		"KeCancelTimer"
+	);
+
 	// todo: actually dereference the adapter object
 	redirect_function(
 		[emulator]

@@ -354,8 +354,6 @@ void redirect_ntoskrnl_string_functions(const std::shared_ptr<emulator_t>& emula
 			else
 				result = 0;
 
-			spdlog::info("strcmp returning {}", result);
-
 			write_return_value(emulator, static_cast<std::uint32_t>(result));
 		},
 		mapped_image,

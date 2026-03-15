@@ -3,7 +3,6 @@
 #include "guest_register.hpp"
 
 #include <ia32-doc/ia32.hpp>
-#include <spdlog/spdlog.h>
 
 hm::guest_virtual_processor_t::id_type hm::guest_virtual_processor_t::id() const
 {
@@ -12,13 +11,6 @@ hm::guest_virtual_processor_t::id_type hm::guest_virtual_processor_t::id() const
 
 void hm::guest_virtual_processor_t::run()
 {
-	constexpr std::uint64_t zero_8 = 0;
-	constexpr std::uint8_t zero_16[16] = { };
-
-	write_register(reg::pending_interruption, &zero_8, sizeof(zero_8));
-	write_register(reg::pending_event, &zero_16, sizeof(zero_16));
-	write_register(reg::interrupt_state, &zero_8, sizeof(zero_8));
-
 	vmexit_context_t vmexit_context;
 
 	do
@@ -29,6 +21,8 @@ void hm::guest_virtual_processor_t::run()
 		}
 
 	} while (process_vmexit(vmexit_context));
+
+	reset_exception_state();
 }
 
 std::optional<hm::guest_virtual_processor_t::address_type> hm::guest_virtual_processor_t::translate_virtual_address(
@@ -114,4 +108,14 @@ bool hm::guest_virtual_processor_t::uses_paging() const
 	const cr0 current_cr0 = read_register<reg::cr0, cr0>();
 
 	return current_cr0.paging_enable;
+}
+
+void hm::guest_virtual_processor_t::reset_exception_state()
+{
+	constexpr std::uint64_t zero_8 = 0;
+	constexpr std::array<std::uint64_t, 2> zero_16 = { };
+
+	write_register(reg::pending_interruption, &zero_8, sizeof(zero_8));
+	write_register(reg::pending_event, &zero_16, sizeof(zero_16));
+	write_register(reg::interrupt_state, &zero_8, sizeof(zero_8));
 }
