@@ -185,7 +185,12 @@ std::optional<std::uint32_t> pdb::pdb_file_t::find_rva(const std::string_view na
 	return symbol->rva;
 }
 
-const std::vector<pdb::symbol_t>& pdb::pdb_file_t::symbols() const noexcept
+std::span<pdb::symbol_t> pdb::pdb_file_t::symbols() noexcept
+{
+	return symbols_;
+}
+
+std::span<const pdb::symbol_t> pdb::pdb_file_t::symbols() const noexcept
 {
 	return symbols_;
 }

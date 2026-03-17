@@ -202,6 +202,7 @@
     <ClCompile Include="src\impl\ntoskrnl\nt_sysinfo.cpp" />
     <ClCompile Include="src\impl\ntoskrnl\nt_string.cpp" />
     <ClCompile Include="src\impl\ntoskrnl\nt_time.cpp" />
+    <ClCompile Include="src\kernel\exception.cpp" />
     <ClCompile Include="src\kernel\kernel.cpp" />
     <ClCompile Include="src\kernel\kernel_string.cpp" />
     <ClCompile Include="src\kernel\image_loader.cpp" />
@@ -279,6 +280,7 @@
     <ClInclude Include="src\image\pdb\pdb_file.hpp" />
     <ClInclude Include="src\image\pdb\symbol_server.hpp" />
     <ClInclude Include="src\impl\ntoskrnl\nt_helpers.hpp" />
+    <ClInclude Include="src\kernel\exception.hpp" />
     <ClInclude Include="src\kernel\kernel.hpp" />
     <ClInclude Include="src\kernel\kernel_string.hpp" />
     <ClInclude Include="src\kernel\image_loader.hpp" />

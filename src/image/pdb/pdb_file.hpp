@@ -4,6 +4,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <span>
 #include <optional>
 #include <unordered_map>
 
@@ -31,7 +32,8 @@ namespace pdb
 		[[nodiscard]] std::optional<symbol_t> find_symbol(std::string_view name) const;
 		[[nodiscard]] std::optional<std::uint32_t> find_rva(std::string_view name) const;
 
-		[[nodiscard]] const std::vector<symbol_t>& symbols() const noexcept;
+		[[nodiscard]] std::span<symbol_t> symbols() noexcept;
+		[[nodiscard]] std::span<const symbol_t> symbols() const noexcept;
 		[[nodiscard]] std::size_t symbol_count() const noexcept;
 
 	protected:

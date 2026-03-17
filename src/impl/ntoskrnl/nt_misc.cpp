@@ -1,4 +1,5 @@
 #include "nt_helpers.hpp"
+#include "../../kernel/exception.hpp"
 
 static std::uint8_t get_guest_irql(const std::shared_ptr<emulator_t>& emulator)
 {
@@ -366,7 +367,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 
 	// todo: implement exception injection
 	redirect_function(
-		[emulator]
+		[emulator](bool& skip_return)
 		{
 			const auto prompt_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
 			const auto response_address = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
@@ -382,7 +383,13 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 			spdlog::info("DbgPrompt called (prompt='{}', response=0x{:X}, length={})",
 				prompt, response_address, length);
 
-			write_return_value(emulator, 0);
+			const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
+
+			kernel::handle_exception(emulator, rip, 0, 0);
+
+			skip_return = true;
+
+			// skips writing return value of 0 (success) as exception is thrown
 		},
 		mapped_image,
 		"DbgPrompt"
@@ -611,5 +618,157 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 		},
 		mapped_image,
 		"HalPutDmaAdapter"
+	);
+
+	redirect_function(
+		[emulator](bool& skip_return)
+		{
+			const auto exception_record_addr = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto establisher_frame = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+			const auto context_record_addr = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
+			const auto dispatcher_context_addr = emulator->read_register<x86::reg::r9, emulator_t::address_type>();
+
+			EXCEPTION_RECORD record = { };
+			emulator_err_t error = emulator->read_virtual_memory(exception_record_addr, &record, sizeof(record));
+			error.throw_if("__C_specific_handler: read exception record");
+
+			DISPATCHER_CONTEXT dispatch = { };
+			error = emulator->read_virtual_memory(dispatcher_context_addr, &dispatch, sizeof(dispatch));
+			error.throw_if("__C_specific_handler: read dispatcher context");
+
+			const auto image_base = dispatch.ImageBase;
+			const auto control_pc = dispatch.ControlPc;
+			const auto control_pc_rva = static_cast<std::uint32_t>(control_pc - image_base);
+			const auto handler_data = reinterpret_cast<emulator_t::address_type>(dispatch.HandlerData);
+			const auto scope_index = dispatch.ScopeIndex;
+
+			const auto handler_module = kernel::find_module_from_rip(control_pc);
+
+			if (!handler_module)
+			{
+				spdlog::error("__C_specific_handler: module not found for control_pc 0x{:X}", control_pc);
+				write_return_value(emulator, 1);
+				return;
+			}
+
+			const auto buf = handler_module->buffer();
+			const auto module_base = buf.data();
+
+			const auto handler_data_rva = static_cast<std::uint32_t>(handler_data - image_base);
+			const auto* scope_table_ptr = reinterpret_cast<const std::uint32_t*>(module_base + handler_data_rva);
+			const auto scope_count = scope_table_ptr[0];
+
+			struct scope_entry_t
+			{
+				std::uint32_t begin_address;
+				std::uint32_t end_address;
+				std::uint32_t handler_address;
+				std::uint32_t jump_target;
+			};
+
+			const auto* scopes = reinterpret_cast<const scope_entry_t*>(&scope_table_ptr[1]);
+
+			spdlog::info("__C_specific_handler: control_pc_rva=0x{:X}, flags=0x{:X}, scope_count={}, scope_index={}",
+				control_pc_rva, record.ExceptionFlags, scope_count, scope_index);
+
+			if ((record.ExceptionFlags & 0x66) != 0)
+			{
+				// todo: unwind case
+				spdlog::info("__C_specific_handler: unwind case (flags=0x{:X}), returning continue_search",
+					record.ExceptionFlags);
+				write_return_value(emulator, 1);
+				return;
+			}
+
+			for (std::uint32_t i = scope_index; i < scope_count; ++i)
+			{
+				const auto& scope = scopes[i];
+
+				if (control_pc_rva < scope.begin_address || control_pc_rva >= scope.end_address)
+				{
+					continue;
+				}
+
+				if (!scope.jump_target)
+				{
+					continue;
+				}
+
+				spdlog::info("__C_specific_handler: scope[{}] begin=0x{:X} end=0x{:X} handler=0x{:X} target=0x{:X}",
+					i, scope.begin_address, scope.end_address, scope.handler_address, scope.jump_target);
+
+				if (scope.handler_address == 1)
+				{
+					const auto target = image_base + scope.jump_target;
+
+					spdlog::info("__C_specific_handler: EXCEPTION_EXECUTE_HANDLER, target=0x{:X}", target);
+
+					emulator->write_register<x86::reg::rip>(target);
+					emulator->write_register<x86::reg::rsp>(establisher_frame);
+					skip_return = true;
+
+					return;
+				}
+
+				const auto filter_address = image_base + scope.handler_address;
+
+				constexpr std::size_t pointers_size = 16;
+				const auto pointers_alloc = emulator->heap_allocate(pointers_size + 0x20, prot_read_write, true);
+				error = pointers_alloc.error_or({});
+				error.throw_if("__C_specific_handler: allocate exception pointers");
+
+				const auto pointers_address = *pointers_alloc + 0x20;
+				const std::uint64_t exception_pointers[2] = { exception_record_addr, context_record_addr };
+				error = emulator->write_virtual_memory(pointers_address, &exception_pointers, sizeof(exception_pointers));
+				error.throw_if("__C_specific_handler: write exception pointers");
+
+				const auto saved_rcx = emulator->read_register<x86::reg::rcx, std::uint64_t>();
+				const auto saved_rdx = emulator->read_register<x86::reg::rdx, std::uint64_t>();
+				const auto saved_rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
+				const auto saved_rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
+
+				emulator->write_register<x86::reg::rcx>(pointers_address);
+				emulator->write_register<x86::reg::rdx>(establisher_frame);
+				emulator->write_register<x86::reg::rsp>(*pointers_alloc);
+
+				spdlog::info("__C_specific_handler: calling filter at 0x{:X}", filter_address);
+
+				const auto run_result = emulator->run_at(filter_address, emulator_t::thread_return_address);
+				static_cast<void>(run_result);
+
+				const auto filter_result = emulator->read_register<x86::reg::rax, std::int32_t>();
+
+				emulator->write_register<x86::reg::rcx>(saved_rcx);
+				emulator->write_register<x86::reg::rdx>(saved_rdx);
+				emulator->write_register<x86::reg::rsp>(saved_rsp);
+				emulator->write_register<x86::reg::rip>(saved_rip);
+
+				spdlog::info("__C_specific_handler: filter returned {}", filter_result);
+
+				if (filter_result < 0)
+				{
+					write_return_value(emulator, 0);
+					return;
+				}
+
+				if (filter_result > 0)
+				{
+					const auto target = image_base + scope.jump_target;
+
+					spdlog::info("__C_specific_handler: jumping to __except at 0x{:X}", target);
+
+					emulator->write_register<x86::reg::rip>(target);
+					emulator->write_register<x86::reg::rsp>(establisher_frame);
+					skip_return = true;
+
+					return;
+				}
+			}
+
+			spdlog::info("__C_specific_handler: no matching scope, returning continue_search");
+			write_return_value(emulator, 1);
+		},
+		mapped_image,
+		"__C_specific_handler"
 	);
 }

@@ -186,6 +186,9 @@
     <ClCompile Include="src\kernel\kernel_string.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="src\kernel\exception.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="ext\portable_executable\data_directory.hpp">
@@ -414,6 +417,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\util\util.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\kernel\exception.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
