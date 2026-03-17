@@ -154,6 +154,75 @@ static void collect_module_symbols(portable_executable::image_t* const pe_image,
 	}
 }
 
+static void monitor_data_sections(const std::shared_ptr<emulator_t>& emulator,
+                                  const std::shared_ptr<mapped_image_t>& mapped_image,
+                                  const portable_executable::image_t* const pe_image)
+{
+	const auto nt_headers = pe_image->nt_headers();
+
+	const auto headers_size = nt_headers->optional_header.size_of_headers;
+	const auto& export_dir = nt_headers->optional_header.data_directories.export_directory;
+	const auto export_start = export_dir.virtual_address;
+	const auto export_end = export_start + export_dir.size;
+
+	for (const auto& section : pe_image->sections())
+	{
+		if (section.characteristics.mem_execute)
+		{
+			continue;
+		}
+
+		if (section.virtual_address < headers_size)
+		{
+			continue;
+		}
+
+		const auto section_end_rva = section.virtual_address + section.virtual_size;
+
+		if (export_start && section.virtual_address < export_end && section_end_rva > export_start)
+		{
+			continue;
+		}
+
+		const auto section_address = mapped_image->base_address() + section.virtual_address;
+		const auto section_size = section.virtual_size;
+
+		const emulator_err_t error = emulator->hook_memory(
+			[emulator, mapped_image](const emulator_t::address_type accessed_address, const protection_t)
+			{
+				const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
+
+				if (const auto symbol = mapped_image->find_symbol_by_address(accessed_address))
+				{
+					const auto offset = accessed_address - symbol->second;
+
+					if (offset == 0)
+					{
+						spdlog::info("instruction at 0x{:X} accessed {}!{}", rip, mapped_image->name(), symbol->first);
+					}
+					else
+					{
+						spdlog::info("instruction at 0x{:X} accessed {}!{}+0x{:X}", rip, mapped_image->name(), symbol->first, offset);
+					}
+				}
+				else
+				{
+					const auto offset = accessed_address - mapped_image->base_address();
+
+					spdlog::info("instruction at 0x{:X} accessed {}+0x{:X} (0x{:X})", rip, mapped_image->name(), offset, accessed_address);
+				}
+
+				return false;
+			},
+			prot_read_write,
+			section_address,
+			section_address + section_size
+		).error_or({});
+
+		error.throw_if("data section hook");
+	}
+}
+
 static void add_to_loaded_module_list(const std::shared_ptr<emulator_t>& emulator, const std::shared_ptr<mapped_image_t>& mapped_image,
 	const std::wstring_view directory = L"C:\\Windows\\System32\\")
 {
@@ -260,6 +329,11 @@ std::shared_ptr<mapped_image_t> kernel::map_kernel_image(const std::shared_ptr<e
 	add_to_loaded_module_list(emulator, mapped_image, directory);
 	collect_module_symbols(pe_image, *mapped_image);
 
+	if (!fix_imports)
+	{
+		monitor_data_sections(emulator, mapped_image, pe_image);
+	}
+
 	if (name == "ntoskrnl.exe")
 	{
 		initialize_ntoskrnl_debugger_state(emulator, *mapped_image);
@@ -270,7 +344,7 @@ std::shared_ptr<mapped_image_t> kernel::map_kernel_image(const std::shared_ptr<e
 		redirect_ntoskrnl_registry_functions(emulator, *mapped_image);
 		redirect_ntoskrnl_format_functions(emulator, *mapped_image);
 		redirect_ntoskrnl_misc_functions(emulator, *mapped_image);
-		redirect_ntoskrnl_file_functions(emulator, *mapped_image, kernel::filesystem);
+		redirect_ntoskrnl_file_functions(emulator, *mapped_image, filesystem);
 		redirect_ntoskrnl_sysinfo_functions(emulator, *mapped_image);
 	}
 

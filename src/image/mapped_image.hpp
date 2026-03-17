@@ -35,6 +35,24 @@ public:
 		symbols_.try_emplace(symbol_name, address);
 	}
 
+	[[nodiscard]] std::optional<std::pair<string_type, address_type>> find_symbol_by_address(const address_type address) const
+	{
+		std::optional<std::pair<string_type, address_type>> best;
+
+		for (const auto& [name, addr] : symbols_)
+		{
+			if (addr <= address)
+			{
+				if (!best || addr > best->second)
+				{
+					best = { name, addr };
+				}
+			}
+		}
+
+		return best;
+	}
+
 	[[nodiscard]] const symbol_map_type& symbols() const
 	{
 		return symbols_;
