@@ -1,6 +1,7 @@
 #include "image_loader.hpp"
 #include "../emulator/object.hpp"
 #include "../image/pdb/pdb_file.hpp"
+#include "../impl/ntoskrnl/nt_debugger.hpp"
 #include "../impl/ntoskrnl/nt_helpers.hpp"
 #include "../filesystem/filesystem.hpp"
 #include "kernel.hpp"
@@ -261,6 +262,8 @@ std::shared_ptr<mapped_image_t> kernel::map_kernel_image(const std::shared_ptr<e
 
 	if (name == "ntoskrnl.exe")
 	{
+		initialize_ntoskrnl_debugger_state(emulator, *mapped_image);
+
 		redirect_ntoskrnl_string_functions(emulator, *mapped_image);
 		redirect_ntoskrnl_memory_functions(emulator, *mapped_image);
 		redirect_ntoskrnl_time_functions(emulator, *mapped_image);

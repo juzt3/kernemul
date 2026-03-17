@@ -193,6 +193,7 @@
     <ClCompile Include="src\filesystem\filesystem.cpp" />
     <ClCompile Include="src\image\pdb\pdb_file.cpp" />
     <ClCompile Include="src\image\pdb\symbol_server.cpp" />
+    <ClCompile Include="src\impl\ntoskrnl\nt_debugger.cpp" />
     <ClCompile Include="src\impl\ntoskrnl\nt_file.cpp" />
     <ClCompile Include="src\impl\ntoskrnl\nt_format.cpp" />
     <ClCompile Include="src\impl\ntoskrnl\nt_helpers.cpp" />
@@ -279,6 +280,7 @@
     <ClInclude Include="src\image\mapped_image.hpp" />
     <ClInclude Include="src\image\pdb\pdb_file.hpp" />
     <ClInclude Include="src\image\pdb\symbol_server.hpp" />
+    <ClInclude Include="src\impl\ntoskrnl\nt_debugger.hpp" />
     <ClInclude Include="src\impl\ntoskrnl\nt_helpers.hpp" />
     <ClInclude Include="src\kernel\exception.hpp" />
     <ClInclude Include="src\kernel\kernel.hpp" />
