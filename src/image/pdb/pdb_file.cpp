@@ -3,6 +3,7 @@
 
 #include <raw_pdb/PDB.h>
 #include <raw_pdb/PDB_RawFile.h>
+#include <raw_pdb/PDB_InfoStream.h>
 #include <raw_pdb/PDB_DBIStream.h>
 #include <raw_pdb/PDB_PublicSymbolStream.h>
 #include <raw_pdb/PDB_GlobalSymbolStream.h>
@@ -11,6 +12,7 @@
 #include <fstream>
 #include <format>
 #include <stdexcept>
+#include <spdlog/spdlog.h>
 
 using symbol_kind = PDB::CodeView::DBI::SymbolRecordKind;
 
@@ -223,7 +225,57 @@ pdb::pdb_file_t pdb::load_pdb_for_image(const std::string_view image_path)
 	return pdb_file_t(download_pdb_for_image(image_path));
 }
 
-pdb::pdb_file_t pdb::load_pdb_for_image_buffer(const void* const image_base)
+static std::string make_cache_path(const std::string_view module_name)
+{
+	return std::string(module_name) + ".pdb";
+}
+
+static bool read_file(const std::string_view path, std::vector<std::uint8_t>& out_data)
+{
+	std::ifstream file(std::string(path), std::ios::binary | std::ios::ate);
+
+	if (!file.is_open())
+	{
+		return false;
+	}
+
+	const auto file_size = file.tellg();
+	file.seekg(0, std::ios::beg);
+
+	out_data.resize(static_cast<std::size_t>(file_size));
+	file.read(reinterpret_cast<char*>(out_data.data()), file_size);
+
+	return true;
+}
+
+static bool validate_cached_pdb(const std::vector<std::uint8_t>& data, const pdb::cv_info_pdb70_t& cv_info)
+{
+	if (PDB::ValidateFile(data.data(), data.size()) != PDB::ErrorCode::Success)
+	{
+		return false;
+	}
+
+	const auto raw_file = PDB::CreateRawFile(data.data());
+	const auto info_stream = PDB::InfoStream(raw_file);
+	const auto* header = info_stream.GetHeader();
+
+	if (!header)
+	{
+		return false;
+	}
+
+	return std::memcmp(&header->guid, &cv_info.guid, sizeof(pdb::cv_guid_t)) == 0;
+}
+
+static void save_cached_pdb(const std::string_view module_name, const std::vector<std::uint8_t>& data)
+{
+	const auto path = make_cache_path(module_name);
+
+	std::ofstream file(path, std::ios::binary);
+	file.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
+}
+
+pdb::pdb_file_t pdb::load_pdb_for_image_buffer(const void* const image_base, const std::string_view module_name)
 {
 	const auto cv_info = extract_cv_info(image_base);
 
@@ -232,9 +284,22 @@ pdb::pdb_file_t pdb::load_pdb_for_image_buffer(const void* const image_base)
 		throw std::runtime_error("no CodeView debug info found");
 	}
 
+	const auto cache_path = make_cache_path(module_name);
+
+	std::vector<std::uint8_t> data;
+
+	if (read_file(cache_path, data) && validate_cached_pdb(data, *cv_info))
+	{
+		return pdb_file_t(std::move(data));
+	}
+
 	const std::string_view pdb_path(cv_info->pdb_file_name);
 	const auto last_sep = pdb_path.find_last_of("\\/");
-	const auto name = last_sep != std::string_view::npos ? pdb_path.substr(last_sep + 1) : pdb_path;
+	const auto pdb_name = last_sep != std::string_view::npos ? pdb_path.substr(last_sep + 1) : pdb_path;
 
-	return pdb_file_t(download_pdb(name, *cv_info));
+	data = download_pdb(pdb_name, *cv_info);
+
+	save_cached_pdb(module_name, data);
+
+	return pdb_file_t(std::move(data));
 }

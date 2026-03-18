@@ -120,7 +120,8 @@ static void set_loaded_module_list_blink(const emulator_object_t<_KLDR_DATA_TABL
 	set_list_entry_blink(kernel::ps_loaded_module_list, list_entry);
 }
 
-static void collect_module_symbols(portable_executable::image_t* const pe_image, mapped_image_t& mapped_image)
+static void collect_module_symbols(portable_executable::image_t* const pe_image, mapped_image_t& mapped_image,
+	const bool load_pdb)
 {
 	const auto local_image_address = pe_image->as<const std::uint8_t*>();
 
@@ -132,9 +133,14 @@ static void collect_module_symbols(portable_executable::image_t* const pe_image,
 		mapped_image.register_symbol(current_export.name, runtime_address);
 	}
 
+	if (!load_pdb)
+	{
+		return;
+	}
+
 	try
 	{
-		auto pdb = pdb::load_pdb_for_image_buffer(pe_image->as<const void*>());
+		auto pdb = pdb::load_pdb_for_image_buffer(pe_image->as<const void*>(), mapped_image.name());
 
 		for (const auto& symbol : pdb.symbols())
 		{
@@ -327,12 +333,15 @@ std::shared_ptr<mapped_image_t> kernel::map_kernel_image(const std::shared_ptr<e
 	auto mapped_image = std::make_shared<mapped_image_t>(std::string(name), *base_address, entry_point, image_buffer);
 
 	add_to_loaded_module_list(emulator, mapped_image, directory);
-	collect_module_symbols(pe_image, *mapped_image);
 
-	if (!fix_imports)
+	const bool is_main_emulated_image = fix_imports;
+
+	if (!is_main_emulated_image)
 	{
 		monitor_data_sections(emulator, mapped_image, pe_image);
 	}
+
+	collect_module_symbols(pe_image, *mapped_image, !is_main_emulated_image);
 
 	if (name == "ntoskrnl.exe")
 	{
@@ -346,6 +355,7 @@ std::shared_ptr<mapped_image_t> kernel::map_kernel_image(const std::shared_ptr<e
 		redirect_ntoskrnl_misc_functions(emulator, *mapped_image);
 		redirect_ntoskrnl_file_functions(emulator, *mapped_image, filesystem);
 		redirect_ntoskrnl_sysinfo_functions(emulator, *mapped_image);
+		redirect_ntoskrnl_debugger_functions(emulator, *mapped_image);
 	}
 
 	return mapped_image;

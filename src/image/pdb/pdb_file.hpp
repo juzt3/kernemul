@@ -46,5 +46,6 @@ namespace pdb
 
 	[[nodiscard]] pdb_file_t load_pdb_from_file(std::string_view path);
 	[[nodiscard]] pdb_file_t load_pdb_for_image(std::string_view image_path);
-	[[nodiscard]] pdb_file_t load_pdb_for_image_buffer(const void* image_base);
+	[[nodiscard]] pdb_file_t load_pdb_for_image_buffer(const void* image_base,
+		std::string_view module_name);
 }
