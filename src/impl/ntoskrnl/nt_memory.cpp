@@ -103,4 +103,84 @@ void redirect_ntoskrnl_memory_functions(const std::shared_ptr<emulator_t>& emula
 		mapped_image,
 		"RtlCompareMemory"
 	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto virtual_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto result = emulator->translate_virtual_address(virtual_address).has_value();
+
+			spdlog::info("MmIsAddressValid called (address=0x{:X}, valid={})", virtual_address, result);
+
+			write_return_value(emulator, result);
+		},
+		mapped_image,
+		"MmIsAddressValid"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto rcx = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+
+			if (!rcx)
+			{
+				spdlog::warn("MmGetSystemRoutineAddress called with null argument");
+				write_return_value(emulator, 0);
+				return;
+			}
+
+			const auto unicode_string = emulator_object_t<UNICODE_STRING>::view_at(emulator, rcx).read();
+			const auto buffer_address = reinterpret_cast<emulator_t::address_type>(unicode_string.Buffer);
+
+			std::string routine_name;
+
+			if (buffer_address && unicode_string.Length)
+			{
+				routine_name = util::narrow_wstring(kernel::read_guest_wstring(*emulator, buffer_address));
+			}
+
+			spdlog::info("MmGetSystemRoutineAddress called (name='{}')", routine_name);
+
+			if (routine_name.empty())
+			{
+				write_return_value(emulator, 0);
+				return;
+			}
+
+			emulator_t::address_type result = 0;
+
+			if (const auto ntoskrnl = kernel::find_module("ntoskrnl.exe"))
+			{
+				if (const auto address = ntoskrnl->find_symbol(routine_name))
+				{
+					result = *address;
+				}
+			}
+
+			if (!result)
+			{
+				if (const auto hal = kernel::find_module("HAL.dll"))
+				{
+					if (const auto address = hal->find_symbol(routine_name))
+					{
+						result = *address;
+					}
+				}
+			}
+
+			if (result)
+			{
+				spdlog::info("MmGetSystemRoutineAddress: found '{}' at 0x{:X}", routine_name, result);
+			}
+			else
+			{
+				spdlog::warn("MmGetSystemRoutineAddress: '{}' not found", routine_name);
+			}
+
+			write_return_value(emulator, result);
+		},
+		mapped_image,
+		"MmGetSystemRoutineAddress"
+	);
 }

@@ -338,6 +338,7 @@ std::shared_ptr<kernel_image_t> kernel::map_kernel_image(const std::shared_ptr<e
 		redirect_ntoskrnl_misc_functions(emulator, *mapped_image);
 		redirect_ntoskrnl_file_functions(emulator, *mapped_image, filesystem);
 		redirect_ntoskrnl_sysinfo_functions(emulator, *mapped_image);
+		redirect_ntoskrnl_object_functions(emulator, *mapped_image);
 		redirect_ntoskrnl_debugger_functions(emulator, *mapped_image);
 	}
 

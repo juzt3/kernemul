@@ -52,6 +52,9 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 void redirect_ntoskrnl_sysinfo_functions(const std::shared_ptr<emulator_t>& emulator,
 	const kernel_image_t& mapped_image);
 
+void redirect_ntoskrnl_object_functions(const std::shared_ptr<emulator_t>& emulator,
+	const kernel_image_t& mapped_image);
+
 class filesystem_t;
 
 void redirect_ntoskrnl_file_functions(const std::shared_ptr<emulator_t>& emulator,

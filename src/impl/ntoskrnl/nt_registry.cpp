@@ -56,16 +56,4 @@ void redirect_ntoskrnl_registry_functions(const std::shared_ptr<emulator_t>& emu
 		"ZwFlushKey"
 	);
 
-	redirect_function(
-		[emulator]
-		{
-			const auto rcx = emulator->read_register<x86::reg::rcx, std::uint64_t>();
-
-			spdlog::info("ZwClose called (handle=0x{:X})", rcx);
-
-			write_nt_success(emulator);
-		},
-		mapped_image,
-		"ZwClose"
-	);
 }

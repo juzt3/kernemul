@@ -256,145 +256,6 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 		"ExCreateCallback"
 	);
 
-	redirect_function(
-		[emulator]
-		{
-			const auto rcx = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
-
-			if (!rcx)
-			{
-				spdlog::warn("MmGetSystemRoutineAddress called with null argument");
-				write_return_value(emulator, 0);
-				return;
-			}
-
-			const auto us = emulator_object_t<UNICODE_STRING>::view_at(emulator, rcx).read();
-			const auto buffer_address = reinterpret_cast<emulator_t::address_type>(us.Buffer);
-
-			std::string routine_name;
-
-			if (buffer_address && us.Length)
-			{
-				routine_name = util::narrow_wstring(kernel::read_guest_wstring(*emulator, buffer_address));
-			}
-
-			spdlog::info("MmGetSystemRoutineAddress called (name='{}')", routine_name);
-
-			if (routine_name.empty())
-			{
-				write_return_value(emulator, 0);
-				return;
-			}
-
-			emulator_t::address_type result = 0;
-
-			if (const auto ntoskrnl = kernel::find_module("ntoskrnl.exe"))
-			{
-				if (const auto address = ntoskrnl->find_symbol(routine_name))
-				{
-					result = *address;
-				}
-			}
-
-			if (!result)
-			{
-				if (const auto hal = kernel::find_module("HAL.dll"))
-				{
-					if (const auto address = hal->find_symbol(routine_name))
-					{
-						result = *address;
-					}
-				}
-			}
-
-			if (result)
-			{
-				spdlog::info("MmGetSystemRoutineAddress: found '{}' at 0x{:X}", routine_name, result);
-			}
-			else
-			{
-				spdlog::warn("MmGetSystemRoutineAddress: '{}' not found", routine_name);
-			}
-
-			write_return_value(emulator, result);
-		},
-		mapped_image,
-		"MmGetSystemRoutineAddress"
-	);
-
-	redirect_function(
-		[emulator]
-		{
-			const auto broadcast_function = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
-			const auto context = emulator->read_register<x86::reg::rdx, std::uint64_t>();
-
-			spdlog::info("KeIpiGenericCall called (broadcast_function=0x{:X}, context=0x{:X})", broadcast_function, context);
-
-			const auto saved_rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
-
-			constexpr std::uint64_t shadow_space_size = 0x20;
-			constexpr std::uint64_t return_address_size = 8;
-
-			auto call_rsp = saved_rsp - shadow_space_size - return_address_size;
-			call_rsp &= ~0xFull;
-			call_rsp -= return_address_size;
-
-			emulator_err_t error = emulator->write_virtual_memory(
-				call_rsp, &emulator_t::thread_return_address, sizeof(emulator_t::thread_return_address));
-
-			error.throw_if("KeIpiGenericCall: write return address");
-
-			emulator->write_register<x86::reg::rsp>(call_rsp);
-			emulator->write_register<x86::reg::rcx>(context);
-
-			spdlog::info("KeIpiGenericCall: invoking guest BroadcastFunction at 0x{:X} with context=0x{:X}", broadcast_function, context);
-
-			error = emulator->run_at(broadcast_function, emulator_t::thread_return_address);
-
-			error.throw_if("KeIpiGenericCall: run guest callback");
-
-			const auto result = emulator->read_register<x86::reg::rax, std::uint64_t>();
-
-			spdlog::info("KeIpiGenericCall: guest BroadcastFunction returned 0x{:X}", result);
-
-			emulator->write_register<x86::reg::rsp>(saved_rsp);
-
-			write_return_value(emulator, result);
-		},
-		mapped_image,
-		"KeIpiGenericCall"
-	);
-
-	// todo: implement exception injection
-	redirect_function(
-		[emulator](bool& skip_return)
-		{
-			const auto prompt_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
-			const auto response_address = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
-			const auto length = emulator->read_register<x86::reg::r8, std::uint32_t>();
-
-			std::string prompt;
-
-			if (prompt_address)
-			{
-				prompt = kernel::read_guest_string(*emulator, prompt_address);
-			}
-
-			spdlog::info("DbgPrompt called (prompt='{}', response=0x{:X}, length={})",
-				prompt, response_address, length);
-
-			const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
-
-			kernel::handle_exception(emulator, rip, 0, 0);
-
-			skip_return = true;
-
-			// skips writing return value of 0 (success) as exception is thrown
-		},
-		mapped_image,
-		"DbgPrompt"
-	);
-
 	// todo: wake waiting threads when signalstate transitions from 0 to 1
 	redirect_function(
 		[emulator]
@@ -422,6 +283,73 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 		},
 		mapped_image,
 		"KeSetEvent"
+	);
+
+	// todo: implement debug prompt interaction
+	redirect_function(
+		kernel::function_implementation_t([emulator](bool& skip_return)
+		{
+			const auto prompt_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto response_address = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+			const auto length = emulator->read_register<x86::reg::r8, std::uint32_t>();
+
+			std::string prompt;
+
+			if (prompt_address)
+			{
+				prompt = kernel::read_guest_string(*emulator, prompt_address);
+			}
+
+			spdlog::info("DbgPrompt called (prompt='{}', response=0x{:X}, length={})",
+				prompt, response_address, length);
+
+			const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
+
+			kernel::handle_exception(emulator, rip, 0, 0);
+		}),
+		mapped_image,
+		"DbgPrompt"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto broadcast_function = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto context = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+
+			spdlog::info("KeIpiGenericCall called (broadcast_function=0x{:X}, context=0x{:X})",
+				broadcast_function, context);
+
+			const auto saved_rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
+
+			constexpr std::size_t shadow_space = 0x20 + 8;
+			const auto call_stack = emulator->heap_allocate(shadow_space, prot_read_write, true);
+			emulator_err_t error = call_stack.error_or({});
+			error.throw_if("allocate KeIpiGenericCall stack");
+
+			emulator->write_register<x86::reg::rcx>(context);
+			emulator->write_register<x86::reg::rsp>(*call_stack + shadow_space);
+
+			spdlog::info("KeIpiGenericCall: invoking guest BroadcastFunction at 0x{:X} with context=0x{:X}",
+				broadcast_function, context);
+
+			const auto run_result = emulator->run_at(broadcast_function, emulator_t::thread_return_address);
+
+			if (!run_result)
+			{
+				spdlog::error("KeIpiGenericCall: run guest callback: 'failed'");
+			}
+
+			emulator->write_register<x86::reg::rsp>(saved_rsp);
+
+			const auto result = emulator->read_register<x86::reg::rax, std::uint64_t>();
+
+			spdlog::info("KeIpiGenericCall: guest callback returned 0x{:X}", result);
+
+			write_return_value(emulator, result);
+		},
+		mapped_image,
+		"KeIpiGenericCall"
 	);
 
 	// todo: actually track and unregister load image notify callbacks
@@ -511,33 +439,6 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 		},
 		mapped_image,
 		"KeReleaseSpinLock"
-	);
-
-	// todo: actually delete the symbolic link from the object namespace
-	redirect_function(
-		[emulator]
-		{
-			const auto name_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
-
-			std::string link_name;
-
-			if (name_address)
-			{
-				const auto us = emulator_object_t<UNICODE_STRING>::view_at(emulator, name_address).read();
-				const auto buffer_address = reinterpret_cast<emulator_t::address_type>(us.Buffer);
-
-				if (buffer_address && us.Length)
-				{
-					link_name = util::narrow_wstring(kernel::read_guest_wstring(*emulator, buffer_address));
-				}
-			}
-
-			spdlog::info("IoDeleteSymbolicLink called (name='{}')", link_name);
-
-			write_nt_success(emulator);
-		},
-		mapped_image,
-		"IoDeleteSymbolicLink"
 	);
 
 	// todo: actually wait for rundown protection references to drain
@@ -770,5 +671,25 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 		},
 		mapped_image,
 		"__C_specific_handler"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto thread_address = kernel::current_thread->address();
+			const auto process = kernel::current_thread->process();
+
+			// in case ApcState is overwritten, read process directly from thread
+			emulator_t::address_type process_address = 0;
+			const emulator_err_t error = emulator->read_virtual_memory(
+				thread_address + offsetof(_KTHREAD, ApcState) + offsetof(_KAPC_STATE, Process),
+				&process_address, sizeof(process_address));
+
+			spdlog::info("PsGetCurrentProcess called (id=0x{:X})", process->id());
+
+			write_return_value(emulator, process_address);
+		},
+		mapped_image,
+		"PsGetCurrentProcess"
 	);
 }
