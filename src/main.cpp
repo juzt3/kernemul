@@ -62,14 +62,20 @@ static void set_up_stack(emulator_t& emulator)
 	error.throw_if("set return address");
 }
 
-static emulator_object_t<_KPRCB> set_up_kprcb(const std::shared_ptr<emulator_t>& emulator)
+static emulator_object_t<_KPRCB> set_up_kprcb(const std::shared_ptr<emulator_t>& emulator,
+                                              const std::shared_ptr<thread_t>& thread)
 {
-	return emulator_object_t<_KPRCB>::allocate(emulator);
+	_KPRCB contents;
+
+	contents.CurrentThread = reinterpret_cast<_KTHREAD*>(thread->address());
+
+	return emulator_object_t<_KPRCB>::allocate(emulator, contents);
 }
 
-static emulator_object_t<_KPCR> set_up_kpcr(const std::shared_ptr<emulator_t>& emulator)
+static emulator_object_t<_KPCR> set_up_kpcr(const std::shared_ptr<emulator_t>& emulator,
+                                            const std::shared_ptr<thread_t>& thread)
 {
-	const auto kprcb = set_up_kprcb(emulator);
+	const auto kprcb = set_up_kprcb(emulator, thread);
 
 	auto kpcr = emulator_object_t<_KPCR>::allocate(emulator);
 
@@ -105,11 +111,16 @@ std::int32_t main()
 
 		kernel::set_up_initial_system_process(emulator);
 
+		constexpr thread_t::id_type current_thread_id = 8;
+
+		const auto& system_process = kernel::process_entries.front();
+		kernel::current_thread = kernel::create_thread(emulator, current_thread_id, system_process);
+
 		kernel::set_up_gdt(emulator);
 		kernel::set_up_segments(emulator);
 		kernel::set_up_idt(emulator, *nt_image);
 
-		const auto kpcr = set_up_kpcr(emulator);
+		const auto kpcr = set_up_kpcr(emulator, kernel::current_thread);
 		kernel::set_up_kernel_gs(emulator, kpcr.address());
 
 	    const emulator_t::address_type base_address = kernel::emulated_module->base_address();

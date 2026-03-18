@@ -5,6 +5,7 @@
 #include "../filesystem/filesystem.hpp"
 #include "kernel_def.hpp"
 #include "process_loader.hpp"
+#include "thread.hpp"
 
 #include <functional>
 #include <memory>
@@ -21,6 +22,7 @@ namespace kernel
 	inline std::shared_ptr<kernel_image_t> emulated_module;
 
 	inline std::vector<std::shared_ptr<process_t>> process_entries;
+	inline std::shared_ptr<thread_t> current_thread;
 
 	inline std::shared_ptr<filesystem_t> filesystem;
 	inline std::unordered_map<emulator_t::address_type, function_implementation_t> redirected_functions;

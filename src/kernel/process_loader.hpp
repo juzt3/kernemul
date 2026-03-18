@@ -14,14 +14,14 @@ public:
 	using address_type = emulator_t::address_type;
 	using id_type = std::uint64_t;
 
-	explicit process_t(const id_type process_id, const address_type section_base_address, emulator_object_t<_EPROCESS> object)
-			:	process_id_(process_id),
+	explicit process_t(const id_type id, const address_type section_base_address, emulator_object_t<_EPROCESS> object)
+			:	id_(id),
 				section_base_address_(section_base_address),
 				object_(std::move(object)) { }
 
-	[[nodiscard]] id_type process_id() const
+	[[nodiscard]] id_type id() const
 	{
-		return process_id_;
+		return id_;
 	}
 
 	[[nodiscard]] address_type section_base_address() const
@@ -45,7 +45,7 @@ public:
 	}
 
 protected:
-	id_type process_id_;
+	id_type id_;
 	address_type section_base_address_;
 	emulator_object_t<_EPROCESS> object_;
 };
