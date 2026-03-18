@@ -11,5 +11,5 @@ namespace kernel
 	void set_up_gdt(const std::shared_ptr<emulator_t>& emulator);
 	void set_up_segments(const std::shared_ptr<emulator_t>& emulator);
 	void set_up_kernel_gs(const std::shared_ptr<emulator_t>& emulator, emulator_t::address_type kpcr_address);
-	void set_up_idt(const std::shared_ptr<emulator_t>& emulator, const mapped_image_t& nt_image);
+	void set_up_idt(const std::shared_ptr<emulator_t>& emulator, const kernel_image_t& nt_image);
 }

@@ -7,7 +7,7 @@ static std::uint8_t get_guest_irql(const std::shared_ptr<emulator_t>& emulator)
 }
 
 void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulator,
-	const mapped_image_t& mapped_image)
+	const kernel_image_t& mapped_image)
 {
 	// todo: actually register callbacks into a list and invoke on bugcheck
 	redirect_function(

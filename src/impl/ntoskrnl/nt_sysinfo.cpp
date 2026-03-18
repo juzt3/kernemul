@@ -347,7 +347,7 @@ static void handle_query_system_information(const std::shared_ptr<emulator_t>& e
 }
 
 void redirect_ntoskrnl_sysinfo_functions(const std::shared_ptr<emulator_t>& emulator,
-	const mapped_image_t& mapped_image)
+	const kernel_image_t& mapped_image)
 {
 	redirect_function(
 		[emulator] { handle_query_system_information(emulator); },

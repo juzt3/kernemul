@@ -51,76 +51,45 @@ static void fix_image_imports(portable_executable::image_t* const image)
 	}
 }
 
-static PLIST_ENTRY get_module_list_entry_address(const emulator_object_t<_KLDR_DATA_TABLE_ENTRY>& object)
+static emulator_t::address_type get_in_load_order_links_address(const kernel_image_t& image)
 {
-	return reinterpret_cast<PLIST_ENTRY>(object.address()) + offsetof(_KLDR_DATA_TABLE_ENTRY, InLoadOrderLinks);
+	return image.table_entry().address() + offsetof(_KLDR_DATA_TABLE_ENTRY, InLoadOrderLinks);
 }
 
-static void set_module_list_entry_flink(emulator_object_t<_KLDR_DATA_TABLE_ENTRY>& object, const PLIST_ENTRY flink)
+static void write_list_entry_flink(const std::shared_ptr<emulator_t>& emulator,
+	const emulator_t::address_type list_address, const emulator_t::address_type flink)
 {
-	auto current = object.read();
-
-	current.InLoadOrderLinks.Flink = flink;
-
-	object.write(current);
+	emulator_err_t error = emulator->write_virtual_memory(list_address, &flink, sizeof(flink));
+	error.throw_if("write LIST_ENTRY.Flink");
 }
 
-static void set_module_list_entry_blink(emulator_object_t<_KLDR_DATA_TABLE_ENTRY>& object, const PLIST_ENTRY blink)
+static void write_list_entry_blink(const std::shared_ptr<emulator_t>& emulator,
+	const emulator_t::address_type list_address, const emulator_t::address_type blink)
 {
-	auto current = object.read();
-
-	current.InLoadOrderLinks.Blink = blink;
-
-	object.write(current);
+	emulator_err_t error = emulator->write_virtual_memory(
+		list_address + sizeof(emulator_t::address_type), &blink, sizeof(blink));
+	error.throw_if("write LIST_ENTRY.Blink");
 }
 
-static void set_module_list_entry_flink(emulator_object_t<_KLDR_DATA_TABLE_ENTRY>& object, const emulator_object_t<_KLDR_DATA_TABLE_ENTRY>& flink)
+static void set_module_flink(const std::shared_ptr<emulator_t>& emulator,
+	const kernel_image_t& image, const emulator_t::address_type flink)
 {
-	const auto list_entry = get_module_list_entry_address(flink);
+	const auto links_address = get_in_load_order_links_address(image);
 
-	set_module_list_entry_flink(object, list_entry);
+	emulator_err_t error = emulator->write_virtual_memory(links_address, &flink, sizeof(flink));
+	error.throw_if("write module Flink");
 }
 
-static void set_module_list_entry_blink(emulator_object_t<_KLDR_DATA_TABLE_ENTRY>& object, const emulator_object_t<_KLDR_DATA_TABLE_ENTRY>& blink)
+static void set_module_blink(const std::shared_ptr<emulator_t>& emulator,
+	const kernel_image_t& image, const emulator_t::address_type blink)
 {
-	const auto list_entry = get_module_list_entry_address(blink);
+	const auto links_address = get_in_load_order_links_address(image) + sizeof(emulator_t::address_type);
 
-	set_module_list_entry_blink(object, list_entry);
+	emulator_err_t error = emulator->write_virtual_memory(links_address, &blink, sizeof(blink));
+	error.throw_if("write module Blink");
 }
 
-static void set_list_entry_flink(emulator_object_t<LIST_ENTRY>& object, const PLIST_ENTRY flink)
-{
-	auto current = object.read();
-
-	current.Flink = flink;
-
-	object.write(current);
-}
-
-static void set_list_entry_blink(emulator_object_t<LIST_ENTRY>& object, const PLIST_ENTRY blink)
-{
-	auto current = object.read();
-
-	current.Blink = blink;
-
-	object.write(current);
-}
-
-static void set_loaded_module_list_flink(const emulator_object_t<_KLDR_DATA_TABLE_ENTRY>& flink)
-{
-	const auto list_entry = get_module_list_entry_address(flink);
-
-	set_list_entry_flink(kernel::ps_loaded_module_list, list_entry);
-}
-
-static void set_loaded_module_list_blink(const emulator_object_t<_KLDR_DATA_TABLE_ENTRY>& blink)
-{
-	const auto list_entry = get_module_list_entry_address(blink);
-
-	set_list_entry_blink(kernel::ps_loaded_module_list, list_entry);
-}
-
-static void collect_module_symbols(portable_executable::image_t* const pe_image, mapped_image_t& mapped_image,
+static void collect_module_symbols(portable_executable::image_t* const pe_image, kernel_image_t& mapped_image,
 	const bool load_pdb)
 {
 	const auto local_image_address = pe_image->as<const std::uint8_t*>();
@@ -161,7 +130,7 @@ static void collect_module_symbols(portable_executable::image_t* const pe_image,
 }
 
 static void monitor_data_sections(const std::shared_ptr<emulator_t>& emulator,
-                                  const std::shared_ptr<mapped_image_t>& mapped_image,
+                                  const std::shared_ptr<kernel_image_t>& mapped_image,
                                   const portable_executable::image_t* const pe_image)
 {
 	const auto nt_headers = pe_image->nt_headers();
@@ -229,7 +198,7 @@ static void monitor_data_sections(const std::shared_ptr<emulator_t>& emulator,
 	}
 }
 
-static void add_to_loaded_module_list(const std::shared_ptr<emulator_t>& emulator, const std::shared_ptr<mapped_image_t>& mapped_image,
+static void add_to_loaded_module_list(const std::shared_ptr<emulator_t>& emulator, const std::shared_ptr<kernel_image_t>& mapped_image,
 	const std::wstring_view directory = L"C:\\Windows\\System32\\")
 {
 	_KLDR_DATA_TABLE_ENTRY contents = { };
@@ -245,36 +214,40 @@ static void add_to_loaded_module_list(const std::shared_ptr<emulator_t>& emulato
 	contents.BaseDllName = kernel::init_unicode_string(*emulator, wide_name);
 	contents.FullDllName = kernel::init_unicode_string(*emulator, full_path);
 
-	const auto module_list = reinterpret_cast<PLIST_ENTRY>(kernel::ps_loaded_module_list.address());
+	const auto list_head = kernel::ps_loaded_module_list.address();
 
-	const std::shared_ptr<mapped_image_t>& last_entry = kernel::module_entries.empty()
+	const auto& last_entry = kernel::module_entries.empty()
 		? nullptr
 		: kernel::module_entries.back();
 
-	contents.InLoadOrderLinks.Flink = module_list;
-	contents.InLoadOrderLinks.Blink = last_entry
-		? get_module_list_entry_address(last_entry->table_entry())
-		: module_list;
+	const auto last_links = last_entry
+		? get_in_load_order_links_address(*last_entry)
+		: list_head;
+
+	contents.InLoadOrderLinks.Flink = reinterpret_cast<PLIST_ENTRY>(list_head);
+	contents.InLoadOrderLinks.Blink = reinterpret_cast<PLIST_ENTRY>(last_links);
 
 	auto object = emulator_object_t<_KLDR_DATA_TABLE_ENTRY>::allocate(emulator, contents, mapped_image->name());
 
+	mapped_image->table_entry() = std::move(object);
+
+	const auto self_links = get_in_load_order_links_address(*mapped_image);
+
 	if (last_entry)
 	{
-		set_module_list_entry_flink(last_entry->table_entry(), object);
+		set_module_flink(emulator, *last_entry, self_links);
 	}
 	else
 	{
-		set_loaded_module_list_flink(object);
+		write_list_entry_flink(emulator, list_head, self_links);
 	}
 
-	set_loaded_module_list_blink(object);
-
-	mapped_image->table_entry() = std::move(object);
+	write_list_entry_blink(emulator, list_head, self_links);
 
 	kernel::module_entries.push_back(mapped_image);
 }
 
-std::shared_ptr<mapped_image_t> kernel::map_kernel_image(const std::shared_ptr<emulator_t>& emulator,
+std::shared_ptr<kernel_image_t> kernel::map_kernel_image(const std::shared_ptr<emulator_t>& emulator,
 	const std::string_view name, const bool fix_imports,
 	const std::wstring_view directory)
 {
@@ -328,22 +301,32 @@ std::shared_ptr<mapped_image_t> kernel::map_kernel_image(const std::shared_ptr<e
 		return { };
 	}
 
-	const mapped_image_t::address_type entry_point = *base_address + nt_headers->optional_header.address_of_entry_point;
+	const kernel_image_t::address_type entry_point = *base_address + nt_headers->optional_header.address_of_entry_point;
 
-	auto mapped_image = std::make_shared<mapped_image_t>(std::string(name), *base_address, entry_point, image_buffer);
-
-	add_to_loaded_module_list(emulator, mapped_image, directory);
+	auto mapped_image = std::make_shared<kernel_image_t>(std::string(name), *base_address, entry_point, image_buffer);
 
 	const bool is_main_emulated_image = fix_imports;
+
+	collect_module_symbols(pe_image, *mapped_image, !is_main_emulated_image);
+
+	const bool is_ntoskrnl = name == "ntoskrnl.exe";
+
+	if (is_ntoskrnl)
+	{
+		if (const auto symbol = mapped_image->find_symbol("PsLoadedModuleList"))
+		{
+			ps_loaded_module_list = emulator_object_t<_LIST_ENTRY>::view_at(emulator, *symbol, "PsLoadedModuleList");
+		}
+	}
+
+	add_to_loaded_module_list(emulator, mapped_image, directory);
 
 	if (!is_main_emulated_image)
 	{
 		monitor_data_sections(emulator, mapped_image, pe_image);
 	}
 
-	collect_module_symbols(pe_image, *mapped_image, !is_main_emulated_image);
-
-	if (name == "ntoskrnl.exe")
+	if (is_ntoskrnl)
 	{
 		initialize_ntoskrnl_debugger_state(emulator, *mapped_image);
 

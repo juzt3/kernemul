@@ -1,7 +1,7 @@
 #include "nt_helpers.hpp"
 
 void redirect_function(const kernel::function_implementation_t& function_impl,
-	const mapped_image_t& mapped_image, const std::string_view name)
+	const kernel_image_t& mapped_image, const std::string_view name)
 {
 	const auto symbol_address = mapped_image.find_symbol(std::string(name));
 
@@ -14,7 +14,7 @@ void redirect_function(const kernel::function_implementation_t& function_impl,
 }
 
 void redirect_function(const std::function<void()>& function_impl,
-	const mapped_image_t& mapped_image, const std::string_view name)
+	const kernel_image_t& mapped_image, const std::string_view name)
 {
 	redirect_function(
 		kernel::function_implementation_t([function_impl](bool&) { function_impl(); }),

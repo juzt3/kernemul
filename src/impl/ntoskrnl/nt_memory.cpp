@@ -1,7 +1,7 @@
 #include "nt_helpers.hpp"
 
 void redirect_ntoskrnl_memory_functions(const std::shared_ptr<emulator_t>& emulator,
-	const mapped_image_t& mapped_image)
+	const kernel_image_t& mapped_image)
 {
 	const auto pool_allocate_handler = [emulator](const std::string_view caller_name)
 	{

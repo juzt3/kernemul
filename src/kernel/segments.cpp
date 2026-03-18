@@ -1,4 +1,5 @@
 #include "segments.hpp"
+#include "exception.hpp"
 #include "../emulator/object.hpp"
 #include "../impl/ntoskrnl/nt_helpers.hpp"
 #include "kernel.hpp"
@@ -161,7 +162,7 @@ void kernel::set_up_gdt(const std::shared_ptr<emulator_t>& emulator)
 		gdt_base, gdt_entries.size(), tss_address, tss_selector_value);
 }
 
-void kernel::set_up_idt(const std::shared_ptr<emulator_t>& emulator, const mapped_image_t& nt_image)
+void kernel::set_up_idt(const std::shared_ptr<emulator_t>& emulator, const kernel_image_t& nt_image)
 {
 	constexpr std::uint32_t handler_count = 256;
 	constexpr emulator_t::size_type idt_size = handler_count * sizeof(segment_descriptor_interrupt_gate_64);

@@ -207,6 +207,7 @@
     <ClCompile Include="src\kernel\kernel.cpp" />
     <ClCompile Include="src\kernel\kernel_string.cpp" />
     <ClCompile Include="src\kernel\image_loader.cpp" />
+    <ClCompile Include="src\kernel\process_loader.cpp" />
     <ClCompile Include="src\kernel\segments.cpp" />
     <ClCompile Include="src\main.cpp" />
   </ItemGroup>
@@ -286,6 +287,7 @@
     <ClInclude Include="src\kernel\kernel.hpp" />
     <ClInclude Include="src\kernel\kernel_string.hpp" />
     <ClInclude Include="src\kernel\image_loader.hpp" />
+    <ClInclude Include="src\kernel\process_loader.hpp" />
     <ClInclude Include="src\kernel\segments.hpp" />
     <ClInclude Include="src\kernel\kernel_def.hpp" />
     <ClInclude Include="src\util\util.hpp" />

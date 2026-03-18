@@ -9,10 +9,10 @@
 #include <string>
 
 void redirect_function(const kernel::function_implementation_t& function_impl,
-	const mapped_image_t& mapped_image, std::string_view name);
+	const kernel_image_t& mapped_image, std::string_view name);
 
 void redirect_function(const std::function<void()>& function_impl,
-	const mapped_image_t& mapped_image, std::string_view name);
+	const kernel_image_t& mapped_image, std::string_view name);
 
 void write_return_value(const std::shared_ptr<emulator_t>& emulator, std::uint64_t value);
 void write_nt_status(const std::shared_ptr<emulator_t>& emulator, std::uint32_t code);
@@ -32,28 +32,28 @@ std::string guest_vsprintf(const emulator_t& emulator, std::string_view format,
 	emulator_t::address_type va_list_address);
 
 void redirect_ntoskrnl_string_functions(const std::shared_ptr<emulator_t>& emulator,
-	const mapped_image_t& mapped_image);
+	const kernel_image_t& mapped_image);
 
 void redirect_ntoskrnl_memory_functions(const std::shared_ptr<emulator_t>& emulator,
-	const mapped_image_t& mapped_image);
+	const kernel_image_t& mapped_image);
 
 void redirect_ntoskrnl_time_functions(const std::shared_ptr<emulator_t>& emulator,
-	const mapped_image_t& mapped_image);
+	const kernel_image_t& mapped_image);
 
 void redirect_ntoskrnl_registry_functions(const std::shared_ptr<emulator_t>& emulator,
-	const mapped_image_t& mapped_image);
+	const kernel_image_t& mapped_image);
 
 void redirect_ntoskrnl_format_functions(const std::shared_ptr<emulator_t>& emulator,
-	const mapped_image_t& mapped_image);
+	const kernel_image_t& mapped_image);
 
 void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulator,
-	const mapped_image_t& mapped_image);
+	const kernel_image_t& mapped_image);
 
 void redirect_ntoskrnl_sysinfo_functions(const std::shared_ptr<emulator_t>& emulator,
-	const mapped_image_t& mapped_image);
+	const kernel_image_t& mapped_image);
 
 class filesystem_t;
 
 void redirect_ntoskrnl_file_functions(const std::shared_ptr<emulator_t>& emulator,
-	const mapped_image_t& mapped_image,
+	const kernel_image_t& mapped_image,
 	const std::shared_ptr<filesystem_t>& filesystem);

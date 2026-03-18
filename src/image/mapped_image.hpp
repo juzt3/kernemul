@@ -4,7 +4,7 @@
 #include "../kernel/kernel_def.hpp"
 #include <string>
 
-class mapped_image_t
+class kernel_image_t
 {
 public:
 	using string_type = std::string;
@@ -12,7 +12,7 @@ public:
 	using size_type = emulator_t::size_type;
 	using symbol_map_type = std::unordered_map<string_type, address_type>;
 
-	mapped_image_t(string_type name, const address_type base_address, const address_type entry_point, std::vector<std::uint8_t> buffer)
+	kernel_image_t(string_type name, const address_type base_address, const address_type entry_point, std::vector<std::uint8_t> buffer)
 			:	name_(std::move(name)),
 				base_address_(base_address),
 				entry_point_(entry_point),

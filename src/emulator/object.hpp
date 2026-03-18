@@ -81,7 +81,7 @@ public:
 
 	static emulator_object_t allocate(const std::shared_ptr<emulator_t>& emulator, const std::string& name = { })
 	{
-		const auto allocation = emulator->heap_allocate(sizeof(T), prot_read_write);
+		const auto allocation = emulator->heap_allocate(sizeof(T), prot_read_write, true);
 
 		if (!allocation)
 		{

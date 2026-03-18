@@ -4,6 +4,7 @@
 #include "kernel/kernel.hpp"
 #include "kernel/kernel_string.hpp"
 #include "kernel/image_loader.hpp"
+#include "kernel/process_loader.hpp"
 #include "kernel/segments.hpp"
 #include "config.hpp"
 
@@ -20,7 +21,7 @@ static void set_up_user_shared_data(const std::shared_ptr<emulator_t>& emulator)
 	kernel::user_shared_data = emulator_object_t<_KUSER_SHARED_DATA>::allocate_at(emulator, contents, 0xFFFFF78000000000);
 }
 
-static emulator_object_t<_DRIVER_OBJECT> set_up_driver_object(const std::shared_ptr<emulator_t>& emulator, const mapped_image_t& image)
+static emulator_object_t<_DRIVER_OBJECT> set_up_driver_object(const std::shared_ptr<emulator_t>& emulator, const kernel_image_t& image)
 {
 	_DRIVER_OBJECT contents = { };
 
@@ -40,11 +41,6 @@ static void set_up_driver_entry(const std::shared_ptr<emulator_t>& emulator)
 
 	emulator->write_register<x86::reg::rcx>(driver_object.address());
 	emulator->write_register<x86::reg::rdx>(registry_path.address());
-}
-
-static void set_up_ps_loaded_module_list(const std::shared_ptr<emulator_t>& emulator)
-{
-	kernel::ps_loaded_module_list = emulator_object_t<_LIST_ENTRY>::allocate(emulator, "PsLoadedModuleList");
 }
 
 static void set_up_stack(emulator_t& emulator)
@@ -96,16 +92,18 @@ std::int32_t main()
 		kernel::filesystem = std::make_shared<filesystem_t>();
 
 		set_up_stack(*emulator);
-		set_up_ps_loaded_module_list(emulator);
 		set_up_user_shared_data(emulator);
 
 		const auto nt_image = kernel::map_kernel_image(emulator, "ntoskrnl.exe", false);
 		kernel::map_kernel_image(emulator, "HAL.dll", false);
 		kernel::map_kernel_image(emulator, "CI.dll", false);
+		kernel::map_kernel_image(emulator, "kd.dll", false);
 		kernel::map_kernel_image(emulator, "cng.sys", false, L"\\SystemRoot\\System32\\drivers\\");
 		kernel::map_kernel_image(emulator, "FLTMGR.SYS", false, L"\\SystemRoot\\System32\\drivers\\");
 
 		kernel::emulated_module = kernel::map_kernel_image(emulator, EMULATED_MODULE_NAME, true, EMULATED_MODULE_DIRECTORY);
+
+		kernel::set_up_initial_system_process(emulator);
 
 		kernel::set_up_gdt(emulator);
 		kernel::set_up_segments(emulator);

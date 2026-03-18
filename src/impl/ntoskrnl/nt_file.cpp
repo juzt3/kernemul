@@ -327,7 +327,7 @@ static void iop_create_file(const std::shared_ptr<emulator_t>& emulator,
 }
 
 void redirect_ntoskrnl_file_functions(const std::shared_ptr<emulator_t>& emulator,
-	const mapped_image_t& mapped_image,
+	const kernel_image_t& mapped_image,
 	const std::shared_ptr<filesystem_t>& filesystem)
 {
 	redirect_function(
