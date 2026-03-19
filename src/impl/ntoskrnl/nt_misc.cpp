@@ -692,4 +692,49 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 		mapped_image,
 		"PsGetCurrentProcess"
 	);
+
+	redirect_function(
+		kernel::function_implementation_t([emulator](bool& skip_return)
+		{
+			const auto slist_head = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+
+			if ((slist_head & 0xF) != 0)
+			{
+				spdlog::warn("InitializeSListHead: unaligned address 0x{:X}, raising STATUS_DATATYPE_MISALIGNMENT", slist_head);
+
+				constexpr std::uint32_t status_datatype_misalignment = 0x80000002;
+				const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
+
+				kernel::handle_exception(emulator, rip, status_datatype_misalignment, slist_head);
+				skip_return = true;
+
+				return;
+			}
+
+			constexpr std::array<std::uint64_t, 2> zero = { 0, 0 };
+
+			emulator_err_t error = emulator->write_virtual_memory(slist_head, zero.data(), sizeof(zero));
+			error.throw_if("InitializeSListHead: zero header");
+
+			spdlog::info("InitializeSListHead called (header=0x{:X})", slist_head);
+		}),
+		mapped_image,
+		"InitializeSListHead"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto push_lock = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+
+			constexpr std::uint64_t zero = 0;
+
+			emulator_err_t error = emulator->write_virtual_memory(push_lock, &zero, sizeof(zero));
+			error.throw_if("ExInitializePushLock: zero lock");
+
+			spdlog::info("ExInitializePushLock called (lock=0x{:X})", push_lock);
+		},
+		mapped_image,
+		"ExInitializePushLock"
+	);
 }

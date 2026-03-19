@@ -9,13 +9,13 @@ void redirect_ntoskrnl_memory_functions(const std::shared_ptr<emulator_t>& emula
 		const auto size = emulator->read_register<x86::reg::rdx, std::uint64_t>();
 		const auto tag = emulator->read_register<x86::reg::r8, std::uint32_t>();
 
-		spdlog::info("{} called (type={}, size=0x{:X}, tag=0x{:X})", caller_name, pool_type, size, tag);
-
 		const auto allocation = emulator->heap_allocate(size, prot_read_write, true);
 
 		const emulator_err_t error = allocation.error_or({});
 
 		error.throw_if("pool heap allocation");
+
+		spdlog::info("{} called (type={}, size=0x{:X}, tag=0x{:X}) -> 0x{:X}", caller_name, pool_type, size, tag, *allocation);
 
 		emulator->write_register<x86::reg::rax>(*allocation);
 	};
@@ -27,23 +27,12 @@ void redirect_ntoskrnl_memory_functions(const std::shared_ptr<emulator_t>& emula
 	);
 
 	redirect_function(
-		[emulator]
+		[pool_allocate_handler, emulator]
 		{
-			const auto pool_type = emulator->read_register<x86::reg::rcx, std::uint32_t>();
-			const auto size = emulator->read_register<x86::reg::rdx, std::uint64_t>();
+			constexpr std::uint64_t default_tag = 0x656E6F4E;
+			emulator->write_register<x86::reg::r8>(default_tag);
 
-			spdlog::info("ExAllocatePool called (type={}, size=0x{:X})", pool_type, size);
-
-			constexpr std::uint32_t default_tag = 0x656E6F4E;
-			emulator->write_register<x86::reg::r8>(static_cast<std::uint64_t>(default_tag));
-
-			const auto allocation = emulator->heap_allocate(size, prot_read_write, true);
-
-			const emulator_err_t error = allocation.error_or({});
-
-			error.throw_if("pool heap allocation");
-
-			emulator->write_register<x86::reg::rax>(*allocation);
+			pool_allocate_handler("ExAllocatePool");
 		},
 		mapped_image,
 		"ExAllocatePool"
@@ -219,5 +208,52 @@ void redirect_ntoskrnl_memory_functions(const std::shared_ptr<emulator_t>& emula
 		},
 		mapped_image,
 		"MmGetPhysicalMemoryRanges"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto size = emulator->read_register<x86::reg::rcx, std::uint64_t>();
+			const auto lowest = emulator->read_register<x86::reg::rdx, std::uint64_t>();
+			const auto highest = emulator->read_register<x86::reg::r8, std::uint64_t>();
+			const auto boundary = emulator->read_register<x86::reg::r9, std::uint64_t>();
+
+			const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
+			std::uint32_t cache_type = 0;
+			static_cast<void>(emulator->read_virtual_memory(rsp + 0x28, &cache_type, sizeof(cache_type)));
+
+			const auto allocation = emulator->heap_allocate(size, prot_read_write, true);
+
+			const emulator_err_t error = allocation.error_or({});
+			error.throw_if("contiguous memory allocation");
+
+			spdlog::info("MmAllocateContiguousMemorySpecifyCache called (size=0x{:X}, lowest=0x{:X}, highest=0x{:X}, boundary=0x{:X}, cache_type={}) -> 0x{:X}",
+				size, lowest, highest, boundary, cache_type, *allocation);
+
+			write_return_value(emulator, *allocation);
+		},
+		mapped_image,
+		"MmAllocateContiguousMemorySpecifyCache"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto virtual_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+
+			const auto physical_address = emulator->translate_virtual_address(virtual_address);
+
+			if (!physical_address)
+			{
+				throw std::runtime_error(
+					std::format("MmGetPhysicalAddress: invalid virtual address 0x{:X}", virtual_address));
+			}
+
+			spdlog::info("MmGetPhysicalAddress called (virtual=0x{:X}) -> 0x{:X}", virtual_address, *physical_address);
+
+			write_return_value(emulator, *physical_address);
+		},
+		mapped_image,
+		"MmGetPhysicalAddress"
 	);
 }
