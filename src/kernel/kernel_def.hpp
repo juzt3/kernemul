@@ -1899,3 +1899,9 @@ struct _ETHREAD
     ULONG LastSoftParkElectionRunTime;                                      //0x8f4
     ULONGLONG LastSoftParkElectionGeneration;                               //0x8f8
 };
+
+struct _PHYSICAL_MEMORY_RANGE
+{
+    ULONGLONG BaseAddress;
+    LARGE_INTEGER NumberOfBytes;
+};

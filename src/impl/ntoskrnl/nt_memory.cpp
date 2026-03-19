@@ -183,4 +183,41 @@ void redirect_ntoskrnl_memory_functions(const std::shared_ptr<emulator_t>& emula
 		mapped_image,
 		"MmGetSystemRoutineAddress"
 	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto ranges = emulator->physical_memory_ranges();
+
+			std::vector<_PHYSICAL_MEMORY_RANGE> guest_ranges;
+			guest_ranges.reserve(ranges.size() + 1);
+
+			for (const auto& range : ranges)
+			{
+				_PHYSICAL_MEMORY_RANGE entry = { };
+				entry.BaseAddress = range.physical_address;
+				entry.NumberOfBytes.QuadPart = static_cast<LONGLONG>(range.size);
+				guest_ranges.push_back(entry);
+			}
+
+			constexpr _PHYSICAL_MEMORY_RANGE terminator = { };
+			guest_ranges.push_back(terminator);
+
+			const auto buffer_size = guest_ranges.size() * sizeof(_PHYSICAL_MEMORY_RANGE);
+			const auto allocation = emulator->heap_allocate(buffer_size, prot_read_write, true);
+
+			emulator_err_t error = allocation.error_or({});
+			error.throw_if("allocate MmGetPhysicalMemoryRanges buffer");
+
+			error = emulator->write_virtual_memory(*allocation, guest_ranges.data(), buffer_size);
+			error.throw_if("write MmGetPhysicalMemoryRanges buffer");
+
+			spdlog::info("MmGetPhysicalMemoryRanges called ({} ranges, buffer=0x{:X})",
+				ranges.size(), *allocation);
+
+			write_return_value(emulator, *allocation);
+		},
+		mapped_image,
+		"MmGetPhysicalMemoryRanges"
+	);
 }

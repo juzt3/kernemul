@@ -1,3 +1,5 @@
+#include <ranges>
+
 #include "emulator.hpp"
 #include <ia32-doc/ia32.hpp>
 #include <spdlog/spdlog.h>
@@ -176,6 +178,52 @@ std::optional<emulator_t::address_type> emulator_t::translate_virtual_address(co
 	};
 
 	return mapping.physical_address + virtual_address.page_offset;
+}
+
+std::vector<physical_memory_range_t> emulator_t::physical_memory_ranges() const
+{
+	// todo: include page table entry allocations in here
+
+	std::vector<std::uint64_t> physical_pages(virtual_page_mappings_.size());
+
+	for (const auto& mapping : virtual_page_mappings_ | std::views::values)
+	{
+		physical_pages.push_back(mapping.physical_address);
+	}
+
+	std::ranges::sort(physical_pages);
+
+	const auto unique_end = std::ranges::unique(physical_pages);
+	physical_pages.erase(unique_end.begin(), unique_end.end());
+
+	std::vector<physical_memory_range_t> ranges;
+
+	if (physical_pages.empty())
+	{
+		return ranges;
+	}
+
+	auto current_start = physical_pages[0];
+	auto current_size = static_cast<std::uint64_t>(page_size);
+
+	for (std::size_t i = 1; i < physical_pages.size(); ++i)
+	{
+		if (physical_pages[i] == current_start + current_size)
+		{
+			current_size += page_size;
+		}
+		else
+		{
+			ranges.emplace_back(current_start, current_size);
+
+			current_start = physical_pages[i];
+			current_size = page_size;
+		}
+	}
+
+	ranges.emplace_back(current_start, current_size);
+
+	return ranges;
 }
 
 std::expected<emulator_t::address_type, emulator_err_t> emulator_t::heap_allocate(

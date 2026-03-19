@@ -205,6 +205,12 @@ struct virtual_memory_mapping_t
 	std::uint64_t physical_address;
 };
 
+struct physical_memory_range_t
+{
+	std::uint64_t physical_address;
+	std::uint64_t size;
+};
+
 class emulator_t : public std::enable_shared_from_this<emulator_t>
 {
 public:
@@ -248,6 +254,8 @@ public:
 	                                                 protection_type protection);
 
 	std::optional<address_type> translate_virtual_address(address_type address);
+
+	[[nodiscard]] std::vector<physical_memory_range_t> physical_memory_ranges() const;
 
 	[[nodiscard]] std::expected<address_type, emulator_err_t> heap_allocate(
 		size_type size, protection_type protection, bool page_aligned = false);
