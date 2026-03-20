@@ -48,7 +48,8 @@ void kernel::set_up_initial_system_process(const std::shared_ptr<emulator_t>& em
 
 	constexpr process_t::id_type system_process_id = 4;
 
-	const auto system_process = create_process(emulator, system_process_id, ntoskrnl->base_address());
+	// todo: check image file name for system process (id=4)
+	const auto system_process = create_process(emulator, system_process_id, "System", ntoskrnl->base_address());
 
 	if (const auto symbol = ntoskrnl->find_symbol("PsInitialSystemProcess"))
 	{
@@ -60,16 +61,22 @@ void kernel::set_up_initial_system_process(const std::shared_ptr<emulator_t>& em
 }
 
 std::shared_ptr<process_t> kernel::create_process(const std::shared_ptr<emulator_t>& emulator,
-	const process_t::id_type process_id, const emulator_t::address_type section_base_address)
+	const process_t::id_type process_id, const std::string_view image_name,
+	const emulator_t::address_type section_base_address)
 {
-	const auto name = std::format("EPROCESS_{}", process_id);
+	const auto object_name = std::format("EPROCESS_{}_{}", process_id, image_name);
 
 	_EPROCESS contents = { };
 
 	contents.UniqueProcessId = reinterpret_cast<void*>(process_id);
 	contents.SectionBaseAddress = reinterpret_cast<void*>(section_base_address);
 
-	auto object = emulator_object_t<_EPROCESS>::allocate(emulator, contents, name);
+	constexpr std::size_t max_image_name = sizeof(contents.ImageFileName) - 1;
+	const auto copy_length = std::min(image_name.size(), max_image_name);
+
+	std::memcpy(contents.ImageFileName, image_name.data(), copy_length);
+
+	auto object = emulator_object_t<_EPROCESS>::allocate(emulator, contents, object_name);
 
 	auto process = std::make_shared<process_t>(process_id, section_base_address, std::move(object));
 

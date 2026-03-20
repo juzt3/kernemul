@@ -1905,3 +1905,57 @@ struct _PHYSICAL_MEMORY_RANGE
     ULONGLONG BaseAddress;
     LARGE_INTEGER NumberOfBytes;
 };
+
+typedef void (*POB_PRE_OPERATION_CALLBACK)(PVOID, PVOID);
+typedef void (*POB_POST_OPERATION_CALLBACK)(PVOID, PVOID);
+
+typedef ULONG OB_OPERATION;
+
+struct _OB_OPERATION_REGISTRATION
+{
+    PVOID*                      ObjectType;                                 //0x0
+    OB_OPERATION                Operations;                                 //0x8
+    POB_PRE_OPERATION_CALLBACK  PreOperation;                               //0x10
+    POB_POST_OPERATION_CALLBACK PostOperation;                              //0x18
+};
+
+struct _OB_CALLBACK_REGISTRATION
+{
+    USHORT                          Version;                                //0x0
+    USHORT                          OperationRegistrationCount;             //0x2
+    UNICODE_STRING                  Altitude;                               //0x8
+    PVOID                           RegistrationContext;                    //0x18
+    _OB_OPERATION_REGISTRATION*     OperationRegistration;                  //0x20
+};
+
+struct _ANSI_STRING
+{
+    USHORT Length;                                                           //0x0
+    USHORT MaximumLength;                                                   //0x2
+    PCHAR  Buffer;                                                          //0x8
+};
+
+//0x78 bytes (sizeof)
+struct _OBJECT_TYPE_INITIALIZER
+{
+    UCHAR padding[0x78];
+};
+
+//0xd8 bytes (sizeof)
+struct _OBJECT_TYPE
+{
+    struct _LIST_ENTRY TypeList;                                             //0x0
+    struct _UNICODE_STRING Name;                                            //0x10
+    VOID* DefaultObject;                                                    //0x20
+    UCHAR Index;                                                            //0x28
+    ULONG TotalNumberOfObjects;                                             //0x2c
+    ULONG TotalNumberOfHandles;                                             //0x30
+    ULONG HighWaterNumberOfObjects;                                         //0x34
+    ULONG HighWaterNumberOfHandles;                                         //0x38
+    UCHAR padding[4];                                                       //0x3c
+    struct _OBJECT_TYPE_INITIALIZER TypeInfo;                               //0x40
+    ULONGLONG TypeLock;                                                     //0xb8
+    ULONG Key;                                                              //0xc0
+    UCHAR padding2[4];                                                      //0xc4
+    struct _LIST_ENTRY CallbackList;                                        //0xc8
+};

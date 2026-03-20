@@ -1,5 +1,45 @@
 #include "nt_helpers.hpp"
 
+static emulator_object_t<_OBJECT_TYPE> create_object_type(const std::shared_ptr<emulator_t>& emulator,
+	const std::wstring_view name, const std::string& object_name)
+{
+	auto object = emulator_object_t<_OBJECT_TYPE>::allocate(emulator, object_name);
+
+	const auto unicode_name = kernel::init_unicode_string(*emulator, name);
+	emulator_err_t error = emulator->write_virtual_memory(
+		object.address() + offsetof(_OBJECT_TYPE, Name), &unicode_name, sizeof(unicode_name));
+	error.throw_if("write _OBJECT_TYPE.Name");
+
+	spdlog::info("created object type '{}' at 0x{:X}", object_name, object.address());
+
+	return object;
+}
+
+void initialize_ntoskrnl_object_types(const std::shared_ptr<emulator_t>& emulator,
+	const kernel_image_t& mapped_image)
+{
+	auto process_type = create_object_type(emulator, L"Process", "PsProcessType");
+	auto thread_type = create_object_type(emulator, L"Thread", "PsThreadType");
+
+	if (const auto symbol = mapped_image.find_symbol("PsProcessType"))
+	{
+		const auto address = process_type.address();
+		emulator_err_t error = emulator->write_virtual_memory(*symbol, &address, sizeof(address));
+		error.throw_if("write PsProcessType");
+
+		spdlog::info("set PsProcessType (0x{:X}) to 0x{:X}", *symbol, address);
+	}
+
+	if (const auto symbol = mapped_image.find_symbol("PsThreadType"))
+	{
+		const auto address = thread_type.address();
+		emulator_err_t error = emulator->write_virtual_memory(*symbol, &address, sizeof(address));
+		error.throw_if("write PsThreadType");
+
+		spdlog::info("set PsThreadType (0x{:X}) to 0x{:X}", *symbol, address);
+	}
+}
+
 void redirect_ntoskrnl_object_functions(const std::shared_ptr<emulator_t>& emulator,
 	const kernel_image_t& mapped_image)
 {
@@ -117,5 +157,73 @@ void redirect_ntoskrnl_object_functions(const std::shared_ptr<emulator_t>& emula
 		},
 		mapped_image,
 		"ZwClose"
+	);
+
+	// todo: actually register object callbacks
+	redirect_function(
+		[emulator]
+		{
+			const auto registration_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto handle_out = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+
+			_OB_CALLBACK_REGISTRATION registration = { };
+			emulator_err_t error = emulator->read_virtual_memory(registration_address, &registration, sizeof(registration));
+			error.throw_if("ObRegisterCallbacks: read registration");
+
+			const auto altitude_buffer = reinterpret_cast<emulator_t::address_type>(registration.Altitude.Buffer);
+			std::string altitude_string;
+
+			if (altitude_buffer && registration.Altitude.Length)
+			{
+				altitude_string = util::narrow_wstring(kernel::read_guest_wstring(*emulator, altitude_buffer));
+			}
+
+			spdlog::info("ObRegisterCallbacks called (version={}, altitude='{}', operation_count={})",
+				registration.Version, altitude_string, registration.OperationRegistrationCount);
+
+			const auto op_array_address = reinterpret_cast<emulator_t::address_type>(registration.OperationRegistration);
+
+			for (std::uint16_t i = 0; i < registration.OperationRegistrationCount; ++i)
+			{
+				_OB_OPERATION_REGISTRATION op = { };
+				error = emulator->read_virtual_memory(
+					op_array_address + i * sizeof(_OB_OPERATION_REGISTRATION), &op, sizeof(op));
+				error.throw_if("ObRegisterCallbacks: read operation registration");
+
+				const auto object_type_ptr = reinterpret_cast<emulator_t::address_type>(op.ObjectType);
+
+				std::string type_name = std::format("0x{:X}", object_type_ptr);
+
+				if (const auto ntoskrnl = kernel::find_module("ntoskrnl.exe"))
+				{
+					if (const auto symbol = ntoskrnl->find_symbol_by_address(object_type_ptr))
+					{
+						if (symbol->second == object_type_ptr)
+						{
+							type_name = symbol->first;
+						}
+					}
+				}
+
+				spdlog::info("  operation[{}]: type={}, operations=0x{:X}, pre=0x{:X}, post=0x{:X}",
+					i, type_name, op.Operations,
+					reinterpret_cast<emulator_t::address_type>(op.PreOperation),
+					reinterpret_cast<emulator_t::address_type>(op.PostOperation));
+			}
+
+			if (handle_out)
+			{
+				const auto dummy_handle = emulator->heap_allocate(8, prot_read_write, true);
+				error = dummy_handle.error_or({});
+				error.throw_if("allocate ObRegisterCallbacks handle");
+
+				error = emulator->write_virtual_memory(handle_out, &*dummy_handle, sizeof(*dummy_handle));
+				error.throw_if("write ObRegisterCallbacks handle");
+			}
+
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"ObRegisterCallbacks"
 	);
 }

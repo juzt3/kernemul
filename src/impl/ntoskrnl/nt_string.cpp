@@ -475,4 +475,125 @@ void redirect_ntoskrnl_string_functions(const std::shared_ptr<emulator_t>& emula
 		mapped_image,
 		"tolower"
 	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto destination_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto source_address = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+
+			_ANSI_STRING destination = { };
+
+			destination.Buffer = reinterpret_cast<PCHAR>(source_address);
+
+			if (source_address)
+			{
+				const auto source_string = kernel::read_guest_string(*emulator, source_address);
+				auto length = static_cast<std::uint64_t>(source_string.size());
+
+				if (length >= 0xFFFF)
+				{
+					length = (length & ~static_cast<std::uint64_t>(0xFFFF)) | 0xFFFE;
+				}
+
+				destination.Length = static_cast<USHORT>(length);
+				destination.MaximumLength = static_cast<USHORT>(length + 1);
+
+				spdlog::info("RtlInitAnsiString called (destination=0x{:X}, source='{}')",
+					destination_address, source_string);
+			}
+			else
+			{
+				spdlog::info("RtlInitAnsiString called (destination=0x{:X}, source=null)", destination_address);
+			}
+
+			emulator_err_t error = emulator->write_virtual_memory(destination_address, &destination, sizeof(destination));
+			error.throw_if("RtlInitAnsiString: write destination");
+		},
+		mapped_image,
+		"RtlInitAnsiString"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto destination_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto source_address = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+			const auto allocate_destination = emulator->read_register<x86::reg::r8, std::uint8_t>();
+
+			_ANSI_STRING source = { };
+			emulator_err_t error = emulator->read_virtual_memory(source_address, &source, sizeof(source));
+			error.throw_if("RtlAnsiStringToUnicodeString: read source");
+
+			const auto source_buffer = reinterpret_cast<emulator_t::address_type>(source.Buffer);
+
+			std::string ansi_string;
+
+			if (source_buffer && source.Length)
+			{
+				ansi_string.resize(source.Length);
+				error = emulator->read_virtual_memory(source_buffer, ansi_string.data(), source.Length);
+				error.throw_if("RtlAnsiStringToUnicodeString: read source buffer");
+			}
+
+			spdlog::info("RtlAnsiStringToUnicodeString called (dest=0x{:X}, source='{}', allocate={})",
+				destination_address, ansi_string, allocate_destination);
+
+			std::wstring wide_string(ansi_string.begin(), ansi_string.end());
+
+			const auto unicode_byte_length = static_cast<std::uint32_t>(wide_string.size() * sizeof(wchar_t));
+			const auto unicode_size_with_null = unicode_byte_length + sizeof(wchar_t);
+
+			if (unicode_size_with_null > 0xFFFF)
+			{
+				constexpr std::uint32_t status_invalid_parameter_2 = 0xC00000F0;
+				write_nt_status(emulator, status_invalid_parameter_2);
+				return;
+			}
+
+			UNICODE_STRING destination = { };
+			destination.Length = static_cast<USHORT>(unicode_byte_length);
+
+			if (allocate_destination)
+			{
+				destination.MaximumLength = static_cast<USHORT>(unicode_size_with_null);
+
+				const auto allocation = emulator->heap_allocate(unicode_size_with_null, prot_read_write, true);
+				error = allocation.error_or({});
+				error.throw_if("RtlAnsiStringToUnicodeString: allocate buffer");
+
+				destination.Buffer = reinterpret_cast<PWSTR>(*allocation);
+			}
+			else
+			{
+				error = emulator->read_virtual_memory(destination_address, &destination, sizeof(destination));
+				error.throw_if("RtlAnsiStringToUnicodeString: read existing destination");
+
+				if (destination.MaximumLength < unicode_size_with_null)
+				{
+					constexpr std::uint32_t status_buffer_overflow = 0x80000005;
+					write_nt_status(emulator, status_buffer_overflow);
+					return;
+				}
+
+				destination.Length = static_cast<USHORT>(unicode_byte_length);
+			}
+
+			const auto buffer_address = reinterpret_cast<emulator_t::address_type>(destination.Buffer);
+
+			error = emulator->write_virtual_memory(buffer_address, wide_string.data(), unicode_byte_length);
+			error.throw_if("RtlAnsiStringToUnicodeString: write wide string");
+
+			constexpr wchar_t null_terminator = 0;
+			error = emulator->write_virtual_memory(buffer_address + unicode_byte_length, &null_terminator, sizeof(null_terminator));
+			error.throw_if("RtlAnsiStringToUnicodeString: write null terminator");
+
+			error = emulator->write_virtual_memory(destination_address, &destination, sizeof(destination));
+			error.throw_if("RtlAnsiStringToUnicodeString: write destination");
+
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"RtlAnsiStringToUnicodeString"
+	);
 }

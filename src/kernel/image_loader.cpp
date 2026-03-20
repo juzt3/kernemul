@@ -3,6 +3,7 @@
 #include "../image/pdb/pdb_file.hpp"
 #include "../impl/ntoskrnl/nt_debugger.hpp"
 #include "../impl/ntoskrnl/nt_helpers.hpp"
+#include "../impl/ntoskrnl/nt_object.hpp"
 #include "../filesystem/filesystem.hpp"
 #include "kernel.hpp"
 #include "kernel_string.hpp"
@@ -329,6 +330,7 @@ std::shared_ptr<kernel_image_t> kernel::map_kernel_image(const std::shared_ptr<e
 	if (is_ntoskrnl)
 	{
 		initialize_ntoskrnl_debugger_state(emulator, *mapped_image);
+		initialize_ntoskrnl_object_types(emulator, *mapped_image);
 
 		redirect_ntoskrnl_string_functions(emulator, *mapped_image);
 		redirect_ntoskrnl_memory_functions(emulator, *mapped_image);

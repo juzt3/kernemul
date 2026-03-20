@@ -256,6 +256,27 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 		"ExCreateCallback"
 	);
 
+	// todo: actually register the callback and invoke it on events
+	redirect_function(
+		[emulator]
+		{
+			const auto callback_object = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto callback_function = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+			const auto callback_context = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
+
+			spdlog::info("ExRegisterCallback called (object=0x{:X}, function=0x{:X}, context=0x{:X})",
+				callback_object, callback_function, callback_context);
+
+			const auto handle = emulator->heap_allocate(8, prot_read_write, true);
+			emulator_err_t error = handle.error_or({});
+			error.throw_if("allocate ExRegisterCallback handle");
+
+			write_return_value(emulator, *handle);
+		},
+		mapped_image,
+		"ExRegisterCallback"
+	);
+
 	// todo: wake waiting threads when signalstate transitions from 0 to 1
 	redirect_function(
 		[emulator]
@@ -736,5 +757,67 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 		},
 		mapped_image,
 		"ExInitializePushLock"
+	);
+
+	// todo: actually track load image notify callbacks
+	redirect_function(
+		[emulator]
+		{
+			const auto routine = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+
+			spdlog::info("PsSetLoadImageNotifyRoutine called (routine=0x{:X})", routine);
+
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"PsSetLoadImageNotifyRoutine"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto process_id = emulator->read_register<x86::reg::rcx, std::uint64_t>();
+			const auto process_out = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+
+			spdlog::info("PsLookupProcessByProcessId called (pid={}, out=0x{:X})", process_id, process_out);
+
+			for (const auto& process : kernel::process_entries)
+			{
+				if (process->id() == process_id)
+				{
+					const auto address = process->address();
+
+					emulator_err_t error = emulator->write_virtual_memory(process_out, &address, sizeof(address));
+					error.throw_if("PsLookupProcessByProcessId: write process");
+
+					spdlog::info("PsLookupProcessByProcessId: found process at 0x{:X}", address);
+
+					write_nt_success(emulator);
+					return;
+				}
+			}
+
+			spdlog::warn("PsLookupProcessByProcessId: pid {} not found", process_id);
+
+			constexpr std::uint32_t status_invalid_cid = 0xC000000B;
+			write_nt_status(emulator, status_invalid_cid);
+		},
+		mapped_image,
+		"PsLookupProcessByProcessId"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto process_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto image_file_name_address = process_address + offsetof(_EPROCESS, ImageFileName);
+
+			spdlog::info("PsGetProcessImageFileName called (process=0x{:X}) -> 0x{:X}",
+				process_address, image_file_name_address);
+
+			write_return_value(emulator, image_file_name_address);
+		},
+		mapped_image,
+		"PsGetProcessImageFileName"
 	);
 }

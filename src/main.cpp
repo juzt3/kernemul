@@ -129,64 +129,81 @@ std::int32_t main()
 		spdlog::info("mapped ntoskrnl at 0x{:X}", nt_image->base_address());
 		spdlog::info("mapped image at 0x{:X}", base_address);
 
-		emulator_err_t error = emulator->hook_basic_block(
-			[emulator, &nt_image]()
+		const auto redirect_callback = [emulator]()
+		{
+			const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
+			const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
+
+			emulator_t::address_type return_address = 0;
+
+			const emulator_err_t read_error = emulator->read_virtual_memory(rsp, &return_address, sizeof(return_address));
+
+			read_error.throw_if("read from stack");
+
+			if (const auto redirected_function = kernel::find_redirected_function(rip))
 			{
-				const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
-				const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
+				spdlog::info("redirecting function at 0x{:X} (return address=0x{:X}) rcx=0x{:X}", rip, return_address, emulator->read_register<x86::reg::rcx, emulator_t::address_type>());
 
-				emulator_t::address_type return_address = 0;
+				bool skip_return = false;
 
-				const emulator_err_t read_error = emulator->read_virtual_memory(rsp, &return_address, sizeof(return_address));
+				(*redirected_function)(skip_return);
 
-				read_error.throw_if("read from stack");
-
-				if (const auto redirected_function = kernel::find_redirected_function(rip))
+				if (!skip_return)
 				{
-					spdlog::info("redirecting function at 0x{:X} (return address=0x{:X}) rcx=0x{:X}", rip, return_address, emulator->read_register<x86::reg::rcx, emulator_t::address_type>());
+					emulator->write_register<x86::reg::rsp>(rsp + 8);
+					emulator->write_register<x86::reg::rip>(return_address);
+				}
+			}
+			else
+			{
+				const auto module = kernel::find_module_from_rip(rip);
 
-					bool skip_return = false;
+				std::string symbol_name;
 
-					(*redirected_function)(skip_return);
-
-					if (!skip_return)
+				if (module)
+				{
+					if (const auto symbol = module->find_symbol_by_address(rip))
 					{
-						emulator->write_register<x86::reg::rsp>(rsp + 8);
-						emulator->write_register<x86::reg::rip>(return_address);
+						if (symbol->second == rip)
+						{
+							symbol_name = symbol->first;
+						}
 					}
+				}
+
+				if (!symbol_name.empty())
+				{
+					spdlog::error("unimplemented function '{}' (address=0x{:X}, return address=0x{:X})", symbol_name, rip, return_address);
 				}
 				else
 				{
-					std::string symbol_name;
-
-					for (const auto& [name, address] : nt_image->symbols())
-					{
-						if (address == rip)
-						{
-							symbol_name = name;
-							break;
-						}
-					}
-
-					if (!symbol_name.empty())
-					{
-						spdlog::error("unimplemented function '{}' (address=0x{:X}, return address=0x{:X})", symbol_name, rip, return_address);
-					}
-					else
-					{
-						spdlog::error("unimplemented non-symbol function (address=0x{:X}, return address=0x{:X})", rip, return_address);
-					}
-
-					emulator->write_register<x86::reg::rip, emulator_t::address_type>(-1);
+					const auto module_name = module ? module->name() : "unknown";
+					spdlog::error("unimplemented function in '{}' (address=0x{:X}, return address=0x{:X})", module_name, rip, return_address);
 				}
-			},
-			nt_image->base_address(),
-			nt_image->base_address() + nt_image->size()
-		).error_or({});
-		 
-		error.throw_if("basic block hook attach");
 
-		error = emulator->hook_instruction(x86::insn::cpuid,
+				emulator->write_register<x86::reg::rip, emulator_t::address_type>(-1);
+			}
+		};
+
+		const auto hook_module = [&](const std::shared_ptr<kernel_image_t>& image)
+		{
+			emulator_err_t hook_error = emulator->hook_basic_block(
+				redirect_callback,
+				image->base_address(),
+				image->base_address() + image->size()
+			).error_or({});
+
+			hook_error.throw_if("basic block hook attach");
+		};
+
+		hook_module(nt_image);
+
+		if (const auto hal_image = kernel::find_module("HAL.dll"))
+		{
+			hook_module(hal_image);
+		}
+
+		emulator_err_t error = emulator->hook_instruction(x86::insn::cpuid,
 			[emulator]()
 			{
 				const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();

@@ -55,5 +55,6 @@ namespace kernel
 	void set_up_initial_system_process(const std::shared_ptr<emulator_t>& emulator);
 
 	std::shared_ptr<process_t> create_process(const std::shared_ptr<emulator_t>& emulator,
-		process_t::id_type process_id, emulator_t::address_type section_base_address = 0);
+		process_t::id_type process_id, std::string_view image_name = {},
+		emulator_t::address_type section_base_address = 0);
 }
