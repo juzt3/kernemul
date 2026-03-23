@@ -10,8 +10,6 @@ static emulator_object_t<_OBJECT_TYPE> create_object_type(const std::shared_ptr<
 		object.address() + offsetof(_OBJECT_TYPE, Name), &unicode_name, sizeof(unicode_name));
 	error.throw_if("write _OBJECT_TYPE.Name");
 
-	spdlog::info("created object type '{}' at 0x{:X}", object_name, object.address());
-
 	return object;
 }
 
@@ -26,8 +24,6 @@ void initialize_ntoskrnl_object_types(const std::shared_ptr<emulator_t>& emulato
 		const auto address = process_type.address();
 		emulator_err_t error = emulator->write_virtual_memory(*symbol, &address, sizeof(address));
 		error.throw_if("write PsProcessType");
-
-		spdlog::info("set PsProcessType (0x{:X}) to 0x{:X}", *symbol, address);
 	}
 
 	if (const auto symbol = mapped_image.find_symbol("PsThreadType"))
@@ -35,8 +31,6 @@ void initialize_ntoskrnl_object_types(const std::shared_ptr<emulator_t>& emulato
 		const auto address = thread_type.address();
 		emulator_err_t error = emulator->write_virtual_memory(*symbol, &address, sizeof(address));
 		error.throw_if("write PsThreadType");
-
-		spdlog::info("set PsThreadType (0x{:X}) to 0x{:X}", *symbol, address);
 	}
 }
 

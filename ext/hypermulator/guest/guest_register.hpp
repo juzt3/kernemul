@@ -66,6 +66,11 @@ namespace hm
 		constexpr guest_register_t efer(WHvX64RegisterEfer, 8);
 		constexpr guest_register_t kernel_gs_base(WHvX64RegisterKernelGsBase, 8);
 
+		constexpr guest_register_t star(WHvX64RegisterStar, 8);
+		constexpr guest_register_t lstar(WHvX64RegisterLstar, 8);
+		constexpr guest_register_t cstar(WHvX64RegisterCstar, 8);
+		constexpr guest_register_t sfmask(WHvX64RegisterSfmask, 8);
+
 		constexpr guest_register_t cr0(WHvX64RegisterCr0, 8);
 		constexpr guest_register_t xcr0(WHvX64RegisterXCr0, 8);
 		constexpr guest_register_t cr2(WHvX64RegisterCr2, 8);

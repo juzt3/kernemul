@@ -191,6 +191,40 @@ emulator_err_t hypermulator_t::write_segment(const x86::segment_reg seg, const u
 	return emulator_err_t{ backend_->write_register(guest_reg, &segment, sizeof(segment)) };
 }
 
+static hm::guest_register_t msr_to_hm_reg(const x86::msr msr)
+{
+	switch (msr)
+	{
+	case x86::msr::efer:   return hm::reg::efer;
+	case x86::msr::star:   return hm::reg::star;
+	case x86::msr::lstar:  return hm::reg::lstar;
+	case x86::msr::cstar:  return hm::reg::cstar;
+	case x86::msr::sfmask: return hm::reg::sfmask;
+	}
+
+	throw std::runtime_error("unsupported msr");
+}
+
+std::expected<emulator_t::msr_value_type, emulator_err_t> hypermulator_t::read_msr(const x86::msr msr) const
+{
+	const auto reg = msr_to_hm_reg(msr);
+
+	msr_value_type value = 0;
+
+	if (!backend_->read_register(reg, &value, sizeof(value)))
+	{
+		return std::unexpected(emulator_err_t{ false });
+	}
+
+	return value;
+}
+
+emulator_err_t hypermulator_t::write_msr(const x86::msr msr, const msr_value_type value)
+{
+	const auto reg = msr_to_hm_reg(msr);
+	return emulator_err_t{ backend_->write_register(reg, &value, sizeof(value)) };
+}
+
 std::expected<emulator_t::hook_type, emulator_err_t> hypermulator_t::hook_instruction(
 	const x86::insn instruction, const emulator_hook_t::instruction_callback& callback,
 	const address_type start_address,

@@ -108,7 +108,11 @@ namespace x86
 
 	enum class msr : std::uint32_t
 	{
-		efer = 0xC0000080
+		efer = 0xC0000080,
+		star = 0xC0000081,
+		lstar = 0xC0000082,
+		cstar = 0xC0000083,
+		sfmask = 0xC0000084,
 	};
 
 	enum class segment_reg : std::uint8_t
@@ -154,6 +158,8 @@ public:
 	using instruction_callback = std::function<bool()>; // returns true = instruction should be skipped
 
 	using callback_type = std::variant<invalid_memory_callback, memory_access_callback, code_callback, instruction_callback>;
+
+	emulator_hook_t() = default;
 
 	explicit emulator_hook_t(callback_type callback)
 			:	callback_(std::move(callback)) { }
@@ -267,6 +273,11 @@ public:
 	[[nodiscard]] virtual emulator_err_t write_gdt(address_type base, size_type limit) = 0;
 	[[nodiscard]] virtual emulator_err_t write_tr(uint16_t selector, address_type base, size_type limit, uint16_t attributes) = 0;
 	[[nodiscard]] virtual emulator_err_t write_segment(x86::segment_reg seg, uint16_t selector, address_type base, uint32_t limit, uint16_t attributes) = 0;
+
+	using msr_value_type = std::uint64_t;
+
+	[[nodiscard]] virtual std::expected<msr_value_type, emulator_err_t> read_msr(x86::msr msr) const = 0;
+	[[nodiscard]] virtual emulator_err_t write_msr(x86::msr msr, msr_value_type value) = 0;
 
 	virtual std::expected<hook_type, emulator_err_t> hook_instruction(
 		x86::insn instruction, const emulator_hook_t::instruction_callback& callback, address_type start_address,

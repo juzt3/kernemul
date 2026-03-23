@@ -39,6 +39,8 @@ void redirect_ntoskrnl_debugger_functions(const std::shared_ptr<emulator_t>& emu
 		{
 			constexpr std::uint32_t status_debugger_inactive = 0xC0000354;
 
+			spdlog::info("KdChangeOption called, returning STATUS_DEBUGGER_INACTIVE");
+
 			write_nt_status(emulator, status_debugger_inactive);
 		},
 		mapped_image,

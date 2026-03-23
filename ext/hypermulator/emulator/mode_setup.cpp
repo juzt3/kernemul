@@ -148,6 +148,15 @@ static void enable_sse(hm::guest_virtual_processor_t& processor)
 	processor.write_register<hm::reg::cr4>(current_cr4);
 }
 
+static void enable_xsave(hm::guest_virtual_processor_t& processor)
+{
+	cr4 current_cr4 = processor.read_register<hm::reg::cr4, cr4>();
+
+	current_cr4.os_xsave = 1;
+
+	processor.write_register<hm::reg::cr4>(current_cr4);
+}
+
 static void set_up_general_purpose_registers(hm::guest_virtual_processor_t& processor)
 {
 	const cpuid_eax_01 cpu_info = query_cpuid_eax_01();
@@ -261,6 +270,7 @@ bool hm::emulator_t::load_cpu_mode_default_state()
 			enable_execute_disable_bit(processor);
 
 			enable_sse(processor);
+			enable_xsave(processor);
 		}
 	}
 

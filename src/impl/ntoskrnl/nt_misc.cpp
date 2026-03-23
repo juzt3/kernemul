@@ -327,6 +327,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 			const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
 
 			kernel::handle_exception(emulator, rip, 0, 0);
+			skip_return = true;
 		}),
 		mapped_image,
 		"DbgPrompt"

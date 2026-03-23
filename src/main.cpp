@@ -3,12 +3,17 @@
 #include "emulator/object.hpp"
 #include "kernel/kernel.hpp"
 #include "kernel/kernel_string.hpp"
+#include "kernel/exception.hpp"
 #include "kernel/image_loader.hpp"
 #include "kernel/process_loader.hpp"
 #include "kernel/segments.hpp"
 #include "config.hpp"
 
+#include <ia32-doc/ia32.hpp>
 #include <spdlog/spdlog.h>
+
+#include "portable_executable/dos_header.hpp"
+#include "portable_executable/image.hpp"
 
 static void set_up_user_shared_data(const std::shared_ptr<emulator_t>& emulator)
 {
@@ -89,6 +94,45 @@ static emulator_object_t<_KPCR> set_up_kpcr(const std::shared_ptr<emulator_t>& e
 	return kpcr;
 }
 
+static void patch_dbgctl_check(const std::shared_ptr<emulator_t>& emulator)
+{
+	const auto image_buffer = kernel::emulated_module->buffer();
+	const auto image = reinterpret_cast<const portable_executable::image_t*>(image_buffer.data());
+
+	if (const auto dbgctl_signature = image->signature_scan("0F 30 0F 32"))
+	{
+		const std::int64_t dbgctl_rva = dbgctl_signature - image_buffer.data();
+		const emulator_t::address_type dbgctl_runtime_address = kernel::emulated_module->base_address() + dbgctl_rva;
+
+		constexpr std::array<std::uint8_t, 4> stub = {
+			0x31, 0xD2, // xor edx, edx
+			0xB0, 0x03 // mov al, 3
+		};
+
+		const emulator_err_t error = emulator->write_virtual_memory(dbgctl_runtime_address, stub);
+
+		error.throw_if("write MSR stub memory");
+	}
+}
+
+static void set_up_lstar_msr(const std::shared_ptr<emulator_t>& emulator, const std::shared_ptr<kernel_image_t>& nt_image)
+{
+	if (const auto ki_system_call = nt_image->find_symbol("KiSystemCall64"))
+	{
+		const emulator_err_t error = emulator->write_msr(x86::msr::lstar, *ki_system_call);
+		error.throw_if("write LSTAR MSR");
+	}
+}
+
+static void set_up_interrupt_flag(const std::shared_ptr<emulator_t>& emulator)
+{
+	rflags flags = { .flags = emulator->read_register<x86::reg::rflags, std::uint64_t>() };
+
+	flags.interrupt_enable_flag = 1;
+
+	emulator->write_register<x86::reg::rflags>(flags.flags);
+}
+
 std::int32_t main()
 {
 	try
@@ -100,6 +144,7 @@ std::int32_t main()
 		set_up_stack(*emulator);
 		set_up_user_shared_data(emulator);
 
+		// todo: check load order of these drivers
 		const auto nt_image = kernel::map_kernel_image(emulator, "ntoskrnl.exe", false);
 		kernel::map_kernel_image(emulator, "HAL.dll", false);
 		kernel::map_kernel_image(emulator, "CI.dll", false);
@@ -109,6 +154,9 @@ std::int32_t main()
 
 		kernel::emulated_module = kernel::map_kernel_image(emulator, EMULATED_MODULE_NAME, true, EMULATED_MODULE_DIRECTORY);
 
+		patch_dbgctl_check(emulator);
+		set_up_interrupt_flag(emulator);
+		
 		kernel::set_up_initial_system_process(emulator);
 
 		constexpr thread_t::id_type current_thread_id = 8;
@@ -122,6 +170,8 @@ std::int32_t main()
 
 		const auto kpcr = set_up_kpcr(emulator, kernel::current_thread);
 		kernel::set_up_kernel_gs(emulator, kpcr.address());
+
+		set_up_lstar_msr(emulator, nt_image);
 
 	    const emulator_t::address_type base_address = kernel::emulated_module->base_address();
 		const emulator_t::address_type entry_point_address = kernel::emulated_module->entry_point();
@@ -207,11 +257,20 @@ std::int32_t main()
 			[emulator]()
 			{
 				const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
-				const auto rax = emulator->read_register<x86::reg::rax, emulator_t::address_type>();
+				const auto rax = emulator->read_register<x86::reg::rax, std::int32_t>();
 
 				spdlog::info("cpuid executed at 0x{:X} (rax=0x{:X})", rip, rax);
 
-				return false;
+				std::array<std::int32_t, 4> result;
+
+				__cpuid(result.data(), rax);
+
+				emulator->write_register<x86::reg::rax, std::int32_t>(result[0]);
+				emulator->write_register<x86::reg::rbx, std::int32_t>(result[1]);
+				emulator->write_register<x86::reg::rcx, std::int32_t>(result[2]);
+				emulator->write_register<x86::reg::rdx, std::int32_t>(result[3]);
+
+				return true;
 			},
 			emulator_t::default_start_address,
 			emulator_t::default_end_address

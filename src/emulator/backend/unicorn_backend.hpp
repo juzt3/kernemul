@@ -74,8 +74,8 @@ public:
 	                                                     address_type start_address, address_type end_address) override;
 
 
-	[[nodiscard]] msr_value_type read_msr(x86::msr msr) const;
-	void write_msr(x86::msr msr, msr_value_type value);
+	[[nodiscard]] std::expected<msr_value_type, emulator_err_t> read_msr(x86::msr msr) const override;
+	[[nodiscard]] emulator_err_t write_msr(x86::msr msr, msr_value_type value) override;
 
 	[[nodiscard]] backend_type native_backend() const;
 

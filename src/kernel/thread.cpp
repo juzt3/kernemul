@@ -21,7 +21,7 @@ std::shared_ptr<thread_t> kernel::create_thread(const std::shared_ptr<emulator_t
 
 	auto thread = std::make_shared<thread_t>(thread_id, process, std::move(object));
 
-	spdlog::info("created thread (tid={}, pid={}, address=0x{:X})",
+	spdlog::info("created thread (thread id={}, process id={}, object address=0x{:X})",
 		thread_id, process->id(), thread->address());
 
 	return thread;

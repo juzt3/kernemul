@@ -306,6 +306,8 @@ std::shared_ptr<kernel_image_t> kernel::map_kernel_image(const std::shared_ptr<e
 
 	auto mapped_image = std::make_shared<kernel_image_t>(std::string(name), *base_address, entry_point, image_buffer);
 
+	spdlog::info("loaded '{}' at 0x{:X} (size=0x{:X})", name, *base_address, image_buffer.size());
+
 	const bool is_main_emulated_image = fix_imports;
 
 	collect_module_symbols(pe_image, *mapped_image, !is_main_emulated_image);

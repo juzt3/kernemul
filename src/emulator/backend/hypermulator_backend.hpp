@@ -41,6 +41,9 @@ public:
 	[[nodiscard]] emulator_err_t write_tr(uint16_t selector, address_type base, size_type limit, uint16_t attributes) override;
 	[[nodiscard]] emulator_err_t write_segment(x86::segment_reg seg, uint16_t selector, address_type base, uint32_t limit, uint16_t attributes) override;
 
+	[[nodiscard]] std::expected<msr_value_type, emulator_err_t> read_msr(x86::msr msr) const override;
+	[[nodiscard]] emulator_err_t write_msr(x86::msr msr, msr_value_type value) override;
+
 	std::expected<hook_type, emulator_err_t> hook_instruction(x86::insn instruction,
 	                                                          const emulator_hook_t::instruction_callback& callback, address_type start_address,
 	                                                          address_type end_address) override;

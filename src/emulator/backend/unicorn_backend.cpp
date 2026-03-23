@@ -128,11 +128,11 @@
 
 static void enable_ia32e_mode(unicorn_emulator_t& emulator)
 {
-	ia32_efer_register efer = { .flags = emulator.read_msr(x86::msr::efer) };
+	ia32_efer_register efer = { .flags = *emulator.read_msr(x86::msr::efer) };
 
 	efer.ia32e_mode_enable = 1;
 
-	emulator.write_msr(x86::msr::efer, efer.flags);
+	static_cast<void>(emulator.write_msr(x86::msr::efer, efer.flags));
 }
 
 static void enable_protected_mode(emulator_t& emulator)
@@ -406,22 +406,23 @@ std::expected<emulator_t::hook_type, emulator_err_t> unicorn_emulator_t::hook_me
 	return add_native_hook(hook_type, uc_wrapper_mem_access_hook, callback, start_address, end_address);
 }
 
-unicorn_emulator_t::msr_value_type unicorn_emulator_t::read_msr(const x86::msr msr) const
+std::expected<emulator_t::msr_value_type, emulator_err_t> unicorn_emulator_t::read_msr(const x86::msr msr) const
 {
 	msr_value_type value = { };
 
 	const emulator_err_t error = read_msr_safe(msr, &value);
 
-	error.throw_if("read msr");
+	if (!error)
+	{
+		return std::unexpected(error);
+	}
 
 	return value;
 }
 
-void unicorn_emulator_t::write_msr(const x86::msr msr, const msr_value_type value)
+emulator_err_t unicorn_emulator_t::write_msr(const x86::msr msr, const msr_value_type value)
 {
-	const emulator_err_t error = write_msr_safe(msr, value);
-
-	error.throw_if("write msr");
+	return write_msr_safe(msr, value);
 }
 
 emulator_err_t unicorn_emulator_t::read_msr_safe(const x86::msr msr, msr_value_type* const value) const
