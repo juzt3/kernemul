@@ -6,6 +6,7 @@
 
 #include <ia32-doc/ia32.hpp>
 #include <spdlog/spdlog.h>
+#include <fstream>
 #include <array>
 #include <format>
 
@@ -228,6 +229,47 @@ void kernel::set_up_idt(const std::shared_ptr<emulator_t>& emulator, const kerne
 				emulator->write_register<x86::reg::rip>(frame.rip);
 				emulator->write_register<x86::reg::rsp>(frame.rsp);
 				emulator->write_register<x86::reg::rflags>(frame.rflags);
+
+				constexpr std::uint32_t status_integer_divide_by_zero = 0xC0000094;
+				constexpr std::uint32_t status_single_step = 0x80000004;
+				constexpr std::uint32_t status_breakpoint = 0x80000003;
+				constexpr std::uint32_t status_array_bounds_exceeded = 0xC000008C;
+				constexpr std::uint32_t status_illegal_instruction = 0xC000001D;
+				constexpr std::uint32_t status_access_violation = 0xC0000005;
+
+				switch (i)
+				{
+				case 0:
+					handle_exception(emulator, frame.rip, status_integer_divide_by_zero, frame.rip);
+					break;
+				case 1:
+					handle_exception(emulator, frame.rip, status_single_step, frame.rip);
+					break;
+				case 3:
+					handle_exception(emulator, frame.rip, status_breakpoint, frame.rip);
+					break;
+				case 5:
+					handle_exception(emulator, frame.rip, status_array_bounds_exceeded, frame.rip);
+					break;
+				case 6:
+					handle_exception(emulator, frame.rip, status_illegal_instruction, frame.rip);
+					break;
+				case 13:
+					handle_exception(emulator, frame.rip, status_access_violation, frame.rip);
+					break;
+				case 14:
+				{
+					const auto cr2 = emulator->read_register<x86::reg::cr2, emulator_t::address_type>();
+					handle_exception(emulator, frame.rip, status_access_violation, cr2);
+					break;
+				}
+				case 17:
+					handle_exception(emulator, frame.rip, status_access_violation, frame.rip);
+					break;
+				default:
+					spdlog::warn("unhandled interrupt vector 0x{:X} at rip=0x{:X}", i, frame.rip);
+					break;
+				}
 
 				skip_return = true;
 			};
