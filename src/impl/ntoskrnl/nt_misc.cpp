@@ -821,4 +821,32 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 		mapped_image,
 		"PsGetProcessImageFileName"
 	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto mutex_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+
+			const auto wait_list_address = mutex_address + offsetof(_FAST_MUTEX, Event) + offsetof(_KEVENT, Header.WaitListHead);
+
+			_FAST_MUTEX mutex = { };
+
+			mutex.Count = 1;
+			mutex.Owner = nullptr;
+			mutex.Contention = 0;
+			mutex.Event.Header.SignalState = 0;
+			mutex.Event.Header.WaitListHead.Flink = reinterpret_cast<PLIST_ENTRY>(wait_list_address);
+			mutex.Event.Header.WaitListHead.Blink = reinterpret_cast<PLIST_ENTRY>(wait_list_address);
+			constexpr std::uint16_t lock_low = 1;
+			std::memcpy(const_cast<LONG*>(&mutex.Event.Header.Lock), &lock_low, sizeof(lock_low));
+			mutex.Event.Header.Size = 6;
+
+			emulator_err_t error = emulator->write_virtual_memory(mutex_address, &mutex, sizeof(mutex));
+			error.throw_if("KeInitializeGuardedMutex: write mutex");
+
+			spdlog::info("KeInitializeGuardedMutex called (mutex=0x{:X})", mutex_address);
+		},
+		mapped_image,
+		"KeInitializeGuardedMutex"
+	);
 }

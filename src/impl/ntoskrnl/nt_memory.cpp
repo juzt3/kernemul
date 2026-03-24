@@ -245,8 +245,11 @@ void redirect_ntoskrnl_memory_functions(const std::shared_ptr<emulator_t>& emula
 
 			if (!physical_address)
 			{
-				throw std::runtime_error(
-					std::format("MmGetPhysicalAddress: invalid virtual address 0x{:X}", virtual_address));
+				spdlog::warn("MmGetPhysicalAddress called with invalid virtual address 0x{:X}", virtual_address);
+
+				write_return_value(emulator, 0);
+
+				return;
 			}
 
 			spdlog::info("MmGetPhysicalAddress called (virtual=0x{:X}) -> 0x{:X}", virtual_address, *physical_address);

@@ -390,7 +390,7 @@ protected:
 	}
 
 	address_type pml4_physical_address_ = 0;
-	address_type current_physical_page_ = 0x40000;
+	address_type current_physical_page_ = 0x12000;
 	address_type current_heap_virtual_address_ = 0xFFFFFF8024800000;
 	protection_type last_heap_protection_ = prot_none;
 

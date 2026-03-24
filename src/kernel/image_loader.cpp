@@ -1,6 +1,7 @@
 #include "image_loader.hpp"
 #include "../emulator/object.hpp"
 #include "../image/pdb/pdb_file.hpp"
+#include "../impl/ntoskrnl/nt_crashdump.hpp"
 #include "../impl/ntoskrnl/nt_debugger.hpp"
 #include "../impl/ntoskrnl/nt_helpers.hpp"
 #include "../impl/ntoskrnl/nt_object.hpp"
@@ -344,6 +345,7 @@ std::shared_ptr<kernel_image_t> kernel::map_kernel_image(const std::shared_ptr<e
 		redirect_ntoskrnl_sysinfo_functions(emulator, *mapped_image);
 		redirect_ntoskrnl_object_functions(emulator, *mapped_image);
 		redirect_ntoskrnl_debugger_functions(emulator, *mapped_image);
+		redirect_ntoskrnl_crashdump_functions(emulator, *mapped_image);
 	}
 
 	return mapped_image;

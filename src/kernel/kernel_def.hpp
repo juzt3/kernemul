@@ -1959,3 +1959,13 @@ struct _OBJECT_TYPE
     UCHAR padding2[4];                                                      //0xc4
     struct _LIST_ENTRY CallbackList;                                        //0xc8
 };
+
+//0x38 bytes (sizeof)
+struct _FAST_MUTEX
+{
+    LONG Count;                                                             //0x0
+    VOID* Owner;                                                            //0x8
+    ULONG Contention;                                                       //0x10
+    struct _KEVENT Event;                                                   //0x18
+    ULONG OldIrql;                                                          //0x30
+};

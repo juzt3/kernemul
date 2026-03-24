@@ -198,6 +198,7 @@
     <ClCompile Include="src\impl\ntoskrnl\nt_format.cpp" />
     <ClCompile Include="src\impl\ntoskrnl\nt_helpers.cpp" />
     <ClCompile Include="src\impl\ntoskrnl\nt_memory.cpp" />
+    <ClCompile Include="src\impl\ntoskrnl\nt_crashdump.cpp" />
     <ClCompile Include="src\impl\ntoskrnl\nt_misc.cpp" />
     <ClCompile Include="src\impl\ntoskrnl\nt_object.cpp" />
     <ClCompile Include="src\impl\ntoskrnl\nt_registry.cpp" />
@@ -283,6 +284,7 @@
     <ClInclude Include="src\image\mapped_image.hpp" />
     <ClInclude Include="src\image\pdb\pdb_file.hpp" />
     <ClInclude Include="src\image\pdb\symbol_server.hpp" />
+    <ClInclude Include="src\impl\ntoskrnl\nt_crashdump.hpp" />
     <ClInclude Include="src\impl\ntoskrnl\nt_debugger.hpp" />
     <ClInclude Include="src\impl\ntoskrnl\nt_helpers.hpp" />
     <ClInclude Include="src\impl\ntoskrnl\nt_object.hpp" />
