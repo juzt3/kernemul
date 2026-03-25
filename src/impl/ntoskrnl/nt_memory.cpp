@@ -259,4 +259,86 @@ void redirect_ntoskrnl_memory_functions(const std::shared_ptr<emulator_t>& emula
 		mapped_image,
 		"MmGetPhysicalAddress"
 	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto virtual_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto length = emulator->read_register<x86::reg::rdx, std::uint32_t>();
+	
+			const auto page_count = static_cast<std::uint64_t>(
+				((virtual_address & 0xFFF) + length + 0xFFF) >> 12);
+			const auto mdl_size = static_cast<std::uint32_t>(8 * page_count + sizeof(_MDL));
+
+			const auto allocation = emulator->heap_allocate(mdl_size, prot_read_write, true);
+
+			emulator_err_t error = allocation.error_or({});
+			error.throw_if("IoAllocateMdl: allocate MDL");
+
+			const auto mdl_address = *allocation;
+
+			_MDL mdl = { };
+
+			mdl.Next = nullptr;
+			mdl.Size = static_cast<SHORT>(8 * (page_count + 6));
+			mdl.MdlFlags = (page_count <= 0x11) ? 8 : 0;
+			mdl.StartVa = reinterpret_cast<PVOID>(virtual_address & 0xFFFFFFFFFFFFF000ull);
+			mdl.ByteCount = length;
+			mdl.ByteOffset = static_cast<ULONG>(virtual_address & 0xFFF);
+
+			error = emulator->write_virtual_memory(mdl_address, &mdl, sizeof(mdl));
+			error.throw_if("IoAllocateMdl: write MDL");
+
+			spdlog::info("IoAllocateMdl called (va=0x{:X}, length=0x{:X}, pages={}) -> 0x{:X}",
+				virtual_address, length, page_count, mdl_address);
+
+			write_return_value(emulator, mdl_address);
+		},
+		mapped_image,
+		"IoAllocateMdl"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const emulator_t::address_type mdl_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+
+			_MDL mdl = { };
+			emulator_err_t error = emulator->read_virtual_memory(mdl_address, &mdl, sizeof(mdl));
+			error.throw_if("MmBuildMdlForNonPagedPool: read MDL");
+
+			const emulator_t::address_type start_va = reinterpret_cast<emulator_t::address_type>(mdl.StartVa);
+			const ULONG byte_offset = mdl.ByteOffset;
+			const ULONG byte_count = mdl.ByteCount;
+
+			mdl.Process = nullptr;
+			mdl.MappedSystemVa = reinterpret_cast<PVOID>(start_va + byte_offset);
+
+			const std::uint64_t page_count = ((byte_offset + static_cast<std::uint64_t>(byte_count) + 0xFFF) >> 12);
+			const emulator_t::address_type pfn_array_address = mdl_address + sizeof(_MDL);
+
+			for (std::uint64_t i = 0; i < page_count; ++i)
+			{
+				const emulator_t::address_type page_va = start_va + i * 0x1000;
+				const std::optional<emulator_t::address_type> physical = emulator->translate_virtual_address(page_va);
+
+				const std::uint64_t pfn = physical ? (*physical >> 12) : 0ull;
+
+				error = emulator->write_virtual_memory(
+					pfn_array_address + i * sizeof(std::uint64_t), &pfn, sizeof(pfn));
+				error.throw_if("MmBuildMdlForNonPagedPool: write PFN");
+			}
+
+			constexpr std::uint16_t mdl_source_is_nonpaged_pool = 0x4;
+			mdl.MdlFlags |= mdl_source_is_nonpaged_pool;
+
+			error = emulator->write_virtual_memory(mdl_address, &mdl, sizeof(mdl));
+			error.throw_if("MmBuildMdlForNonPagedPool: write MDL");
+
+			spdlog::info("MmBuildMdlForNonPagedPool called (mdl=0x{:X}, va=0x{:X}, pages={})",
+				mdl_address, start_va + byte_offset, page_count);
+		},
+		mapped_image,
+		"MmBuildMdlForNonPagedPool"
+	);
 }

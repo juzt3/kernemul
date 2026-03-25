@@ -6,6 +6,7 @@
 
 #include <ia32-doc/ia32.hpp>
 #include <spdlog/spdlog.h>
+#include <random>
 #include <string>
 
 void redirect_function(const kernel::function_implementation_t& function_impl,
@@ -54,6 +55,16 @@ void redirect_ntoskrnl_sysinfo_functions(const std::shared_ptr<emulator_t>& emul
 
 void redirect_ntoskrnl_object_functions(const std::shared_ptr<emulator_t>& emulator,
 	const kernel_image_t& mapped_image);
+
+template <typename T>
+T generate_random(T min_value, T max_value)
+{
+	static std::mt19937_64 engine(std::random_device{}());
+
+	std::uniform_int_distribution<T> distribution(min_value, max_value);
+
+	return distribution(engine);
+}
 
 class filesystem_t;
 

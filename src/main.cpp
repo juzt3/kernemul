@@ -179,7 +179,8 @@ std::int32_t main()
 		spdlog::info("mapped ntoskrnl at 0x{:X}", nt_image->base_address());
 		spdlog::info("mapped image at 0x{:X}", base_address);
 
-		const auto redirect_callback = [emulator]()
+		const auto redirect_execute_handler = [emulator](
+			const emulator_t::address_type accessed_address, const protection_t) -> bool
 		{
 			const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
 			const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
@@ -192,8 +193,6 @@ std::int32_t main()
 
 			if (const auto redirected_function = kernel::find_redirected_function(rip))
 			{
-				spdlog::info("redirecting function at 0x{:X} (return address=0x{:X}) rcx=0x{:X}", rip, return_address, emulator->read_register<x86::reg::rcx, emulator_t::address_type>());
-
 				bool skip_return = false;
 
 				(*redirected_function)(skip_return);
@@ -203,54 +202,55 @@ std::int32_t main()
 					emulator->write_register<x86::reg::rsp>(rsp + 8);
 					emulator->write_register<x86::reg::rip>(return_address);
 				}
+
+				return true;
+			}
+
+			const auto module = kernel::find_module_from_rip(rip);
+
+			std::string symbol_name;
+
+			if (module)
+			{
+				if (const auto symbol = module->find_symbol_by_address(rip))
+				{
+					if (symbol->second == rip)
+					{
+						symbol_name = symbol->first;
+					}
+				}
+			}
+
+			if (!symbol_name.empty())
+			{
+				spdlog::error("unimplemented function '{}' (address=0x{:X}, return address=0x{:X})", symbol_name, rip, return_address);
 			}
 			else
 			{
-				const auto module = kernel::find_module_from_rip(rip);
-
-				std::string symbol_name;
-
-				if (module)
-				{
-					if (const auto symbol = module->find_symbol_by_address(rip))
-					{
-						if (symbol->second == rip)
-						{
-							symbol_name = symbol->first;
-						}
-					}
-				}
-
-				if (!symbol_name.empty())
-				{
-					spdlog::error("unimplemented function '{}' (address=0x{:X}, return address=0x{:X})", symbol_name, rip, return_address);
-				}
-				else
-				{
-					const auto module_name = module ? module->name() : "unknown";
-					spdlog::error("unimplemented function in '{}' (address=0x{:X}, return address=0x{:X})", module_name, rip, return_address);
-				}
-
-				emulator->write_register<x86::reg::rip, emulator_t::address_type>(-1);
+				const auto module_name = module ? module->name() : "unknown";
+				spdlog::error("unimplemented function in '{}' (address=0x{:X}, return address=0x{:X})", module_name, rip, return_address);
 			}
+
+			emulator->write_register<x86::reg::rip, emulator_t::address_type>(-1);
+
+			return true;
 		};
 
-		const auto hook_module = [&](const std::shared_ptr<kernel_image_t>& image)
+		for (const auto& module : kernel::module_entries)
 		{
-			emulator_err_t hook_error = emulator->hook_basic_block(
-				redirect_callback,
-				image->base_address(),
-				image->base_address() + image->size()
+			if (module == kernel::emulated_module)
+			{
+				continue;
+			}
+
+			const emulator_err_t error = emulator->hook_memory(
+				redirect_execute_handler,
+				prot_execute,
+				module->base_address(),
+				module->base_address() + module->size()
 			).error_or({});
 
-			hook_error.throw_if("basic block hook attach");
-		};
-
-		hook_module(nt_image);
-
-		if (const auto hal_image = kernel::find_module("HAL.dll"))
-		{
-			hook_module(hal_image);
+			error.throw_if("monitor execute");
 		}
 
 		emulator_err_t error = emulator->hook_instruction(x86::insn::cpuid,

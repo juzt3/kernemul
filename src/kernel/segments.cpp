@@ -191,6 +191,8 @@ void kernel::set_up_idt(const std::shared_ptr<emulator_t>& emulator, const kerne
 
 		redirected_functions[handler_address] = [emulator, i, has_error_code](bool& skip_return)
 			{
+				skip_return = true;
+
 				auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
 
 				std::uint64_t error_code = 0;
@@ -212,7 +214,7 @@ void kernel::set_up_idt(const std::shared_ptr<emulator_t>& emulator, const kerne
 				};
 
 				interrupt_frame frame = { };
-				const auto error = emulator->read_virtual_memory(rsp, &frame, sizeof(frame));
+				emulator_err_t error = emulator->read_virtual_memory(rsp, &frame, sizeof(frame));
 				error.throw_if("read interrupt frame");
 
 				if (has_error_code)
@@ -236,6 +238,37 @@ void kernel::set_up_idt(const std::shared_ptr<emulator_t>& emulator, const kerne
 				constexpr std::uint32_t status_array_bounds_exceeded = 0xC000008C;
 				constexpr std::uint32_t status_illegal_instruction = 0xC000001D;
 				constexpr std::uint32_t status_access_violation = 0xC0000005;
+
+				std::array<std::uint8_t, 2> instruction_bytes = { };
+
+				error = emulator->read_virtual_memory(frame.rip, instruction_bytes);
+
+				if (!error)
+				{
+					if (instruction_bytes[0] == 0x0F && instruction_bytes[1] == 0x32) // rdmsr
+					{
+						const auto msr_id = emulator->read_register<x86::reg::rcx, std::uint32_t>();
+
+						if (msr_id == 0x680 || msr_id == 0x1C9)
+						{
+							spdlog::info("MSR read with id 0x{:X}", msr_id);
+
+							emulator->write_register<x86::reg::rax>(static_cast<std::uint64_t>(0));
+							emulator->write_register<x86::reg::rdx>(static_cast<std::uint64_t>(0));
+							emulator->write_register<x86::reg::rip>(frame.rip + 2);
+
+							return;
+						}
+
+						spdlog::warn("invalid MSR read with id 0x{:X}", msr_id);
+					}
+					else if (instruction_bytes[0] == 0x0F && instruction_bytes[1] == 0x30) // wrmsr
+					{
+						const auto msr_id = emulator->read_register<x86::reg::rcx, std::uint32_t>();
+
+						spdlog::warn("invalid MSR write with id 0x{:X}", msr_id);
+					}
+				}
 
 				switch (i)
 				{
@@ -270,8 +303,6 @@ void kernel::set_up_idt(const std::shared_ptr<emulator_t>& emulator, const kerne
 					spdlog::warn("unhandled interrupt vector 0x{:X} at rip=0x{:X}", i, frame.rip);
 					break;
 				}
-
-				skip_return = true;
 			};
 
 		const std::uint32_t offset = i * sizeof(segment_descriptor_interrupt_gate_64);

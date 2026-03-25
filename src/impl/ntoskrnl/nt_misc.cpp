@@ -849,4 +849,216 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 		mapped_image,
 		"KeInitializeGuardedMutex"
 	);
+
+	// todo: actually create and schedule thread
+	redirect_function(
+		[emulator]
+		{
+			const auto thread_handle_out = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto desired_access = emulator->read_register<x86::reg::rdx, std::uint32_t>();
+			const auto object_attributes = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
+			const auto process_handle = emulator->read_register<x86::reg::r9, emulator_t::address_type>();
+
+			const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
+
+			emulator_t::address_type client_id_out = 0;
+			emulator_t::address_type start_routine = 0;
+			emulator_t::address_type start_context = 0;
+
+			static_cast<void>(emulator->read_virtual_memory(rsp + 0x28, &client_id_out, sizeof(client_id_out)));
+			static_cast<void>(emulator->read_virtual_memory(rsp + 0x30, &start_routine, sizeof(start_routine)));
+			static_cast<void>(emulator->read_virtual_memory(rsp + 0x38, &start_context, sizeof(start_context)));
+
+			spdlog::info("PsCreateSystemThread called (handle_out=0x{:X}, access=0x{:X}, start_routine=0x{:X}, start_context=0x{:X}, process=0x{:X})",
+				thread_handle_out, desired_access, start_routine, start_context, process_handle);
+
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"PsCreateSystemThread"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const emulator_t::address_type seed_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+
+			const std::uint32_t result = generate_random<std::uint32_t>(0, std::numeric_limits<LONG>::max() - 1);
+
+			emulator_err_t error = emulator->write_virtual_memory(seed_address, &result, sizeof(result));
+			error.throw_if("RtlRandomEx: write seed");
+
+			spdlog::info("RtlRandomEx called (seed=0x{:X}) -> 0x{:X}", seed_address, result);
+
+			write_return_value(emulator, result);
+		},
+		mapped_image,
+		"RtlRandomEx"
+	);
+
+	// todo: actually track create thread notify callbacks
+	redirect_function(
+		[emulator]
+		{
+			const emulator_t::address_type routine = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+
+			spdlog::info("PsSetCreateThreadNotifyRoutine called (routine=0x{:X})", routine);
+
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"PsSetCreateThreadNotifyRoutine"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const emulator_t::address_type driver_object = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const std::uint32_t extension_size = emulator->read_register<x86::reg::rdx, std::uint32_t>();
+			const emulator_t::address_type device_name_address = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
+			const std::uint32_t device_type = emulator->read_register<x86::reg::r9, std::uint32_t>();
+
+			const emulator_t::address_type rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
+
+			std::uint32_t device_characteristics = 0;
+			std::uint8_t exclusive = 0;
+			emulator_t::address_type device_object_out = 0;
+
+			emulator_err_t error = emulator->read_virtual_memory(rsp + 0x28, &device_characteristics, sizeof(device_characteristics));
+			error.throw_if("IoCreateDevice: read DeviceCharacteristics");
+
+			error = emulator->read_virtual_memory(rsp + 0x30, &exclusive, sizeof(exclusive));
+			error.throw_if("IoCreateDevice: read Exclusive");
+
+			error = emulator->read_virtual_memory(rsp + 0x38, &device_object_out, sizeof(device_object_out));
+			error.throw_if("IoCreateDevice: read DeviceObject");
+
+			std::string name;
+
+			if (device_name_address)
+			{
+				UNICODE_STRING unicode_string = { };
+				error = emulator->read_virtual_memory(device_name_address, &unicode_string, sizeof(unicode_string));
+				error.throw_if("IoCreateDevice: read DeviceName");
+
+				const emulator_t::address_type buffer_address = reinterpret_cast<emulator_t::address_type>(unicode_string.Buffer);
+
+				if (buffer_address && unicode_string.Length)
+				{
+					name = util::narrow_wstring(kernel::read_guest_wstring(*emulator, buffer_address));
+				}
+			}
+
+			const std::uint32_t aligned_extension = (extension_size + 7) & ~7u;
+			const std::uint32_t total_size = sizeof(_DEVICE_OBJECT) + aligned_extension;
+
+			const auto allocation = emulator->heap_allocate(total_size, prot_read_write, true);
+			error = allocation.error_or({});
+			error.throw_if("IoCreateDevice: allocate device object");
+
+			const emulator_t::address_type device_address = *allocation;
+
+			_DEVICE_OBJECT device = { };
+
+			device.Type = 3;
+			device.Size = static_cast<USHORT>(extension_size + 336);
+			device.ReferenceCount = 1;
+			device.DriverObject = reinterpret_cast<_DRIVER_OBJECT*>(driver_object);
+			device.DeviceType = device_type;
+			device.Characteristics = device_characteristics;
+			device.StackSize = 1;
+			device.Flags = 0x80;
+
+			if (exclusive)
+			{
+				device.Flags |= 0x8;
+			}
+
+			if (extension_size)
+			{
+				device.DeviceExtension = reinterpret_cast<PVOID>(device_address + sizeof(_DEVICE_OBJECT));
+			}
+
+			error = emulator->write_virtual_memory(device_address, &device, sizeof(device));
+			error.throw_if("IoCreateDevice: write device object");
+
+			error = emulator->write_virtual_memory(device_object_out, &device_address, sizeof(device_address));
+			error.throw_if("IoCreateDevice: write output pointer");
+
+			spdlog::info("IoCreateDevice called (driver=0x{:X}, ext_size=0x{:X}, name='{}', type=0x{:X}, chars=0x{:X}) -> 0x{:X}",
+				driver_object, extension_size, name, device_type, device_characteristics, device_address);
+
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"IoCreateDevice"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const emulator_t::address_type device_object = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+
+			std::uint32_t flags = 0;
+			emulator_err_t error = emulator->read_virtual_memory(
+				device_object + offsetof(_DEVICE_OBJECT, Flags), &flags, sizeof(flags));
+			error.throw_if("IoRegisterShutdownNotification: read Flags");
+
+			flags |= 0x800;
+
+			error = emulator->write_virtual_memory(
+				device_object + offsetof(_DEVICE_OBJECT, Flags), &flags, sizeof(flags));
+			error.throw_if("IoRegisterShutdownNotification: write Flags");
+
+			spdlog::info("IoRegisterShutdownNotification called (device=0x{:X})", device_object);
+
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"IoRegisterShutdownNotification"
+	);
+
+	// todo: actually create symbolic link in object namespace
+	redirect_function(
+		[emulator]
+		{
+			const emulator_t::address_type link_name_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const emulator_t::address_type device_name_address = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+
+			std::string link_name;
+			std::string device_name;
+
+			if (link_name_address)
+			{
+				UNICODE_STRING unicode_string = { };
+				static_cast<void>(emulator->read_virtual_memory(link_name_address, &unicode_string, sizeof(unicode_string)));
+
+				const emulator_t::address_type buffer = reinterpret_cast<emulator_t::address_type>(unicode_string.Buffer);
+
+				if (buffer && unicode_string.Length)
+				{
+					link_name = util::narrow_wstring(kernel::read_guest_wstring(*emulator, buffer));
+				}
+			}
+
+			if (device_name_address)
+			{
+				UNICODE_STRING unicode_string = { };
+				static_cast<void>(emulator->read_virtual_memory(device_name_address, &unicode_string, sizeof(unicode_string)));
+
+				const emulator_t::address_type buffer = reinterpret_cast<emulator_t::address_type>(unicode_string.Buffer);
+
+				if (buffer && unicode_string.Length)
+				{
+					device_name = util::narrow_wstring(kernel::read_guest_wstring(*emulator, buffer));
+				}
+			}
+
+			spdlog::info("IoCreateSymbolicLink called (link='{}', device='{}')", link_name, device_name);
+
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"IoCreateSymbolicLink"
+	);
 }

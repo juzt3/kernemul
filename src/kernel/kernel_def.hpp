@@ -1969,3 +1969,36 @@ struct _FAST_MUTEX
     struct _KEVENT Event;                                                   //0x18
     ULONG OldIrql;                                                          //0x30
 };
+
+//0x30 bytes (sizeof)
+struct _MDL
+{
+    struct _MDL* Next;                                                      //0x0
+    SHORT Size;                                                             //0x8
+    SHORT MdlFlags;                                                         //0xa
+    struct _EPROCESS* Process;                                              //0x10
+    VOID* MappedSystemVa;                                                   //0x18
+    VOID* StartVa;                                                          //0x20
+    ULONG ByteCount;                                                        //0x28
+    ULONG ByteOffset;                                                       //0x2c
+};
+
+//0x150 bytes (sizeof)
+struct _DEVICE_OBJECT
+{
+    SHORT Type;                                                              //0x0
+    USHORT Size;                                                             //0x2
+    LONG ReferenceCount;                                                     //0x4
+    struct _DRIVER_OBJECT* DriverObject;                                     //0x8
+    struct _DEVICE_OBJECT* NextDevice;                                       //0x10
+    struct _DEVICE_OBJECT* AttachedDevice;                                   //0x18
+    struct _IRP* CurrentIrp;                                                 //0x20
+    PVOID Timer;                                                             //0x28
+    ULONG Flags;                                                             //0x30
+    ULONG Characteristics;                                                   //0x34
+    PVOID Vpb;                                                               //0x38
+    PVOID DeviceExtension;                                                   //0x40
+    ULONG DeviceType;                                                        //0x48
+    CHAR StackSize;                                                          //0x4c
+    UCHAR padding[0x103];                                                    //0x4d
+};
