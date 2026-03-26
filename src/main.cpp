@@ -133,6 +133,41 @@ static void set_up_interrupt_flag(const std::shared_ptr<emulator_t>& emulator)
 	emulator->write_register<x86::reg::rflags>(flags.flags);
 }
 
+static void run_main_module(const std::shared_ptr<emulator_t>& emulator, const emulator_t::address_type entry_point_address)
+{
+	std::atomic<bool> ended = false;
+
+	auto thread_scheduler = std::thread(
+		[&ended]()
+		{
+			while (!ended)
+			{
+				kernel::switch_thread();
+
+				std::this_thread::sleep_for(std::chrono::milliseconds(15));
+			}
+		}
+	);
+
+	emulator->write_register<x86::reg::rip>(entry_point_address);
+
+	kernel::current_thread->save_state();
+
+	std::shared_ptr<thread_t> last_thread;
+
+	do
+	{
+		last_thread = kernel::current_thread;
+
+		kernel::current_thread->start();
+
+	} while (last_thread != kernel::current_thread);
+
+	ended = true;
+
+	thread_scheduler.join();
+}
+
 std::int32_t main()
 {
 	try
@@ -295,7 +330,7 @@ std::int32_t main()
 
 		set_up_driver_entry(emulator);
 
-		error = emulator->run_at(entry_point_address, emulator_t::thread_return_address);
+		run_main_module(emulator, entry_point_address);
 
 		const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
 

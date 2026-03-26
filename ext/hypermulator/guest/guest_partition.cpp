@@ -92,6 +92,11 @@ bool hm::guest_partition_t::run_virtual_processor(guest_virtual_processor_t& vir
 	return true;
 }
 
+bool hm::guest_partition_t::stop_virtual_processor(guest_virtual_processor_t& virtual_processor)
+{
+	return SUCCEEDED(WHvCancelRunVirtualProcessor(handle_, virtual_processor.id(), 0));
+}
+
 bool hm::guest_partition_t::map_physical_memory(const address_type physical_address, const size_type size,
                                                 const protection_type protection)
 {

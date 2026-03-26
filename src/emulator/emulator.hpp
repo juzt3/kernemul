@@ -60,10 +60,16 @@ namespace x86
 			r12,
 			r13,
 			r14,
-			r15
+			r15,
+
+			xmm0, xmm1, xmm2, xmm3,
+			xmm4, xmm5, xmm6, xmm7,
+			xmm8, xmm9, xmm10, xmm11,
+			xmm12, xmm13, xmm14, xmm15
 		};
 
 		static constexpr size_type bit_64_size = 8;
+		static constexpr size_type bit_128_size = 16;
 
 		constexpr explicit register_t(const id_type id_, const size_type size_)
 				:	id(id_),
@@ -104,6 +110,25 @@ namespace x86
 		DEF_REG_64(r13);
 		DEF_REG_64(r14);
 		DEF_REG_64(r15);
+
+#define DEF_REG_128(name) DEF_REG(name, register_t::bit_128_size)
+
+		DEF_REG_128(xmm0);
+		DEF_REG_128(xmm1);
+		DEF_REG_128(xmm2);
+		DEF_REG_128(xmm3);
+		DEF_REG_128(xmm4);
+		DEF_REG_128(xmm5);
+		DEF_REG_128(xmm6);
+		DEF_REG_128(xmm7);
+		DEF_REG_128(xmm8);
+		DEF_REG_128(xmm9);
+		DEF_REG_128(xmm10);
+		DEF_REG_128(xmm11);
+		DEF_REG_128(xmm12);
+		DEF_REG_128(xmm13);
+		DEF_REG_128(xmm14);
+		DEF_REG_128(xmm15);
 	}
 
 	enum class msr : std::uint32_t
@@ -232,6 +257,7 @@ public:
 	static constexpr size_type page_size = 0x1000;
 
 	[[nodiscard]] virtual emulator_err_t run_at(address_type start_address, address_type end_address = 0) = 0;
+	[[nodiscard]] virtual emulator_err_t stop() = 0;
 
 	[[nodiscard]] virtual emulator_err_t map_physical_memory(address_type address, size_type size, protection_type protection) = 0;
 	[[nodiscard]] virtual emulator_err_t unmap_physical_memory(address_type address, size_type size) = 0;

@@ -850,27 +850,73 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 		"KeInitializeGuardedMutex"
 	);
 
-	// todo: actually create and schedule thread
 	redirect_function(
 		[emulator]
 		{
-			const auto thread_handle_out = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
-			const auto desired_access = emulator->read_register<x86::reg::rdx, std::uint32_t>();
-			const auto object_attributes = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
-			const auto process_handle = emulator->read_register<x86::reg::r9, emulator_t::address_type>();
+			const emulator_t::address_type thread_handle_out = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const std::uint32_t desired_access = emulator->read_register<x86::reg::rdx, std::uint32_t>();
+			const emulator_t::address_type object_attributes = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
+			const emulator_t::address_type process_handle = emulator->read_register<x86::reg::r9, emulator_t::address_type>();
 
-			const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
+			const emulator_t::address_type rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
 
 			emulator_t::address_type client_id_out = 0;
 			emulator_t::address_type start_routine = 0;
 			emulator_t::address_type start_context = 0;
 
-			static_cast<void>(emulator->read_virtual_memory(rsp + 0x28, &client_id_out, sizeof(client_id_out)));
-			static_cast<void>(emulator->read_virtual_memory(rsp + 0x30, &start_routine, sizeof(start_routine)));
-			static_cast<void>(emulator->read_virtual_memory(rsp + 0x38, &start_context, sizeof(start_context)));
+			emulator_err_t error = emulator->read_virtual_memory(rsp + 0x28, &client_id_out, sizeof(client_id_out));
+			error.throw_if("PsCreateSystemThread: read ClientId");
 
-			spdlog::info("PsCreateSystemThread called (handle_out=0x{:X}, access=0x{:X}, start_routine=0x{:X}, start_context=0x{:X}, process=0x{:X})",
-				thread_handle_out, desired_access, start_routine, start_context, process_handle);
+			error = emulator->read_virtual_memory(rsp + 0x30, &start_routine, sizeof(start_routine));
+			error.throw_if("PsCreateSystemThread: read StartRoutine");
+
+			error = emulator->read_virtual_memory(rsp + 0x38, &start_context, sizeof(start_context));
+			error.throw_if("PsCreateSystemThread: read StartContext");
+
+			static thread_t::id_type next_thread_id = 100;
+			const thread_t::id_type thread_id = next_thread_id++;
+
+			const auto& process = kernel::current_thread->process();
+			auto thread = kernel::create_thread(emulator, thread_id, process);
+
+			constexpr emulator_t::size_type thread_stack_size = 0x10000;
+			const auto stack_allocation = emulator->heap_allocate(thread_stack_size, prot_read_write, true);
+			error = stack_allocation.error_or({});
+			error.throw_if("PsCreateSystemThread: allocate thread stack");
+
+			const emulator_t::address_type stack_top = *stack_allocation + thread_stack_size - 0x1000;
+
+			constexpr emulator_t::size_type shadow_space = 0x20;
+			const emulator_t::address_type sentinel = emulator_t::thread_return_address;
+
+			const emulator_t::address_type thread_rsp = (stack_top - shadow_space - sizeof(sentinel)) & ~0xFull;
+
+			error = emulator->write_virtual_memory(thread_rsp, &sentinel, sizeof(sentinel));
+			error.throw_if("PsCreateSystemThread: write sentinel return address");
+
+			thread->state().rip = start_routine;
+			thread->state().rcx = start_context;
+			thread->state().rsp = thread_rsp;
+			thread->state().rflags = 0x202;
+
+			kernel::pending_threads.push(thread);
+
+			if (thread_handle_out)
+			{
+				const emulator_t::address_type handle_value = thread->address();
+				error = emulator->write_virtual_memory(thread_handle_out, &handle_value, sizeof(handle_value));
+				error.throw_if("PsCreateSystemThread: write handle");
+			}
+
+			if (client_id_out)
+			{
+				const std::uint64_t cid[2] = { process->id(), thread_id };
+				error = emulator->write_virtual_memory(client_id_out, &cid, sizeof(cid));
+				error.throw_if("PsCreateSystemThread: write ClientId");
+			}
+
+			spdlog::info("PsCreateSystemThread called (handle_out=0x{:X}, start_routine=0x{:X}, start_context=0x{:X}, tid={}, stack=0x{:X})",
+				thread_handle_out, start_routine, start_context, thread_id, stack_top);
 
 			write_nt_success(emulator);
 		},

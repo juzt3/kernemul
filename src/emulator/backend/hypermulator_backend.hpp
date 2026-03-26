@@ -26,6 +26,7 @@ public:
 	hypermulator_t();
 
 	[[nodiscard]] emulator_err_t run_at(address_type start_address, address_type end_address) override;
+	[[nodiscard]] emulator_err_t stop() override;
 
 	[[nodiscard]] emulator_err_t map_physical_memory(address_type address, size_type size, protection_type protection) override;
 	[[nodiscard]] emulator_err_t unmap_physical_memory(address_type address, size_type size) override;

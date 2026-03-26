@@ -78,6 +78,7 @@ namespace hm
 		[[nodiscard]] std::span<const guest_virtual_processor_t> virtual_processors() const;
 
 		bool run_virtual_processor(guest_virtual_processor_t& virtual_processor, vmexit_context_t& vmexit_context);
+		bool stop_virtual_processor(guest_virtual_processor_t& virtual_processor);
 
 		bool map_physical_memory(address_type physical_address, size_type size, protection_type protection);
 		bool unmap_physical_memory(address_type physical_address, size_type size);

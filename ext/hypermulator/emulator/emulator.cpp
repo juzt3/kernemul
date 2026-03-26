@@ -78,6 +78,13 @@ bool hm::emulator_t::run_at(const address_type start_address, const address_type
 	return true;
 }
 
+bool hm::emulator_t::stop()
+{
+	auto processor = virtual_processor();
+
+	return partition_->stop_virtual_processor(processor);
+}
+
 bool hm::emulator_t::configure_single_step()
 {
 	return partition_->set_debug_exception_exiting(true);

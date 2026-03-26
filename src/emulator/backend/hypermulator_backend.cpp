@@ -51,6 +51,23 @@
 		CASE_REG(r13)
 		CASE_REG(r14)
 		CASE_REG(r15)
+		//
+		CASE_REG(xmm0)
+		CASE_REG(xmm1)
+		CASE_REG(xmm2)
+		CASE_REG(xmm3)
+		CASE_REG(xmm4)
+		CASE_REG(xmm5)
+		CASE_REG(xmm6)
+		CASE_REG(xmm7)
+		CASE_REG(xmm8)
+		CASE_REG(xmm9)
+		CASE_REG(xmm10)
+		CASE_REG(xmm11)
+		CASE_REG(xmm12)
+		CASE_REG(xmm13)
+		CASE_REG(xmm14)
+		CASE_REG(xmm15)
 		default:;
 	}
 
@@ -93,8 +110,13 @@ emulator_err_t hypermulator_t::run_at(const address_type start_address, const ad
 	return emulator_err_t{ backend_->run_at(start_address, end_address) };
 }
 
+emulator_err_t hypermulator_t::stop()
+{
+	return emulator_err_t{ backend_->stop() };
+}
+
 emulator_err_t hypermulator_t::map_physical_memory(const address_type address, const size_type size,
-                                          const protection_type protection)
+                                                   const protection_type protection)
 {
 	const address_type aligned_address = align_down(address, page_size);
 	const size_type aligned_size = align_up(size, page_size);

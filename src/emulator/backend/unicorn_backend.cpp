@@ -120,6 +120,23 @@
 		CASE_REG(r13, R13)
 		CASE_REG(r14, R14)
 		CASE_REG(r15, R15)
+		//
+		CASE_REG(xmm0, XMM0)
+		CASE_REG(xmm1, XMM1)
+		CASE_REG(xmm2, XMM2)
+		CASE_REG(xmm3, XMM3)
+		CASE_REG(xmm4, XMM4)
+		CASE_REG(xmm5, XMM5)
+		CASE_REG(xmm6, XMM6)
+		CASE_REG(xmm7, XMM7)
+		CASE_REG(xmm8, XMM8)
+		CASE_REG(xmm9, XMM9)
+		CASE_REG(xmm10, XMM10)
+		CASE_REG(xmm11, XMM11)
+		CASE_REG(xmm12, XMM12)
+		CASE_REG(xmm13, XMM13)
+		CASE_REG(xmm14, XMM14)
+		CASE_REG(xmm15, XMM15)
 		default:;
 	}
 
@@ -216,8 +233,13 @@ emulator_err_t unicorn_emulator_t::run_at(const address_type start_address, cons
 	return emulator_err_t{ uc_emu_start(backend_, start_address, end_address, 0, 0) };
 }
 
+emulator_err_t unicorn_emulator_t::stop()
+{
+	return emulator_err_t{ uc_emu_stop(backend_) };
+}
+
 emulator_err_t unicorn_emulator_t::map_physical_memory(const address_type address, const size_type size,
-                                              const protection_type protection)
+                                                       const protection_type protection)
 {
 	const address_type aligned_address = align_down(address, page_size);
 	const size_type aligned_size = align_up(size, page_size);

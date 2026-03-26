@@ -81,6 +81,8 @@ namespace hm
 
 		[[nodiscard]] bool run_at(address_type start_address, address_type end_address = 0);
 
+		bool stop();
+
 		std::shared_ptr<hook_t> hook_code(const hook_t::code_callback& callback, address_type start_physical_address = default_start_address, address_type end_physical_address = default_end_address);
 		std::shared_ptr<hook_t> hook_basic_block(const hook_t::code_callback& callback, address_type start_physical_address = default_start_address, address_type end_physical_address = default_end_address);
 		std::shared_ptr<hook_t> hook_memory(protection_type protection, const hook_t::memory_access_callback& callback, address_type start_physical_address = default_start_address, address_type end_physical_address = default_end_address);
