@@ -1107,4 +1107,33 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 		mapped_image,
 		"IoCreateSymbolicLink"
 	);
+
+	// todo: actually create symbolic link in object namespace
+	redirect_function(
+		[emulator]
+		{
+			const emulator_t::address_type variable_name_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+
+			std::string variable_name;
+	
+			if (variable_name_address)
+			{
+				UNICODE_STRING unicode_string = { };
+				static_cast<void>(emulator->read_virtual_memory(variable_name_address, &unicode_string, sizeof(unicode_string)));
+
+				const emulator_t::address_type buffer = reinterpret_cast<emulator_t::address_type>(unicode_string.Buffer);
+
+				if (buffer && unicode_string.Length)
+				{
+					variable_name = util::narrow_wstring(kernel::read_guest_wstring(*emulator, buffer));
+				}
+			}
+
+			spdlog::info("ExGetFirmwareEnvironmentVariable called (variable='{}')", variable_name);
+
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"ExGetFirmwareEnvironmentVariable"
+	);
 }

@@ -46,4 +46,43 @@ void redirect_ntoskrnl_debugger_functions(const std::shared_ptr<emulator_t>& emu
 		mapped_image,
 		"KdChangeOption"
 	);
+
+	redirect_function(
+		[emulator]
+		{
+			constexpr std::uint32_t status_debugger_inactive = 0xC0000354;
+
+			spdlog::info("ZwSystemDebugControl called, returning STATUS_DEBUGGER_INACTIVE");
+
+			write_nt_status(emulator, status_debugger_inactive);
+		},
+		mapped_image,
+		"ZwSystemDebugControl"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			constexpr std::uint32_t status_debugger_inactive = 0xC0000354;
+
+			spdlog::info("NtSystemDebugControl called, returning STATUS_DEBUGGER_INACTIVE");
+
+			write_nt_status(emulator, status_debugger_inactive);
+		},
+		mapped_image,
+		"NtSystemDebugControl"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			constexpr std::uint32_t status_access_denied = 0xC0000022;
+
+			spdlog::info("KdSystemDebugControl called, returning STATUS_ACCESS_DENIED");
+
+			write_nt_status(emulator, status_access_denied);
+		},
+		mapped_image,
+		"KdSystemDebugControl"
+	);
 }
