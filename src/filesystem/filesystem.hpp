@@ -74,6 +74,8 @@ public:
 	[[nodiscard]] std::shared_ptr<file_handle_t> open_at(const path_type& path, access_type access = access_type::access_read);
 	[[nodiscard]] std::shared_ptr<file_handle_t> create_at(const path_type& path, access_type access = access_type::access_read);
 
+	bool load_at(const std::string& host_path, const path_type& virtual_path);
+
 	[[nodiscard]] bool delete_at(const path_type& path);
 
 	[[nodiscard]] std::shared_ptr<file_handle_t> find_handle(file_handle_t::id_type handle_id) const;

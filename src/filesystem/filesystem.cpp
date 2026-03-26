@@ -1,5 +1,8 @@
 #include "filesystem.hpp"
 
+#include <fstream>
+#include <spdlog/spdlog.h>
+
 std::span<const std::uint8_t> file_t::read() const
 {
 	return buffer();
@@ -151,4 +154,27 @@ file_handle_t::id_type filesystem_t::allocate_handle_id()
 	free_handle_id_ += file_handle_t::id_increment;
 
 	return id;
+}
+
+bool filesystem_t::load_at(const std::string& host_path, const path_type& virtual_path)
+{
+	std::ifstream file(host_path, std::ios::binary | std::ios::ate);
+
+	if (!file.is_open())
+	{
+		spdlog::warn("filesystem: failed to open host file '{}'", host_path);
+		return false;
+	}
+
+	const std::streamsize file_size = file.tellg();
+	file.seekg(0, std::ios::beg);
+
+	std::vector<std::uint8_t> buffer(static_cast<std::size_t>(file_size));
+	file.read(reinterpret_cast<char*>(buffer.data()), file_size);
+
+	list_[virtual_path] = std::make_shared<file_t>(std::move(buffer));
+
+	spdlog::info("filesystem: loaded '{}' -> '{}' ({} bytes)", host_path, virtual_path, file_size);
+
+	return true;
 }

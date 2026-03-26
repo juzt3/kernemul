@@ -176,6 +176,9 @@ std::int32_t main()
 
 		kernel::filesystem = std::make_shared<filesystem_t>();
 
+		kernel::filesystem->load_at("ntdll.dll", "system32/ntdll.dll");
+		kernel::filesystem->load_at("win32k.sys", "system32/win32k.sys");
+
 		set_up_stack(*emulator);
 		set_up_user_shared_data(emulator);
 
