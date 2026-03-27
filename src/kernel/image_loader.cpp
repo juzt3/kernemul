@@ -12,7 +12,7 @@
 #include <portable_executable/image.hpp>
 #include <portable_executable/file.hpp>
 
-#include <spdlog/spdlog.h>
+#include "../util/logs.hpp"
 #include <set>
 
 static void relocate_image(portable_executable::image_t* const image, const emulator_t::address_type runtime_base_address)
@@ -123,11 +123,11 @@ static void collect_module_symbols(portable_executable::image_t* const pe_image,
 			}
 		}
 
-		spdlog::info("loaded {} pdb symbols for '{}'", pdb.symbol_count(), mapped_image.name());
+		GLOBAL_LOG("loaded {} pdb symbols for '{}'", pdb.symbol_count(), mapped_image.name());
 	}
 	catch (const std::exception& e)
 	{
-		spdlog::warn("failed to load pdb for '{}': {}", mapped_image.name(), e.what());
+		GLOBAL_WARN_LOG("failed to load pdb for '{}': {}", mapped_image.name(), e.what());
 	}
 }
 
@@ -175,18 +175,18 @@ static void monitor_data_sections(const std::shared_ptr<emulator_t>& emulator,
 
 					if (offset == 0)
 					{
-						spdlog::info("instruction at 0x{:X} accessed {}!{}", rip, mapped_image->name(), symbol->first);
-					}
-					else
-					{
-						spdlog::info("instruction at 0x{:X} accessed {}!{}+0x{:X}", rip, mapped_image->name(), symbol->first, offset);
-					}
+					THREAD_LOG("instruction at 0x{:X} accessed {}!{}", rip, mapped_image->name(), symbol->first);
 				}
 				else
 				{
-					const auto offset = accessed_address - mapped_image->base_address();
+					THREAD_LOG("instruction at 0x{:X} accessed {}!{}+0x{:X}", rip, mapped_image->name(), symbol->first, offset);
+				}
+			}
+			else
+			{
+				const auto offset = accessed_address - mapped_image->base_address();
 
-					spdlog::info("instruction at 0x{:X} accessed {}+0x{:X} (0x{:X})", rip, mapped_image->name(), offset, accessed_address);
+				THREAD_LOG("instruction at 0x{:X} accessed {}+0x{:X} (0x{:X})", rip, mapped_image->name(), offset, accessed_address);
 				}
 
 				return false;
@@ -257,7 +257,7 @@ std::shared_ptr<kernel_image_t> kernel::map_kernel_image(const std::shared_ptr<e
 
 	if (!pe_file.load())
 	{
-		spdlog::error("unable to load portable executable file");
+		GLOBAL_ERR_LOG("unable to load portable executable file");
 
 		return { };
 	}
@@ -271,7 +271,7 @@ std::shared_ptr<kernel_image_t> kernel::map_kernel_image(const std::shared_ptr<e
 
 	if (!base_address)
 	{
-		spdlog::error("unable to map kernel memory");
+		GLOBAL_ERR_LOG("unable to map kernel memory");
 
 		return { };
 	}
@@ -298,7 +298,7 @@ std::shared_ptr<kernel_image_t> kernel::map_kernel_image(const std::shared_ptr<e
 
 	if (const auto error = emulator->write_virtual_memory(*base_address, image_buffer))
 	{
-		spdlog::error("unable to write kernel memory");
+		GLOBAL_ERR_LOG("unable to write kernel memory");
 
 		return { };
 	}
@@ -307,7 +307,7 @@ std::shared_ptr<kernel_image_t> kernel::map_kernel_image(const std::shared_ptr<e
 
 	auto mapped_image = std::make_shared<kernel_image_t>(std::string(name), *base_address, entry_point, image_buffer);
 
-	spdlog::info("loaded '{}' at 0x{:X} (size=0x{:X})", name, *base_address, image_buffer.size());
+	GLOBAL_LOG("loaded '{}' at 0x{:X} (size=0x{:X})", name, *base_address, image_buffer.size());
 
 	const bool is_main_emulated_image = fix_imports;
 

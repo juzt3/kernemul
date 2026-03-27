@@ -8,7 +8,7 @@ void redirect_ntoskrnl_registry_functions(const std::shared_ptr<emulator_t>& emu
 		{
 			const auto r9 = emulator->read_register<x86::reg::r9, std::uint64_t>();
 
-			spdlog::info("RtlWriteRegistryValue called with type: 0x{:X}", r9);
+			THREAD_LOG("RtlWriteRegistryValue called with type: 0x{:X}", r9);
 
 			write_nt_success(emulator);
 		},
@@ -19,7 +19,7 @@ void redirect_ntoskrnl_registry_functions(const std::shared_ptr<emulator_t>& emu
 	redirect_function(
 		[emulator]
 		{
-			spdlog::info("RtlDeleteRegistryValue called");
+			THREAD_LOG("RtlDeleteRegistryValue called");
 
 			write_nt_success(emulator);
 		},
@@ -33,7 +33,7 @@ void redirect_ntoskrnl_registry_functions(const std::shared_ptr<emulator_t>& emu
 			const auto rcx = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
 			const auto rdx = emulator->read_register<x86::reg::rdx, std::uint32_t>();
 
-			spdlog::info("ZwOpenKey called (desired access=0x{:X})", rdx);
+			THREAD_LOG("ZwOpenKey called (desired access=0x{:X})", rdx);
 
 			write_dummy_handle(emulator, rcx);
 
@@ -48,7 +48,7 @@ void redirect_ntoskrnl_registry_functions(const std::shared_ptr<emulator_t>& emu
 		{
 			const auto rcx = emulator->read_register<x86::reg::rcx, std::uint64_t>();
 
-			spdlog::info("ZwFlushKey called (key handle=0x{:X})", rcx);
+			THREAD_LOG("ZwFlushKey called (key handle=0x{:X})", rcx);
 
 			write_nt_success(emulator);
 		},
@@ -84,7 +84,7 @@ void redirect_ntoskrnl_registry_functions(const std::shared_ptr<emulator_t>& emu
 				}
 			}
 
-			spdlog::info("CmRegisterCallbackEx called (function=0x{:X}, altitude='{}', driver=0x{:X}, context=0x{:X}, cookie=0x{:X})",
+			THREAD_LOG("CmRegisterCallbackEx called (function=0x{:X}, altitude='{}', driver=0x{:X}, context=0x{:X}, cookie=0x{:X})",
 				function, altitude_string, driver, context, cookie_address);
 
 			if (cookie_address)

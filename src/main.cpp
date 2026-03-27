@@ -10,7 +10,7 @@
 #include "config.hpp"
 
 #include <ia32-doc/ia32.hpp>
-#include <spdlog/spdlog.h>
+#include "util/logs.hpp"
 
 #include "portable_executable/dos_header.hpp"
 #include "portable_executable/image.hpp"
@@ -214,8 +214,8 @@ std::int32_t main()
 	    const emulator_t::address_type base_address = kernel::emulated_module->base_address();
 		const emulator_t::address_type entry_point_address = kernel::emulated_module->entry_point();
 
-		spdlog::info("mapped ntoskrnl at 0x{:X}", nt_image->base_address());
-		spdlog::info("mapped image at 0x{:X}", base_address);
+		GLOBAL_LOG("mapped ntoskrnl at 0x{:X}", nt_image->base_address());
+		GLOBAL_LOG("mapped image at 0x{:X}", base_address);
 
 		const auto redirect_execute_handler = [emulator](
 			const emulator_t::address_type accessed_address, const protection_t) -> bool
@@ -261,12 +261,12 @@ std::int32_t main()
 
 			if (!symbol_name.empty())
 			{
-				spdlog::error("unimplemented function '{}' (address=0x{:X}, return address=0x{:X})", symbol_name, rip, return_address);
+				THREAD_ERR_LOG("unimplemented function '{}' (address=0x{:X}, return address=0x{:X})", symbol_name, rip, return_address);
 			}
 			else
 			{
 				const auto module_name = module ? module->name() : "unknown";
-				spdlog::error("unimplemented function in '{}' (address=0x{:X}, return address=0x{:X})", module_name, rip, return_address);
+				THREAD_ERR_LOG("unimplemented function in '{}' (address=0x{:X}, return address=0x{:X})", module_name, rip, return_address);
 			}
 
 			emulator->write_register<x86::reg::rip, emulator_t::address_type>(-1);
@@ -297,7 +297,7 @@ std::int32_t main()
 				const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
 				const auto rax = emulator->read_register<x86::reg::rax, std::int32_t>();
 
-				spdlog::info("cpuid executed at 0x{:X} (rax=0x{:X})", rip, rax);
+				THREAD_LOG("cpuid executed at 0x{:X} (rax=0x{:X})", rip, rax);
 
 				std::array<std::int32_t, 4> result;
 
@@ -336,14 +336,17 @@ std::int32_t main()
 		run_main_module(emulator, entry_point_address);
 
 		const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
+		const auto rax = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
+		const auto rbx = emulator->read_register<x86::reg::rbx, emulator_t::address_type>();
+		const auto rdx = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
 
-		spdlog::info("emulation finished at rip=0x{:X}", rip);
+		GLOBAL_LOG("emulation finished at rip=0x{:X}, rax=0x{:X}, rbx=0x{:X}, rdx=0x{:X}", rip, rax, rbx, rdx);
 
 		error.throw_if("emulation running");
 	}
 	catch (const std::exception& e)
 	{
-		spdlog::error(e.what());
+		GLOBAL_ERR_LOG(e.what());
 	}
 
 	return 0;

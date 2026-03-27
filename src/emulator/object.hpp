@@ -1,7 +1,7 @@
 #pragma once
 #include "emulator.hpp"
 
-#include <spdlog/spdlog.h>
+#include "../util/logs.hpp"
 
 template <class T>
 class emulator_object_t
@@ -25,7 +25,7 @@ public:
 					const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
 					const size_type offset = accessed_address - address;
 
-					spdlog::info("instruction at 0x{:X} accessed ({} '{}')+0x{:X} (type={})", rip, get_type_name(), name, offset, static_cast<std::uint32_t>(access));
+					THREAD_LOG("instruction at 0x{:X} accessed ({} '{}')+0x{:X} (type={})", rip, get_type_name(), name, offset, static_cast<std::uint32_t>(access));
 
 					return false;
 				},

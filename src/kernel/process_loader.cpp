@@ -2,7 +2,7 @@
 #include "kernel.hpp"
 #include "../emulator/object.hpp"
 
-#include <spdlog/spdlog.h>
+#include "../util/logs.hpp"
 
 #include <format>
 
@@ -99,7 +99,7 @@ std::shared_ptr<process_t> kernel::create_process(const std::shared_ptr<emulator
 		set_process_blink(emulator, *first, self_links);
 	}
 
-	spdlog::info("created process (process id={}, section base=0x{:X}, object address=0x{:X})",
+	GLOBAL_LOG("created process (process id={}, section base=0x{:X}, object address=0x{:X})",
 		process_id, section_base_address, process->address());
 
 	process_entries.push_back(process);

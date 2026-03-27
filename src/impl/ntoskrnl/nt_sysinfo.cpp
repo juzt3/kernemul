@@ -68,7 +68,7 @@ static bool handle_system_module_information(const std::shared_ptr<emulator_t>& 
 	const auto module_count = static_cast<std::uint32_t>(modules.size());
 	const std::uint32_t required_size = module_info_header_size + module_count * module_info_entry_size;
 
-	spdlog::info("NtQuerySystemInformation(0xB): {} modules, required_size=0x{:X}, buffer_length=0x{:X}",
+	THREAD_LOG("NtQuerySystemInformation(0xB): {} modules, required_size=0x{:X}, buffer_length=0x{:X}",
 		module_count, required_size, buffer_length);
 
 	if (return_length_address)
@@ -132,7 +132,7 @@ static bool handle_system_module_information(const std::shared_ptr<emulator_t>& 
 			? static_cast<std::uint16_t>(last_separator + 1)
 			: 0;
 
-		spdlog::info("  module[{}]: base=0x{:X}, size=0x{:X}, name='{}'",
+		THREAD_LOG("  module[{}]: base=0x{:X}, size=0x{:X}, name='{}'",
 			i, entry.image_base, entry.image_size,
 			reinterpret_cast<const char*>(entry.full_path_name));
 
@@ -161,7 +161,7 @@ static void handle_query_system_information(const std::shared_ptr<emulator_t>& e
 	const auto buffer_length = emulator->read_register<x86::reg::r8, std::uint32_t>();
 	const auto return_length_address = emulator->read_register<x86::reg::r9, emulator_t::address_type>();
 
-	spdlog::info("NtQuerySystemInformation called (class=0x{:X}, buffer=0x{:X}, length=0x{:X}, return_length=0x{:X})",
+	THREAD_LOG("NtQuerySystemInformation called (class=0x{:X}, buffer=0x{:X}, length=0x{:X}, return_length=0x{:X})",
 		info_class, buffer_address, buffer_length, return_length_address);
 
 	// todo: implement needed classes and remove host passthrough
@@ -171,11 +171,11 @@ static void handle_query_system_information(const std::shared_ptr<emulator_t>& e
 
 	if (!host_fn)
 	{
-		spdlog::warn("NtQuerySystemInformation: class 0x{:X}, host fallback unavailable", info_class);
+		THREAD_WARN_LOG("NtQuerySystemInformation: class 0x{:X}, host fallback unavailable", info_class);
 	}
 	else
 	{
-		spdlog::info("NtQuerySystemInformation: forwarding class 0x{:X} to host", info_class);
+		THREAD_LOG("NtQuerySystemInformation: forwarding class 0x{:X} to host", info_class);
 
 		std::vector<std::uint8_t> host_buffer(buffer_length);
 		ULONG host_return_length = 0;
@@ -202,7 +202,7 @@ static void handle_query_system_information(const std::shared_ptr<emulator_t>& e
 			error.throw_if("write host return length to guest");
 		}
 
-		spdlog::info("NtQuerySystemInformation: host returned 0x{:X} (return_length=0x{:X})",
+		THREAD_LOG("NtQuerySystemInformation: host returned 0x{:X} (return_length=0x{:X})",
 			status, host_return_length);
 
 		if (info_class == system_module_information_ex && status == 0 && host_return_length >= sizeof(std::uint16_t))
@@ -219,7 +219,7 @@ static void handle_query_system_information(const std::shared_ptr<emulator_t>& e
 				{
 					if (_stricmp(file_name, module->name().c_str()) == 0)
 					{
-						spdlog::info("  host module[{}]: '{}' base remapped 0x{:X} -> 0x{:X}",
+						THREAD_LOG("  host module[{}]: '{}' base remapped 0x{:X} -> 0x{:X}",
 							index, file_name, entry->base_info.image_base, module->base_address());
 
 						entry->base_info.image_base = module->base_address();
@@ -228,7 +228,7 @@ static void handle_query_system_information(const std::shared_ptr<emulator_t>& e
 					}
 				}
 
-				spdlog::info("  host module[{}]: base=0x{:X}, size=0x{:X}, name='{}'",
+				THREAD_LOG("  host module[{}]: base=0x{:X}, size=0x{:X}, name='{}'",
 					index,
 					entry->base_info.image_base,
 					entry->base_info.image_size,
@@ -240,7 +240,7 @@ static void handle_query_system_information(const std::shared_ptr<emulator_t>& e
 				++index;
 			}
 
-			spdlog::info("  host module count: {}", index);
+			THREAD_LOG("  host module count: {}", index);
 
 			const auto write_size = std::min(static_cast<std::uint32_t>(host_return_length), buffer_length);
 
@@ -269,12 +269,12 @@ static void handle_query_system_information(const std::shared_ptr<emulator_t>& e
 
 					if (offset_in_entry >= full_path_offset && offset_in_entry < full_path_offset + 256)
 					{
-						spdlog::info("  [monitor] guest reading full_path_name of module[{}] at 0x{:X}",
+						THREAD_LOG("  [monitor] guest reading full_path_name of module[{}] at 0x{:X}",
 							entry_index, address);
 					}
 					else if (offset_in_entry >= image_base_offset && offset_in_entry < image_base_offset + 8)
 					{
-						spdlog::info("  [monitor] guest reading image_base of module[{}] at 0x{:X}",
+						THREAD_LOG("  [monitor] guest reading image_base of module[{}] at 0x{:X}",
 							entry_index, address);
 					}
 				},
@@ -300,7 +300,7 @@ static void handle_query_system_information(const std::shared_ptr<emulator_t>& e
 				{
 					if (_stricmp(file_name, module->name().c_str()) == 0)
 					{
-						spdlog::info("  host module[{}]: '{}' base remapped 0x{:X} -> 0x{:X}",
+						THREAD_LOG("  host module[{}]: '{}' base remapped 0x{:X} -> 0x{:X}",
 							i, file_name, entry.image_base, module->base_address());
 
 						entry.image_base = module->base_address();
@@ -309,12 +309,12 @@ static void handle_query_system_information(const std::shared_ptr<emulator_t>& e
 					}
 				}
 
-				spdlog::info("  host module[{}]: base=0x{:X}, size=0x{:X}, name='{}'",
+				THREAD_LOG("  host module[{}]: base=0x{:X}, size=0x{:X}, name='{}'",
 					i, entry.image_base, entry.image_size,
 					reinterpret_cast<const char*>(entry.full_path_name));
 			}
 
-			spdlog::info("  host module count (0xB): {}", count);
+			THREAD_LOG("  host module count (0xB): {}", count);
 
 			const auto write_size = std::min(static_cast<std::uint32_t>(host_return_length), buffer_length);
 
@@ -336,11 +336,11 @@ static void handle_query_system_information(const std::shared_ptr<emulator_t>& e
 
 		error.throw_if("read return length for logging");
 
-		spdlog::info("NtQuerySystemInformation returning 0x{:X} (required_size=0x{:X})", status, returned_length);
+		THREAD_LOG("NtQuerySystemInformation returning 0x{:X} (required_size=0x{:X})", status, returned_length);
 	}
 	else
 	{
-		spdlog::info("NtQuerySystemInformation returning 0x{:X}", status);
+		THREAD_LOG("NtQuerySystemInformation returning 0x{:X}", status);
 	}
 
 	write_nt_status(emulator, status);

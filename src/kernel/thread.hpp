@@ -5,6 +5,7 @@
 #include "kernel_def.hpp"
 #include "process_loader.hpp"
 
+#include <chrono>
 #include <cstdint>
 #include <memory>
 

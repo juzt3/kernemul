@@ -25,7 +25,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 				component_name = kernel::read_guest_string(*emulator, r9);
 			}
 
-			spdlog::info("KeRegisterBugCheckReasonCallback called (record=0x{:X}, routine=0x{:X}, reason=0x{:X}, component='{}')",
+			THREAD_LOG("KeRegisterBugCheckReasonCallback called (record=0x{:X}, routine=0x{:X}, reason=0x{:X}, component='{}')",
 				rcx, rdx, r8, component_name);
 
 			write_return_value(emulator, 1);
@@ -40,7 +40,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 		{
 			const auto record = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
 
-			spdlog::info("KeDeregisterBugCheckReasonCallback called (record=0x{:X})", record);
+			THREAD_LOG("KeDeregisterBugCheckReasonCallback called (record=0x{:X})", record);
 
 			write_return_value(emulator, 1);
 		},
@@ -54,7 +54,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 			const auto irql = get_guest_irql(emulator);
 			const bool result = irql != 0;
 
-			spdlog::info("KeAreAllApcsDisabled called (irql={}, result={})", irql, result);
+			THREAD_LOG("KeAreAllApcsDisabled called (irql={}, result={})", irql, result);
 
 			write_return_value(emulator, result);
 		},
@@ -67,7 +67,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 		{
 			const auto irql = get_guest_irql(emulator);
 
-			spdlog::info("KeGetCurrentIrql called (irql={})", irql);
+			THREAD_LOG("KeGetCurrentIrql called (irql={})", irql);
 
 			write_return_value(emulator, irql);
 		},
@@ -82,7 +82,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 			const auto type = emulator->read_register<x86::reg::rdx, std::uint32_t>();
 			const auto state = emulator->read_register<x86::reg::r8, std::uint8_t>();
 
-			spdlog::info("KeInitializeEvent called (event=0x{:X}, type={}, state={})",
+			THREAD_LOG("KeInitializeEvent called (event=0x{:X}, type={}, state={})",
 				event_address, type, state);
 
 			const auto signal_state = static_cast<std::int32_t>(state);
@@ -113,7 +113,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 		{
 			const auto timer_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
 
-			spdlog::info("KeInitializeTimer called (timer=0x{:X})", timer_address);
+			THREAD_LOG("KeInitializeTimer called (timer=0x{:X})", timer_address);
 
 			constexpr std::uint64_t zero_qword = 0;
 			emulator_err_t error = emulator->write_virtual_memory(
@@ -157,7 +157,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 			const auto due_time = emulator->read_register<x86::reg::rdx, std::int64_t>();
 			const auto dpc = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
 
-			spdlog::info("KeSetTimer called (timer=0x{:X}, due_time={}, dpc=0x{:X})",
+			THREAD_LOG("KeSetTimer called (timer=0x{:X}, due_time={}, dpc=0x{:X})",
 				timer_address, due_time, dpc);
 
 			emulator_err_t error = emulator->write_virtual_memory(
@@ -207,12 +207,12 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 				}
 			}
 
-			spdlog::info("ExCreateCallback called (out=0x{:X}, name='{}', create={}, allow_multiple={})",
+			THREAD_LOG("ExCreateCallback called (out=0x{:X}, name='{}', create={}, allow_multiple={})",
 				callback_object_out, object_name, create, allow_multiple);
 
 			if (!create && object_name.empty())
 			{
-				spdlog::warn("ExCreateCallback: no name and Create=FALSE, returning STATUS_UNSUCCESSFUL");
+				THREAD_WARN_LOG("ExCreateCallback: no name and Create=FALSE, returning STATUS_UNSUCCESSFUL");
 				write_nt_status(emulator, 0xC0000001);
 				return;
 			}
@@ -222,7 +222,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 
 			if (!allocation)
 			{
-				spdlog::error("ExCreateCallback: heap allocation failed");
+				THREAD_ERR_LOG("ExCreateCallback: heap allocation failed");
 				write_nt_status(emulator, 0xC000009A);
 				return;
 			}
@@ -248,7 +248,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 			error = emulator->write_virtual_memory(callback_object_out, &object_address, sizeof(object_address));
 			error.throw_if("ExCreateCallback: write output pointer");
 
-			spdlog::info("ExCreateCallback: allocated callback object at 0x{:X}", object_address);
+			THREAD_LOG("ExCreateCallback: allocated callback object at 0x{:X}", object_address);
 
 			write_nt_success(emulator);
 		},
@@ -264,7 +264,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 			const auto callback_function = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
 			const auto callback_context = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
 
-			spdlog::info("ExRegisterCallback called (object=0x{:X}, function=0x{:X}, context=0x{:X})",
+			THREAD_LOG("ExRegisterCallback called (object=0x{:X}, function=0x{:X}, context=0x{:X})",
 				callback_object, callback_function, callback_context);
 
 			const auto handle = emulator->heap_allocate(8, prot_read_write, true);
@@ -297,7 +297,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 				event_address + offsetof(_KEVENT, Header.SignalState), &signaled, sizeof(signaled));
 			error.throw_if("KeSetEvent: write SignalState");
 
-			spdlog::info("KeSetEvent called (event=0x{:X}, increment={}, wait={}, previous_state={})",
+			THREAD_LOG("KeSetEvent called (event=0x{:X}, increment={}, wait={}, previous_state={})",
 				event_address, increment, wait, previous_state);
 
 			write_return_value(emulator, static_cast<std::uint32_t>(previous_state));
@@ -321,7 +321,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 				prompt = kernel::read_guest_string(*emulator, prompt_address);
 			}
 
-			spdlog::info("DbgPrompt called (prompt='{}', response=0x{:X}, length={})",
+			THREAD_LOG("DbgPrompt called (prompt='{}', response=0x{:X}, length={})",
 				prompt, response_address, length);
 
 			const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
@@ -339,7 +339,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 			const auto broadcast_function = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
 			const auto context = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
 
-			spdlog::info("KeIpiGenericCall called (broadcast_function=0x{:X}, context=0x{:X})",
+			THREAD_LOG("KeIpiGenericCall called (broadcast_function=0x{:X}, context=0x{:X})",
 				broadcast_function, context);
 
 			const auto saved_rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
@@ -352,21 +352,21 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 			emulator->write_register<x86::reg::rcx>(context);
 			emulator->write_register<x86::reg::rsp>(*call_stack + shadow_space);
 
-			spdlog::info("KeIpiGenericCall: invoking guest BroadcastFunction at 0x{:X} with context=0x{:X}",
+			THREAD_LOG("KeIpiGenericCall: invoking guest BroadcastFunction at 0x{:X} with context=0x{:X}",
 				broadcast_function, context);
 
 			const auto run_result = emulator->run_at(broadcast_function, emulator_t::thread_return_address);
 
 			if (!run_result)
 			{
-				spdlog::error("KeIpiGenericCall: run guest callback: 'failed'");
+				THREAD_ERR_LOG("KeIpiGenericCall: run guest callback: 'failed'");
 			}
 
 			emulator->write_register<x86::reg::rsp>(saved_rsp);
 
 			const auto result = emulator->read_register<x86::reg::rax, std::uint64_t>();
 
-			spdlog::info("KeIpiGenericCall: guest callback returned 0x{:X}", result);
+			THREAD_LOG("KeIpiGenericCall: guest callback returned 0x{:X}", result);
 
 			write_return_value(emulator, result);
 		},
@@ -380,7 +380,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 		{
 			const auto routine = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
 
-			spdlog::info("PsRemoveLoadImageNotifyRoutine called (routine=0x{:X})", routine);
+			THREAD_LOG("PsRemoveLoadImageNotifyRoutine called (routine=0x{:X})", routine);
 
 			write_nt_success(emulator);
 		},
@@ -394,7 +394,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 		{
 			const auto routine = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
 
-			spdlog::info("PsRemoveCreateThreadNotifyRoutine called (routine=0x{:X})", routine);
+			THREAD_LOG("PsRemoveCreateThreadNotifyRoutine called (routine=0x{:X})", routine);
 
 			write_nt_success(emulator);
 		},
@@ -409,7 +409,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 			const auto routine = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
 			const auto remove = emulator->read_register<x86::reg::rdx, std::uint8_t>();
 
-			spdlog::info("PsSetCreateProcessNotifyRoutine called (routine=0x{:X}, remove={})", routine, remove);
+			THREAD_LOG("PsSetCreateProcessNotifyRoutine called (routine=0x{:X}, remove={})", routine, remove);
 
 			write_nt_success(emulator);
 		},
@@ -423,7 +423,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 			const auto routine = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
 			const auto remove = emulator->read_register<x86::reg::rdx, std::uint8_t>();
 
-			spdlog::info("PsSetCreateProcessNotifyRoutineEx called (routine=0x{:X}, remove={})", routine, remove);
+			THREAD_LOG("PsSetCreateProcessNotifyRoutineEx called (routine=0x{:X}, remove={})", routine, remove);
 
 			write_nt_success(emulator);
 		},
@@ -441,7 +441,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 			constexpr std::uint64_t dispatch_level = 2;
 			emulator->write_register<x86::reg::cr8>(dispatch_level);
 
-			spdlog::info("KeAcquireSpinLockRaiseToDpc called (spin_lock=0x{:X}, old_irql={})", spin_lock, old_irql);
+			THREAD_LOG("KeAcquireSpinLockRaiseToDpc called (spin_lock=0x{:X}, old_irql={})", spin_lock, old_irql);
 
 			write_return_value(emulator, old_irql);
 		},
@@ -455,7 +455,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 			const auto spin_lock = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
 			const auto new_irql = emulator->read_register<x86::reg::rdx, std::uint8_t>();
 
-			spdlog::info("KeReleaseSpinLock called (spin_lock=0x{:X}, new_irql={})", spin_lock, new_irql);
+			THREAD_LOG("KeReleaseSpinLock called (spin_lock=0x{:X}, new_irql={})", spin_lock, new_irql);
 
 			emulator->write_register<x86::reg::cr8>(static_cast<std::uint64_t>(new_irql));
 		},
@@ -469,7 +469,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 		{
 			const auto run_ref = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
 
-			spdlog::info("ExWaitForRundownProtectionRelease called (run_ref=0x{:X})", run_ref);
+			THREAD_LOG("ExWaitForRundownProtectionRelease called (run_ref=0x{:X})", run_ref);
 
 			constexpr std::uint64_t rundown_complete = 1;
 			emulator_err_t error = emulator->write_virtual_memory(run_ref, &rundown_complete, sizeof(rundown_complete));
@@ -495,7 +495,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 				error.throw_if("KeDelayExecutionThread: read interval");
 			}
 
-			spdlog::info("KeDelayExecutionThread called (wait_mode={}, alertable={}, interval={})",
+			THREAD_LOG("KeDelayExecutionThread called (wait_mode={}, alertable={}, interval={})",
 				wait_mode, alertable, interval);
 
 			write_nt_success(emulator);
@@ -523,7 +523,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 				timer_address + offsetof(_KTIMER, DueTime), &zero_due_time, sizeof(zero_due_time));
 			error.throw_if("KeCancelTimer: zero DueTime");
 
-			spdlog::info("KeCancelTimer called (timer=0x{:X}, was_set={})", timer_address, was_set);
+			THREAD_LOG("KeCancelTimer called (timer=0x{:X}, was_set={})", timer_address, was_set);
 
 			write_return_value(emulator, was_set);
 		},
@@ -537,7 +537,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 		{
 			const auto adapter = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
 
-			spdlog::info("HalPutDmaAdapter called (adapter=0x{:X})", adapter);
+			THREAD_LOG("HalPutDmaAdapter called (adapter=0x{:X})", adapter);
 		},
 		mapped_image,
 		"HalPutDmaAdapter"
@@ -569,7 +569,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 
 			if (!handler_module)
 			{
-				spdlog::error("__C_specific_handler: module not found for control_pc 0x{:X}", control_pc);
+				THREAD_ERR_LOG("__C_specific_handler: module not found for control_pc 0x{:X}", control_pc);
 				write_return_value(emulator, 1);
 				return;
 			}
@@ -591,13 +591,13 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 
 			const auto* scopes = reinterpret_cast<const scope_entry_t*>(&scope_table_ptr[1]);
 
-			spdlog::info("__C_specific_handler: control_pc_rva=0x{:X}, flags=0x{:X}, scope_count={}, scope_index={}",
+			THREAD_LOG("__C_specific_handler: control_pc_rva=0x{:X}, flags=0x{:X}, scope_count={}, scope_index={}",
 				control_pc_rva, record.ExceptionFlags, scope_count, scope_index);
 
 			if ((record.ExceptionFlags & 0x66) != 0)
 			{
 				// todo: unwind case
-				spdlog::info("__C_specific_handler: unwind case (flags=0x{:X}), returning continue_search",
+				THREAD_LOG("__C_specific_handler: unwind case (flags=0x{:X}), returning continue_search",
 					record.ExceptionFlags);
 				write_return_value(emulator, 1);
 				return;
@@ -617,14 +617,14 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 					continue;
 				}
 
-				spdlog::info("__C_specific_handler: scope[{}] begin=0x{:X} end=0x{:X} handler=0x{:X} target=0x{:X}",
+				THREAD_LOG("__C_specific_handler: scope[{}] begin=0x{:X} end=0x{:X} handler=0x{:X} target=0x{:X}",
 					i, scope.begin_address, scope.end_address, scope.handler_address, scope.jump_target);
 
 				if (scope.handler_address == 1)
 				{
 					const auto target = image_base + scope.jump_target;
 
-					spdlog::info("__C_specific_handler: EXCEPTION_EXECUTE_HANDLER, target=0x{:X}", target);
+					THREAD_LOG("__C_specific_handler: EXCEPTION_EXECUTE_HANDLER, target=0x{:X}", target);
 
 					emulator->write_register<x86::reg::rip>(target);
 					emulator->write_register<x86::reg::rsp>(establisher_frame);
@@ -654,7 +654,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 				emulator->write_register<x86::reg::rdx>(establisher_frame);
 				emulator->write_register<x86::reg::rsp>(*pointers_alloc);
 
-				spdlog::info("__C_specific_handler: calling filter at 0x{:X}", filter_address);
+				THREAD_LOG("__C_specific_handler: calling filter at 0x{:X}", filter_address);
 
 				const auto run_result = emulator->run_at(filter_address, emulator_t::thread_return_address);
 				static_cast<void>(run_result);
@@ -666,7 +666,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 				emulator->write_register<x86::reg::rsp>(saved_rsp);
 				emulator->write_register<x86::reg::rip>(saved_rip);
 
-				spdlog::info("__C_specific_handler: filter returned {}", filter_result);
+				THREAD_LOG("__C_specific_handler: filter returned {}", filter_result);
 
 				if (filter_result < 0)
 				{
@@ -678,7 +678,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 				{
 					const auto target = image_base + scope.jump_target;
 
-					spdlog::info("__C_specific_handler: jumping to __except at 0x{:X}", target);
+					THREAD_LOG("__C_specific_handler: jumping to __except at 0x{:X}", target);
 
 					emulator->write_register<x86::reg::rip>(target);
 					emulator->write_register<x86::reg::rsp>(establisher_frame);
@@ -688,7 +688,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 				}
 			}
 
-			spdlog::info("__C_specific_handler: no matching scope, returning continue_search");
+			THREAD_LOG("__C_specific_handler: no matching scope, returning continue_search");
 			write_return_value(emulator, 1);
 		},
 		mapped_image,
@@ -707,7 +707,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 				thread_address + offsetof(_KTHREAD, ApcState) + offsetof(_KAPC_STATE, Process),
 				&process_address, sizeof(process_address));
 
-			spdlog::info("PsGetCurrentProcess called (id=0x{:X})", process->id());
+			THREAD_LOG("PsGetCurrentProcess called (id=0x{:X})", process->id());
 
 			write_return_value(emulator, process_address);
 		},
@@ -722,7 +722,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 
 			if ((slist_head & 0xF) != 0)
 			{
-				spdlog::warn("InitializeSListHead: unaligned address 0x{:X}, raising STATUS_DATATYPE_MISALIGNMENT", slist_head);
+				THREAD_WARN_LOG("InitializeSListHead: unaligned address 0x{:X}, raising STATUS_DATATYPE_MISALIGNMENT", slist_head);
 
 				constexpr std::uint32_t status_datatype_misalignment = 0x80000002;
 				const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
@@ -738,7 +738,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 			emulator_err_t error = emulator->write_virtual_memory(slist_head, zero.data(), sizeof(zero));
 			error.throw_if("InitializeSListHead: zero header");
 
-			spdlog::info("InitializeSListHead called (header=0x{:X})", slist_head);
+			THREAD_LOG("InitializeSListHead called (header=0x{:X})", slist_head);
 		}),
 		mapped_image,
 		"InitializeSListHead"
@@ -754,7 +754,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 			emulator_err_t error = emulator->write_virtual_memory(push_lock, &zero, sizeof(zero));
 			error.throw_if("ExInitializePushLock: zero lock");
 
-			spdlog::info("ExInitializePushLock called (lock=0x{:X})", push_lock);
+			THREAD_LOG("ExInitializePushLock called (lock=0x{:X})", push_lock);
 		},
 		mapped_image,
 		"ExInitializePushLock"
@@ -766,7 +766,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 		{
 			const auto routine = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
 
-			spdlog::info("PsSetLoadImageNotifyRoutine called (routine=0x{:X})", routine);
+			THREAD_LOG("PsSetLoadImageNotifyRoutine called (routine=0x{:X})", routine);
 
 			write_nt_success(emulator);
 		},
@@ -780,7 +780,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 			const auto process_id = emulator->read_register<x86::reg::rcx, std::uint64_t>();
 			const auto process_out = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
 
-			spdlog::info("PsLookupProcessByProcessId called (pid={}, out=0x{:X})", process_id, process_out);
+			THREAD_LOG("PsLookupProcessByProcessId called (pid={}, out=0x{:X})", process_id, process_out);
 
 			for (const auto& process : kernel::process_entries)
 			{
@@ -791,14 +791,14 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 					emulator_err_t error = emulator->write_virtual_memory(process_out, &address, sizeof(address));
 					error.throw_if("PsLookupProcessByProcessId: write process");
 
-					spdlog::info("PsLookupProcessByProcessId: found process at 0x{:X}", address);
+					THREAD_LOG("PsLookupProcessByProcessId: found process at 0x{:X}", address);
 
 					write_nt_success(emulator);
 					return;
 				}
 			}
 
-			spdlog::warn("PsLookupProcessByProcessId: pid {} not found", process_id);
+			THREAD_WARN_LOG("PsLookupProcessByProcessId: pid {} not found", process_id);
 
 			constexpr std::uint32_t status_invalid_cid = 0xC000000B;
 			write_nt_status(emulator, status_invalid_cid);
@@ -813,7 +813,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 			const auto process_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
 			const auto image_file_name_address = process_address + offsetof(_EPROCESS, ImageFileName);
 
-			spdlog::info("PsGetProcessImageFileName called (process=0x{:X}) -> 0x{:X}",
+			THREAD_LOG("PsGetProcessImageFileName called (process=0x{:X}) -> 0x{:X}",
 				process_address, image_file_name_address);
 
 			write_return_value(emulator, image_file_name_address);
@@ -844,7 +844,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 			emulator_err_t error = emulator->write_virtual_memory(mutex_address, &mutex, sizeof(mutex));
 			error.throw_if("KeInitializeGuardedMutex: write mutex");
 
-			spdlog::info("KeInitializeGuardedMutex called (mutex=0x{:X})", mutex_address);
+			THREAD_LOG("KeInitializeGuardedMutex called (mutex=0x{:X})", mutex_address);
 		},
 		mapped_image,
 		"KeInitializeGuardedMutex"
@@ -915,7 +915,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 				error.throw_if("PsCreateSystemThread: write ClientId");
 			}
 
-			spdlog::info("PsCreateSystemThread called (handle_out=0x{:X}, start_routine=0x{:X}, start_context=0x{:X}, tid={}, stack=0x{:X})",
+			THREAD_LOG("PsCreateSystemThread called (handle_out=0x{:X}, start_routine=0x{:X}, start_context=0x{:X}, tid={}, stack=0x{:X})",
 				thread_handle_out, start_routine, start_context, thread_id, stack_top);
 
 			write_nt_success(emulator);
@@ -934,7 +934,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 			emulator_err_t error = emulator->write_virtual_memory(seed_address, &result, sizeof(result));
 			error.throw_if("RtlRandomEx: write seed");
 
-			spdlog::info("RtlRandomEx called (seed=0x{:X}) -> 0x{:X}", seed_address, result);
+			THREAD_LOG("RtlRandomEx called (seed=0x{:X}) -> 0x{:X}", seed_address, result);
 
 			write_return_value(emulator, result);
 		},
@@ -948,7 +948,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 		{
 			const emulator_t::address_type routine = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
 
-			spdlog::info("PsSetCreateThreadNotifyRoutine called (routine=0x{:X})", routine);
+			THREAD_LOG("PsSetCreateThreadNotifyRoutine called (routine=0x{:X})", routine);
 
 			write_nt_success(emulator);
 		},
@@ -1031,7 +1031,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 			error = emulator->write_virtual_memory(device_object_out, &device_address, sizeof(device_address));
 			error.throw_if("IoCreateDevice: write output pointer");
 
-			spdlog::info("IoCreateDevice called (driver=0x{:X}, ext_size=0x{:X}, name='{}', type=0x{:X}, chars=0x{:X}) -> 0x{:X}",
+			THREAD_LOG("IoCreateDevice called (driver=0x{:X}, ext_size=0x{:X}, name='{}', type=0x{:X}, chars=0x{:X}) -> 0x{:X}",
 				driver_object, extension_size, name, device_type, device_characteristics, device_address);
 
 			write_nt_success(emulator);
@@ -1056,7 +1056,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 				device_object + offsetof(_DEVICE_OBJECT, Flags), &flags, sizeof(flags));
 			error.throw_if("IoRegisterShutdownNotification: write Flags");
 
-			spdlog::info("IoRegisterShutdownNotification called (device=0x{:X})", device_object);
+			THREAD_LOG("IoRegisterShutdownNotification called (device=0x{:X})", device_object);
 
 			write_nt_success(emulator);
 		},
@@ -1100,7 +1100,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 				}
 			}
 
-			spdlog::info("IoCreateSymbolicLink called (link='{}', device='{}')", link_name, device_name);
+			THREAD_LOG("IoCreateSymbolicLink called (link='{}', device='{}')", link_name, device_name);
 
 			write_nt_success(emulator);
 		},
@@ -1129,7 +1129,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 				}
 			}
 
-			spdlog::info("ExGetFirmwareEnvironmentVariable called (variable='{}')", variable_name);
+			THREAD_LOG("ExGetFirmwareEnvironmentVariable called (variable='{}')", variable_name);
 
 			write_nt_success(emulator);
 		},

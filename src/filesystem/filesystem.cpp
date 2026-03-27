@@ -1,7 +1,7 @@
 #include "filesystem.hpp"
 
 #include <fstream>
-#include <spdlog/spdlog.h>
+#include "../util/logs.hpp"
 
 std::span<const std::uint8_t> file_t::read() const
 {
@@ -162,7 +162,7 @@ bool filesystem_t::load_at(const std::string& host_path, const path_type& virtua
 
 	if (!file.is_open())
 	{
-		spdlog::warn("filesystem: failed to open host file '{}'", host_path);
+		GLOBAL_WARN_LOG("filesystem: failed to open host file '{}'", host_path);
 		return false;
 	}
 
@@ -174,7 +174,7 @@ bool filesystem_t::load_at(const std::string& host_path, const path_type& virtua
 
 	list_[virtual_path] = std::make_shared<file_t>(std::move(buffer));
 
-	spdlog::info("filesystem: loaded '{}' -> '{}' ({} bytes)", host_path, virtual_path, file_size);
+	GLOBAL_LOG("filesystem: loaded '{}' -> '{}' ({} bytes)", host_path, virtual_path, file_size);
 
 	return true;
 }

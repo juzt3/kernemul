@@ -2,7 +2,7 @@
 #include "kernel.hpp"
 #include "../emulator/object.hpp"
 
-#include <spdlog/spdlog.h>
+#include "../util/logs.hpp"
 
 #include <format>
 
@@ -21,7 +21,7 @@ std::shared_ptr<thread_t> kernel::create_thread(const std::shared_ptr<emulator_t
 
 	auto thread = std::make_shared<thread_t>(thread_id, emulator, process, std::move(object));
 
-	spdlog::info("created thread (thread id={}, process id={}, object address=0x{:X})",
+	GLOBAL_LOG("created thread (thread id={}, process id={}, object address=0x{:X})",
 		thread_id, process->id(), thread->address());
 
 	return thread;

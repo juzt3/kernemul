@@ -30,12 +30,12 @@ void redirect_ntoskrnl_string_functions(const std::shared_ptr<emulator_t>& emula
 				destination.Length = static_cast<std::uint16_t>(byte_length);
 				destination.MaximumLength = static_cast<std::uint16_t>(byte_length + sizeof(wchar_t));
 
-				spdlog::info("RtlInitUnicodeString called (destination=0x{:X}, source='{}')",
+				THREAD_LOG("RtlInitUnicodeString called (destination=0x{:X}, source='{}')",
 					rcx, util::narrow_wstring(source_string));
 			}
 			else
 			{
-				spdlog::info("RtlInitUnicodeString called (destination=0x{:X}, source=null)", rcx);
+				THREAD_LOG("RtlInitUnicodeString called (destination=0x{:X}, source=null)", rcx);
 			}
 
 			destination_object.write(destination);
@@ -51,7 +51,7 @@ void redirect_ntoskrnl_string_functions(const std::shared_ptr<emulator_t>& emula
 			const auto rdx = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
 			const auto r8 = emulator->read_register<x86::reg::r8, std::uint64_t>();
 
-			spdlog::info("RtlDuplicateUnicodeString called (string in=0x{:X})", rdx);
+			THREAD_LOG("RtlDuplicateUnicodeString called (string in=0x{:X})", rdx);
 
 			if ((ecx & 0xFFFFFFFC) != 0 ||
 				((ecx & 2) != 0 && (ecx & 1) == 0) ||
@@ -164,7 +164,7 @@ void redirect_ntoskrnl_string_functions(const std::shared_ptr<emulator_t>& emula
 
 			if (string_value.Buffer)
 			{
-				spdlog::info("RtlFreeUnicodeString called (buffer=0x{:X})", reinterpret_cast<std::uint64_t>(string_value.Buffer));
+				THREAD_LOG("RtlFreeUnicodeString called (buffer=0x{:X})", reinterpret_cast<std::uint64_t>(string_value.Buffer));
 
 				const UNICODE_STRING zeroed = { };
 
@@ -172,7 +172,7 @@ void redirect_ntoskrnl_string_functions(const std::shared_ptr<emulator_t>& emula
 			}
 			else
 			{
-				spdlog::info("RtlFreeUnicodeString called (buffer=null)");
+				THREAD_LOG("RtlFreeUnicodeString called (buffer=null)");
 			}
 		},
 		mapped_image,
@@ -186,7 +186,7 @@ void redirect_ntoskrnl_string_functions(const std::shared_ptr<emulator_t>& emula
 
 			if (!rcx)
 			{
-				spdlog::info("wcslen called (str=null, result=0)");
+				THREAD_LOG("wcslen called (str=null, result=0)");
 
 				write_return_value(emulator, 0);
 
@@ -195,7 +195,7 @@ void redirect_ntoskrnl_string_functions(const std::shared_ptr<emulator_t>& emula
 
 			const auto str = kernel::read_guest_wstring(*emulator, rcx);
 
-			spdlog::info("wcslen called (str='{}', result={})", util::narrow_wstring(str), str.size());
+			THREAD_LOG("wcslen called (str='{}', result={})", util::narrow_wstring(str), str.size());
 
 			write_return_value(emulator, str.size());
 		},
@@ -215,7 +215,7 @@ void redirect_ntoskrnl_string_functions(const std::shared_ptr<emulator_t>& emula
 
 			if (!dst_address || !size_in_words)
 			{
-				spdlog::warn("wcscpy_s called with null dst or zero size (dst=0x{:X}, size={}, src=0x{:X})",
+				THREAD_WARN_LOG("wcscpy_s called with null dst or zero size (dst=0x{:X}, size={}, src=0x{:X})",
 					dst_address, size_in_words, src_address);
 
 				write_return_value(emulator, einval);
@@ -225,7 +225,7 @@ void redirect_ntoskrnl_string_functions(const std::shared_ptr<emulator_t>& emula
 
 			if (!src_address)
 			{
-				spdlog::warn("wcscpy_s called with null src (dst=0x{:X}, size={})", dst_address, size_in_words);
+				THREAD_WARN_LOG("wcscpy_s called with null src (dst=0x{:X}, size={})", dst_address, size_in_words);
 
 				const wchar_t null_term = 0;
 
@@ -240,7 +240,7 @@ void redirect_ntoskrnl_string_functions(const std::shared_ptr<emulator_t>& emula
 
 			const auto src_string = kernel::read_guest_wstring(*emulator, src_address);
 
-			spdlog::info("wcscpy_s called (dst=0x{:X}, size={}, src='{}')",
+			THREAD_LOG("wcscpy_s called (dst=0x{:X}, size={}, src='{}')",
 				dst_address, size_in_words, util::narrow_wstring(src_string));
 
 			auto remaining = size_in_words;
@@ -259,7 +259,7 @@ void redirect_ntoskrnl_string_functions(const std::shared_ptr<emulator_t>& emula
 
 				if (!remaining)
 				{
-					spdlog::warn("wcscpy_s: buffer too small (needed {} words, had {})",
+					THREAD_WARN_LOG("wcscpy_s: buffer too small (needed {} words, had {})",
 						src_string.size() + 1, size_in_words);
 
 					const wchar_t null_term = 0;
@@ -295,7 +295,7 @@ void redirect_ntoskrnl_string_functions(const std::shared_ptr<emulator_t>& emula
 			const auto str1 = kernel::read_guest_string(*emulator, str1_address);
 			const auto str2 = kernel::read_guest_string(*emulator, str2_address);
 
-			spdlog::info("_stricmp called (str1='{}', str2='{}')", str1, str2);
+			THREAD_LOG("_stricmp called (str1='{}', str2='{}')", str1, str2);
 
 			auto a1 = reinterpret_cast<const std::uint8_t*>(str1.data());
 			auto a2 = reinterpret_cast<const std::uint8_t*>(str2.data());
@@ -314,7 +314,7 @@ void redirect_ntoskrnl_string_functions(const std::shared_ptr<emulator_t>& emula
 
 			const auto result = static_cast<std::uint32_t>(v6 - v7);
 
-			spdlog::info("_stricmp returning {}", static_cast<std::int32_t>(result));
+			THREAD_LOG("_stricmp returning {}", static_cast<std::int32_t>(result));
 
 			write_return_value(emulator, result);
 		},
@@ -331,7 +331,7 @@ void redirect_ntoskrnl_string_functions(const std::shared_ptr<emulator_t>& emula
 			const auto str1 = kernel::read_guest_string(*emulator, str1_address);
 			const auto str2 = kernel::read_guest_string(*emulator, str2_address);
 
-			spdlog::info("strcmp called (str1='{}', str2='{}')", str1, str2);
+			THREAD_LOG("strcmp called (str1='{}', str2='{}')", str1, str2);
 
 			const auto* a = reinterpret_cast<const std::uint8_t*>(str1.data());
 			const auto* b = reinterpret_cast<const std::uint8_t*>(str2.data());
@@ -372,7 +372,7 @@ void redirect_ntoskrnl_string_functions(const std::shared_ptr<emulator_t>& emula
 
 			if (!dst_address || !size_in_words)
 			{
-				spdlog::warn("wcscat_s called with null dst or zero size (dst=0x{:X}, size={}, src=0x{:X})",
+				THREAD_WARN_LOG("wcscat_s called with null dst or zero size (dst=0x{:X}, size={}, src=0x{:X})",
 					dst_address, size_in_words, src_address);
 
 				write_return_value(emulator, einval);
@@ -382,7 +382,7 @@ void redirect_ntoskrnl_string_functions(const std::shared_ptr<emulator_t>& emula
 
 			if (!src_address)
 			{
-				spdlog::warn("wcscat_s called with null src (dst=0x{:X}, size={})", dst_address, size_in_words);
+				THREAD_WARN_LOG("wcscat_s called with null src (dst=0x{:X}, size={})", dst_address, size_in_words);
 
 				const wchar_t null_term = 0;
 
@@ -398,14 +398,14 @@ void redirect_ntoskrnl_string_functions(const std::shared_ptr<emulator_t>& emula
 			const auto dst_string = kernel::read_guest_wstring(*emulator, dst_address);
 			const auto src_string = kernel::read_guest_wstring(*emulator, src_address);
 
-			spdlog::info("wcscat_s called (dst=0x{:X}, dst_content='{}', size={}, src='{}')",
+			THREAD_LOG("wcscat_s called (dst=0x{:X}, dst_content='{}', size={}, src='{}')",
 				dst_address, util::narrow_wstring(dst_string), size_in_words, util::narrow_wstring(src_string));
 
 			auto remaining = size_in_words;
 
 			if (dst_string.size() >= remaining)
 			{
-				spdlog::warn("wcscat_s: dst string not null-terminated within size");
+				THREAD_WARN_LOG("wcscat_s: dst string not null-terminated within size");
 
 				const wchar_t null_term = 0;
 
@@ -434,7 +434,7 @@ void redirect_ntoskrnl_string_functions(const std::shared_ptr<emulator_t>& emula
 
 				if (!remaining)
 				{
-					spdlog::warn("wcscat_s: buffer too small");
+					THREAD_WARN_LOG("wcscat_s: buffer too small");
 
 					const wchar_t null_term = 0;
 
@@ -467,7 +467,7 @@ void redirect_ntoskrnl_string_functions(const std::shared_ptr<emulator_t>& emula
 
 			const auto result = std::tolower(c);
 
-			spdlog::info("tolower called (c='{}', result='{}')",
+			THREAD_LOG("tolower called (c='{}', result='{}')",
 				static_cast<char>(c), static_cast<char>(result));
 
 			write_return_value(emulator, static_cast<std::uint32_t>(result));
@@ -499,12 +499,12 @@ void redirect_ntoskrnl_string_functions(const std::shared_ptr<emulator_t>& emula
 				destination.Length = static_cast<USHORT>(length);
 				destination.MaximumLength = static_cast<USHORT>(length + 1);
 
-				spdlog::info("RtlInitAnsiString called (destination=0x{:X}, source='{}')",
+				THREAD_LOG("RtlInitAnsiString called (destination=0x{:X}, source='{}')",
 					destination_address, source_string);
 			}
 			else
 			{
-				spdlog::info("RtlInitAnsiString called (destination=0x{:X}, source=null)", destination_address);
+				THREAD_LOG("RtlInitAnsiString called (destination=0x{:X}, source=null)", destination_address);
 			}
 
 			emulator_err_t error = emulator->write_virtual_memory(destination_address, &destination, sizeof(destination));
@@ -536,7 +536,7 @@ void redirect_ntoskrnl_string_functions(const std::shared_ptr<emulator_t>& emula
 				error.throw_if("RtlAnsiStringToUnicodeString: read source buffer");
 			}
 
-			spdlog::info("RtlAnsiStringToUnicodeString called (dest=0x{:X}, source='{}', allocate={})",
+			THREAD_LOG("RtlAnsiStringToUnicodeString called (dest=0x{:X}, source='{}', allocate={})",
 				destination_address, ansi_string, allocate_destination);
 
 			std::wstring wide_string(ansi_string.begin(), ansi_string.end());

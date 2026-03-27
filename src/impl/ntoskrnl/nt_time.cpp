@@ -160,7 +160,7 @@ void redirect_ntoskrnl_time_functions(const std::shared_ptr<emulator_t>& emulato
 
 			local_time_object.write(local_time);
 
-			spdlog::info("ExSystemTimeToLocalTime called (system_time=0x{:X})", system_time.QuadPart);
+			THREAD_LOG("ExSystemTimeToLocalTime called (system_time=0x{:X})", system_time.QuadPart);
 		},
 		mapped_image,
 		"ExSystemTimeToLocalTime"
@@ -180,7 +180,7 @@ void redirect_ntoskrnl_time_functions(const std::shared_ptr<emulator_t>& emulato
 
 			time_fields_object.write(fields);
 
-			spdlog::info("RtlTimeToTimeFields called (time=0x{:X}, {}-{:02}-{:02} {:02}:{:02}:{:02}.{:03})",
+			THREAD_LOG("RtlTimeToTimeFields called (time=0x{:X}, {}-{:02}-{:02} {:02}:{:02}:{:02}.{:03})",
 				time.QuadPart, fields.Year, fields.Month, fields.Day,
 				fields.Hour, fields.Minute, fields.Second, fields.Milliseconds);
 		},

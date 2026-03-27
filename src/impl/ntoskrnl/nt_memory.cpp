@@ -15,7 +15,7 @@ void redirect_ntoskrnl_memory_functions(const std::shared_ptr<emulator_t>& emula
 
 		error.throw_if("pool heap allocation");
 
-		spdlog::info("{} called (type={}, size=0x{:X}, tag=0x{:X}) -> 0x{:X}", caller_name, pool_type, size, tag, *allocation);
+		THREAD_LOG("{} called (type={}, size=0x{:X}, tag=0x{:X}) -> 0x{:X}", caller_name, pool_type, size, tag, *allocation);
 
 		emulator->write_register<x86::reg::rax>(*allocation);
 	};
@@ -44,7 +44,7 @@ void redirect_ntoskrnl_memory_functions(const std::shared_ptr<emulator_t>& emula
 			const auto rcx = emulator->read_register<x86::reg::rcx, std::uint64_t>();
 			const auto rdx = emulator->read_register<x86::reg::rdx, std::uint64_t>();
 
-			spdlog::info("ExFreePoolWithTag called (buffer=0x{:X}, tag={})", rcx, rdx);
+			THREAD_LOG("ExFreePoolWithTag called (buffer=0x{:X}, tag={})", rcx, rdx);
 		},
 		mapped_image,
 		"ExFreePoolWithTag"
@@ -57,7 +57,7 @@ void redirect_ntoskrnl_memory_functions(const std::shared_ptr<emulator_t>& emula
 			const auto rdx = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
 			const auto r8 = emulator->read_register<x86::reg::r8, std::uint64_t>();
 
-			spdlog::info("RtlCompareMemory called (source1=0x{:X}, source2=0x{:X}, length=0x{:X})", rcx, rdx, r8);
+			THREAD_LOG("RtlCompareMemory called (source1=0x{:X}, source2=0x{:X}, length=0x{:X})", rcx, rdx, r8);
 
 			std::uint64_t matching_bytes = 0;
 
@@ -85,7 +85,7 @@ void redirect_ntoskrnl_memory_functions(const std::shared_ptr<emulator_t>& emula
 				}
 			}
 
-			spdlog::info("RtlCompareMemory returned 0x{:X}", matching_bytes);
+			THREAD_LOG("RtlCompareMemory returned 0x{:X}", matching_bytes);
 
 			write_return_value(emulator, matching_bytes);
 		},
@@ -99,7 +99,7 @@ void redirect_ntoskrnl_memory_functions(const std::shared_ptr<emulator_t>& emula
 			const auto virtual_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
 			const auto result = emulator->translate_virtual_address(virtual_address).has_value();
 
-			spdlog::info("MmIsAddressValid called (address=0x{:X}, valid={})", virtual_address, result);
+			THREAD_LOG("MmIsAddressValid called (address=0x{:X}, valid={})", virtual_address, result);
 
 			write_return_value(emulator, result);
 		},
@@ -114,7 +114,7 @@ void redirect_ntoskrnl_memory_functions(const std::shared_ptr<emulator_t>& emula
 
 			if (!rcx)
 			{
-				spdlog::warn("MmGetSystemRoutineAddress called with null argument");
+				THREAD_WARN_LOG("MmGetSystemRoutineAddress called with null argument");
 				write_return_value(emulator, 0);
 				return;
 			}
@@ -129,7 +129,7 @@ void redirect_ntoskrnl_memory_functions(const std::shared_ptr<emulator_t>& emula
 				routine_name = util::narrow_wstring(kernel::read_guest_wstring(*emulator, buffer_address));
 			}
 
-			spdlog::info("MmGetSystemRoutineAddress called (name='{}')", routine_name);
+			THREAD_LOG("MmGetSystemRoutineAddress called (name='{}')", routine_name);
 
 			if (routine_name.empty())
 			{
@@ -160,11 +160,11 @@ void redirect_ntoskrnl_memory_functions(const std::shared_ptr<emulator_t>& emula
 
 			if (result)
 			{
-				spdlog::info("MmGetSystemRoutineAddress: found '{}' at 0x{:X}", routine_name, result);
+				THREAD_LOG("MmGetSystemRoutineAddress: found '{}' at 0x{:X}", routine_name, result);
 			}
 			else
 			{
-				spdlog::warn("MmGetSystemRoutineAddress: '{}' not found", routine_name);
+				THREAD_WARN_LOG("MmGetSystemRoutineAddress: '{}' not found", routine_name);
 			}
 
 			write_return_value(emulator, result);
@@ -201,7 +201,7 @@ void redirect_ntoskrnl_memory_functions(const std::shared_ptr<emulator_t>& emula
 			error = emulator->write_virtual_memory(*allocation, guest_ranges.data(), buffer_size);
 			error.throw_if("write MmGetPhysicalMemoryRanges buffer");
 
-			spdlog::info("MmGetPhysicalMemoryRanges called ({} ranges, buffer=0x{:X})",
+			THREAD_LOG("MmGetPhysicalMemoryRanges called ({} ranges, buffer=0x{:X})",
 				ranges.size(), *allocation);
 
 			write_return_value(emulator, *allocation);
@@ -227,7 +227,7 @@ void redirect_ntoskrnl_memory_functions(const std::shared_ptr<emulator_t>& emula
 			const emulator_err_t error = allocation.error_or({});
 			error.throw_if("contiguous memory allocation");
 
-			spdlog::info("MmAllocateContiguousMemorySpecifyCache called (size=0x{:X}, lowest=0x{:X}, highest=0x{:X}, boundary=0x{:X}, cache_type={}) -> 0x{:X}",
+			THREAD_LOG("MmAllocateContiguousMemorySpecifyCache called (size=0x{:X}, lowest=0x{:X}, highest=0x{:X}, boundary=0x{:X}, cache_type={}) -> 0x{:X}",
 				size, lowest, highest, boundary, cache_type, *allocation);
 
 			write_return_value(emulator, *allocation);
@@ -241,18 +241,27 @@ void redirect_ntoskrnl_memory_functions(const std::shared_ptr<emulator_t>& emula
 		{
 			const auto virtual_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
 
+			if (virtual_address == 0xF0F87C3E1000)
+			{
+				const auto current_cr3 = emulator->read_register<x86::reg::cr3, cr3>();
+
+				write_return_value(emulator, current_cr3.address_of_page_directory << 12);
+
+				return;
+			}
+
 			const auto physical_address = emulator->translate_virtual_address(virtual_address);
 
 			if (!physical_address)
 			{
-				spdlog::warn("MmGetPhysicalAddress called with invalid virtual address 0x{:X}", virtual_address);
+				THREAD_WARN_LOG("MmGetPhysicalAddress called with invalid virtual address 0x{:X}", virtual_address);
 
 				write_return_value(emulator, 0);
 
 				return;
 			}
 
-			spdlog::info("MmGetPhysicalAddress called (virtual=0x{:X}) -> 0x{:X}", virtual_address, *physical_address);
+			THREAD_LOG("MmGetPhysicalAddress called (virtual=0x{:X}) -> 0x{:X}", virtual_address, *physical_address);
 
 			write_return_value(emulator, *physical_address);
 		},
@@ -289,7 +298,7 @@ void redirect_ntoskrnl_memory_functions(const std::shared_ptr<emulator_t>& emula
 			error = emulator->write_virtual_memory(mdl_address, &mdl, sizeof(mdl));
 			error.throw_if("IoAllocateMdl: write MDL");
 
-			spdlog::info("IoAllocateMdl called (va=0x{:X}, length=0x{:X}, pages={}) -> 0x{:X}",
+			THREAD_LOG("IoAllocateMdl called (va=0x{:X}, length=0x{:X}, pages={}) -> 0x{:X}",
 				virtual_address, length, page_count, mdl_address);
 
 			write_return_value(emulator, mdl_address);
@@ -335,7 +344,7 @@ void redirect_ntoskrnl_memory_functions(const std::shared_ptr<emulator_t>& emula
 			error = emulator->write_virtual_memory(mdl_address, &mdl, sizeof(mdl));
 			error.throw_if("MmBuildMdlForNonPagedPool: write MDL");
 
-			spdlog::info("MmBuildMdlForNonPagedPool called (mdl=0x{:X}, va=0x{:X}, pages={})",
+			THREAD_LOG("MmBuildMdlForNonPagedPool called (mdl=0x{:X}, va=0x{:X}, pages={})",
 				mdl_address, start_va + byte_offset, page_count);
 		},
 		mapped_image,

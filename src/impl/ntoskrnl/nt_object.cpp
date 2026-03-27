@@ -56,7 +56,7 @@ void redirect_ntoskrnl_object_functions(const std::shared_ptr<emulator_t>& emula
 				}
 			}
 
-			spdlog::info("IoDeleteSymbolicLink called (name='{}')", link_name);
+			THREAD_LOG("IoDeleteSymbolicLink called (name='{}')", link_name);
 
 			write_nt_success(emulator);
 		},
@@ -97,7 +97,7 @@ void redirect_ntoskrnl_object_functions(const std::shared_ptr<emulator_t>& emula
 				}
 			}
 
-			spdlog::info("ZwOpenSection called (handle_address=0x{:X}, access=0x{:X}, name='{}')",
+			THREAD_LOG("ZwOpenSection called (handle_address=0x{:X}, access=0x{:X}, name='{}')",
 				handle_address, desired_access, section_name);
 
 			write_nt_success(emulator);
@@ -118,7 +118,7 @@ void redirect_ntoskrnl_object_functions(const std::shared_ptr<emulator_t>& emula
 			emulator_t::address_type object_out = 0;
 			static_cast<void>(emulator->read_virtual_memory(rsp + 0x28, &object_out, sizeof(object_out)));
 
-			spdlog::info("ObReferenceObjectByHandle called (handle=0x{:X}, access=0x{:X}, type=0x{:X}, object_out=0x{:X})",
+			THREAD_LOG("ObReferenceObjectByHandle called (handle=0x{:X}, access=0x{:X}, type=0x{:X}, object_out=0x{:X})",
 				handle, desired_access, object_type, object_out);
 
 			write_nt_success(emulator);
@@ -132,7 +132,7 @@ void redirect_ntoskrnl_object_functions(const std::shared_ptr<emulator_t>& emula
 		{
 			const auto handle = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
 
-			spdlog::info("ZwMakeTemporaryObject called (handle=0x{:X})", handle);
+			THREAD_LOG("ZwMakeTemporaryObject called (handle=0x{:X})", handle);
 
 			write_nt_success(emulator);
 		},
@@ -140,17 +140,23 @@ void redirect_ntoskrnl_object_functions(const std::shared_ptr<emulator_t>& emula
 		"ZwMakeTemporaryObject"
 	);
 
+	const auto close_handler = [emulator](const std::string_view caller_name)
+	{
+		const emulator_t::address_type handle = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+
+		THREAD_LOG("{} called (handle=0x{:X})", caller_name, handle);
+
+		write_nt_success(emulator);
+	};
+
 	redirect_function(
-		[emulator]
-		{
-			const auto handle = emulator->read_register<x86::reg::rcx, std::uint64_t>();
+		[close_handler] { close_handler("NtClose"); },
+		mapped_image, "NtClose"
+	);
 
-			spdlog::info("ZwClose called (handle=0x{:X})", handle);
-
-			write_nt_success(emulator);
-		},
-		mapped_image,
-		"ZwClose"
+	redirect_function(
+		[close_handler] { close_handler("ZwClose"); },
+		mapped_image, "ZwClose"
 	);
 
 	// todo: actually register object callbacks
@@ -172,7 +178,7 @@ void redirect_ntoskrnl_object_functions(const std::shared_ptr<emulator_t>& emula
 				altitude_string = util::narrow_wstring(kernel::read_guest_wstring(*emulator, altitude_buffer));
 			}
 
-			spdlog::info("ObRegisterCallbacks called (version={}, altitude='{}', operation_count={})",
+			THREAD_LOG("ObRegisterCallbacks called (version={}, altitude='{}', operation_count={})",
 				registration.Version, altitude_string, registration.OperationRegistrationCount);
 
 			const auto op_array_address = reinterpret_cast<emulator_t::address_type>(registration.OperationRegistration);
@@ -199,7 +205,7 @@ void redirect_ntoskrnl_object_functions(const std::shared_ptr<emulator_t>& emula
 					}
 				}
 
-				spdlog::info("  operation[{}]: type={}, operations=0x{:X}, pre=0x{:X}, post=0x{:X}",
+				THREAD_LOG("  operation[{}]: type={}, operations=0x{:X}, pre=0x{:X}, post=0x{:X}",
 					i, type_name, op.Operations,
 					reinterpret_cast<emulator_t::address_type>(op.PreOperation),
 					reinterpret_cast<emulator_t::address_type>(op.PostOperation));

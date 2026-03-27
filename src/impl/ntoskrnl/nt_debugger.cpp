@@ -1,7 +1,7 @@
 #include "nt_debugger.hpp"
 #include "nt_helpers.hpp"
 
-#include <spdlog/spdlog.h>
+#include "../../util/logs.hpp"
 
 void initialize_ntoskrnl_debugger_state(const std::shared_ptr<emulator_t>& emulator,
 	const kernel_image_t& mapped_image)
@@ -39,7 +39,7 @@ void redirect_ntoskrnl_debugger_functions(const std::shared_ptr<emulator_t>& emu
 		{
 			constexpr std::uint32_t status_debugger_inactive = 0xC0000354;
 
-			spdlog::info("KdChangeOption called, returning STATUS_DEBUGGER_INACTIVE");
+			THREAD_LOG("KdChangeOption called, returning STATUS_DEBUGGER_INACTIVE");
 
 			write_nt_status(emulator, status_debugger_inactive);
 		},
@@ -52,7 +52,7 @@ void redirect_ntoskrnl_debugger_functions(const std::shared_ptr<emulator_t>& emu
 		{
 			constexpr std::uint32_t status_debugger_inactive = 0xC0000354;
 
-			spdlog::info("ZwSystemDebugControl called, returning STATUS_DEBUGGER_INACTIVE");
+			THREAD_LOG("ZwSystemDebugControl called, returning STATUS_DEBUGGER_INACTIVE");
 
 			write_nt_status(emulator, status_debugger_inactive);
 		},
@@ -65,7 +65,7 @@ void redirect_ntoskrnl_debugger_functions(const std::shared_ptr<emulator_t>& emu
 		{
 			constexpr std::uint32_t status_debugger_inactive = 0xC0000354;
 
-			spdlog::info("NtSystemDebugControl called, returning STATUS_DEBUGGER_INACTIVE");
+			THREAD_LOG("NtSystemDebugControl called, returning STATUS_DEBUGGER_INACTIVE");
 
 			write_nt_status(emulator, status_debugger_inactive);
 		},
@@ -78,7 +78,7 @@ void redirect_ntoskrnl_debugger_functions(const std::shared_ptr<emulator_t>& emu
 		{
 			constexpr std::uint32_t status_access_denied = 0xC0000022;
 
-			spdlog::info("KdSystemDebugControl called, returning STATUS_ACCESS_DENIED");
+			THREAD_LOG("KdSystemDebugControl called, returning STATUS_ACCESS_DENIED");
 
 			write_nt_status(emulator, status_access_denied);
 		},

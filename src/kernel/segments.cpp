@@ -5,7 +5,7 @@
 #include "kernel.hpp"
 
 #include <ia32-doc/ia32.hpp>
-#include <spdlog/spdlog.h>
+#include "../util/logs.hpp"
 #include <fstream>
 #include <array>
 #include <format>
@@ -83,7 +83,7 @@ void kernel::set_up_segments(const std::shared_ptr<emulator_t>& emulator)
 	error = emulator->write_segment(x86::segment_reg::fs, kernel_ds_selector, 0, segment_limit, data_segment_attributes);
 	error.throw_if("write FS");
 
-	spdlog::info("configured segment registers: CS=0x{:X} SS/DS/ES/FS=0x{:X}", kernel_cs_selector, kernel_ds_selector);
+	GLOBAL_LOG("configured segment registers: CS=0x{:X} SS/DS/ES/FS=0x{:X}", kernel_cs_selector, kernel_ds_selector);
 }
 
 void kernel::set_up_kernel_gs(const std::shared_ptr<emulator_t>& emulator, const emulator_t::address_type kpcr_address)
@@ -93,7 +93,7 @@ void kernel::set_up_kernel_gs(const std::shared_ptr<emulator_t>& emulator, const
 
 	error.throw_if("write kernel gs segment");
 
-	spdlog::info("mapped kernel gs at 0x{:X}", kpcr_address);
+	GLOBAL_LOG("mapped kernel gs at 0x{:X}", kpcr_address);
 }
 
 void kernel::set_up_gdt(const std::shared_ptr<emulator_t>& emulator)
@@ -159,7 +159,7 @@ void kernel::set_up_gdt(const std::shared_ptr<emulator_t>& emulator)
 	error = emulator->write_tr(tss_selector_value, tss_address, tss_limit, tss_attributes);
 	error.throw_if("load TR");
 
-	spdlog::info("mapped GDT at 0x{:X} ({} entries), TSS at 0x{:X}, TR selector=0x{:X}",
+	GLOBAL_LOG("mapped GDT at 0x{:X} ({} entries), TSS at 0x{:X}, TR selector=0x{:X}",
 		gdt_base, gdt_entries.size(), tss_address, tss_selector_value);
 }
 
@@ -219,12 +219,12 @@ void kernel::set_up_idt(const std::shared_ptr<emulator_t>& emulator, const kerne
 
 				if (has_error_code)
 				{
-					spdlog::info("interrupt vector 0x{:X} (error_code=0x{:X}): rip=0x{:X} cs=0x{:X} rflags=0x{:X} rsp=0x{:X} ss=0x{:X}",
+					THREAD_LOG("interrupt vector 0x{:X} (error_code=0x{:X}): rip=0x{:X} cs=0x{:X} rflags=0x{:X} rsp=0x{:X} ss=0x{:X}",
 						i, error_code, frame.rip, frame.cs, frame.rflags, frame.rsp, frame.ss);
 				}
 				else
 				{
-					spdlog::info("interrupt vector 0x{:X}: rip=0x{:X} cs=0x{:X} rflags=0x{:X} rsp=0x{:X} ss=0x{:X}",
+					THREAD_LOG("interrupt vector 0x{:X}: rip=0x{:X} cs=0x{:X} rflags=0x{:X} rsp=0x{:X} ss=0x{:X}",
 						i, frame.rip, frame.cs, frame.rflags, frame.rsp, frame.ss);
 				}
 
@@ -249,9 +249,9 @@ void kernel::set_up_idt(const std::shared_ptr<emulator_t>& emulator, const kerne
 					{
 						const auto msr_id = emulator->read_register<x86::reg::rcx, std::uint32_t>();
 
-						if (msr_id == 0x680 || msr_id == 0x1C9)
+						if (msr_id == 0x1C9 || msr_id == 0x680)
 						{
-							spdlog::info("MSR read with id 0x{:X}", msr_id);
+							THREAD_LOG("MSR read with id 0x{:X}", msr_id);
 
 							emulator->write_register<x86::reg::rax>(static_cast<std::uint64_t>(0));
 							emulator->write_register<x86::reg::rdx>(static_cast<std::uint64_t>(0));
@@ -260,13 +260,13 @@ void kernel::set_up_idt(const std::shared_ptr<emulator_t>& emulator, const kerne
 							return;
 						}
 
-						spdlog::warn("invalid MSR read with id 0x{:X}", msr_id);
+						THREAD_WARN_LOG("invalid MSR read with id 0x{:X}", msr_id);
 					}
 					else if (instruction_bytes[0] == 0x0F && instruction_bytes[1] == 0x30) // wrmsr
 					{
 						const auto msr_id = emulator->read_register<x86::reg::rcx, std::uint32_t>();
 
-						spdlog::warn("invalid MSR write with id 0x{:X}", msr_id);
+						THREAD_WARN_LOG("invalid MSR write with id 0x{:X}", msr_id);
 					}
 				}
 
@@ -300,7 +300,7 @@ void kernel::set_up_idt(const std::shared_ptr<emulator_t>& emulator, const kerne
 					handle_exception(emulator, frame.rip, status_access_violation, frame.rip);
 					break;
 				default:
-					spdlog::warn("unhandled interrupt vector 0x{:X} at rip=0x{:X}", i, frame.rip);
+					THREAD_WARN_LOG("unhandled interrupt vector 0x{:X} at rip=0x{:X}", i, frame.rip);
 					break;
 				}
 			};
@@ -326,5 +326,5 @@ void kernel::set_up_idt(const std::shared_ptr<emulator_t>& emulator, const kerne
 	error = emulator->write_idt(*idt_base_address, idt_size - 1);
 	error.throw_if("load IDT");
 
-	spdlog::info("mapped IDT at 0x{:X}", *idt_base_address);
+	GLOBAL_LOG("mapped IDT at 0x{:X}", *idt_base_address);
 }

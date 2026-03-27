@@ -1,4 +1,5 @@
 #include "kernel.hpp"
+#include "../util/logs.hpp"
 
 std::shared_ptr<kernel_image_t> kernel::find_module(const std::string_view name)
 {
@@ -20,6 +21,11 @@ std::shared_ptr<kernel_image_t> kernel::find_module_from_rip(const emulator_t::a
 	);
 
 	return it != std::ranges::end(module_entries) ? *it : nullptr;
+}
+
+thread_t::id_type kernel::current_thread_id()
+{
+	return current_thread->id();
 }
 
 std::optional<kernel::function_implementation_t> kernel::find_redirected_function(const emulator_t::address_type address)

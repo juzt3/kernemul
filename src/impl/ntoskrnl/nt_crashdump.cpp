@@ -29,7 +29,7 @@ void redirect_ntoskrnl_crashdump_functions(const std::shared_ptr<emulator_t>& em
 			static_cast<void>(emulator->read_virtual_memory(rsp + 0x38, &bugcheck_param4, sizeof(bugcheck_param4)));
 			static_cast<void>(emulator->read_virtual_memory(rsp + 0x40, &output_address, sizeof(output_address)));
 
-			spdlog::info("KeCapturePersistentThreadState called (context=0x{:X}, thread=0x{:X}, bugcheck=0x{:X}, "
+			THREAD_LOG("KeCapturePersistentThreadState called (context=0x{:X}, thread=0x{:X}, bugcheck=0x{:X}, "
 				"p1=0x{:X}, p2=0x{:X}, p3=0x{:X}, p4=0x{:X}, output=0x{:X})",
 				context_address, thread_address, bugcheck_code,
 				bugcheck_param1, bugcheck_param2, bugcheck_param3, bugcheck_param4, output_address);
@@ -146,7 +146,7 @@ void redirect_ntoskrnl_crashdump_functions(const std::shared_ptr<emulator_t>& em
 					const auto offset = accessed_address - output_address;
 					const auto access_type = (access == prot_write) ? "write" : "read";
 
-					spdlog::info("[dump-monitor] {} at offset 0x{:X} (address=0x{:X})",
+					THREAD_LOG("[dump-monitor] {} at offset 0x{:X} (address=0x{:X})",
 						access_type, offset, accessed_address);
 
 					return false;
@@ -156,7 +156,7 @@ void redirect_ntoskrnl_crashdump_functions(const std::shared_ptr<emulator_t>& em
 				output_address + dump_buffer_size
 			);
 
-			spdlog::info("KeCapturePersistentThreadState: wrote 0x{:X} bytes to 0x{:X}", dump_buffer_size, output_address);
+			THREAD_LOG("KeCapturePersistentThreadState: wrote 0x{:X} bytes to 0x{:X}", dump_buffer_size, output_address);
 
 			write_return_value(emulator, dump_buffer_size);
 		},

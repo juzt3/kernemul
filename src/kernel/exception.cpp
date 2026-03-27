@@ -1,7 +1,7 @@
 #include "exception.hpp"
 #include "kernel.hpp"
 #include <portable_executable/image.hpp>
-#include <spdlog/spdlog.h>
+#include "../util/logs.hpp"
 
 static x86::register_t unwind_reg_to_emulator_reg(const portable_executable::unwind_register_t reg)
 {
@@ -206,7 +206,7 @@ static emulator_t::address_type process_unwind_codes(const std::shared_ptr<emula
 		}
 		default:
 		{
-			spdlog::error("unknown unwind opcode {}", static_cast<std::uint8_t>(code.opcode()));
+			THREAD_ERR_LOG("unknown unwind opcode {}", static_cast<std::uint8_t>(code.opcode()));
 			break;
 		}
 		}
@@ -325,7 +325,7 @@ static std::optional<unwind_result_t> unwind_rip_in_function(const std::shared_p
 		return result;
 	}
 
-	spdlog::info("leaf function at rva 0x{:X}, no unwind info", rva);
+	THREAD_LOG("leaf function at rva 0x{:X}, no unwind info", rva);
 
 	unwind_result_t leaf_result;
 	leaf_result.return_address = read_return_address(emulator);
@@ -444,14 +444,14 @@ static bool call_exception_handler(const std::shared_ptr<emulator_t>& emulator,
 			continue;
 		}
 
-		spdlog::info("  scope[{}]: begin=0x{:X}, end=0x{:X}, handler=0x{:X}, target=0x{:X}",
+		THREAD_LOG("  scope[{}]: begin=0x{:X}, end=0x{:X}, handler=0x{:X}, target=0x{:X}",
 			i, scope.begin_address, scope.end_address, scope.handler_address, scope.jump_target);
 
 		if (scope.handler_address == 1)
 		{
 			const auto target = image_base + scope.jump_target;
 
-			spdlog::info("  EXCEPTION_EXECUTE_HANDLER, jumping to 0x{:X}", target);
+			THREAD_LOG("  EXCEPTION_EXECUTE_HANDLER, jumping to 0x{:X}", target);
 
 			emulator->write_register<x86::reg::rip>(target);
 			emulator->write_register<x86::reg::rsp>(unwind.establisher_frame);
@@ -495,7 +495,7 @@ static bool call_exception_handler(const std::shared_ptr<emulator_t>& emulator,
 		emulator->write_register<x86::reg::rdx>(unwind.establisher_frame);
 		emulator->write_register<x86::reg::rsp>(alloc_base);
 
-		spdlog::info("  calling filter at 0x{:X}", filter_address);
+		THREAD_LOG("  calling filter at 0x{:X}", filter_address);
 
 		const auto run_result = emulator->run_at(filter_address, emulator_t::thread_return_address);
 		static_cast<void>(run_result);
@@ -507,7 +507,7 @@ static bool call_exception_handler(const std::shared_ptr<emulator_t>& emulator,
 		emulator->write_register<x86::reg::rsp>(saved_rsp);
 		emulator->write_register<x86::reg::rip>(saved_rip);
 
-		spdlog::info("  filter returned {}", filter_result);
+		THREAD_LOG("  filter returned {}", filter_result);
 
 		if (filter_result < 0)
 		{
@@ -535,7 +535,7 @@ void kernel::handle_exception(const std::shared_ptr<emulator_t>& emulator, const
 {
 	emulator_t::address_type current_rip = rip;
 
-	spdlog::info("exception dispatch: code=0x{:X}, rip=0x{:X}, faulting_address=0x{:X}",
+	THREAD_LOG("exception dispatch: code=0x{:X}, rip=0x{:X}, faulting_address=0x{:X}",
 		code, rip, faulting_address);
 
 	constexpr std::size_t max_frames = 64;
@@ -546,7 +546,7 @@ void kernel::handle_exception(const std::shared_ptr<emulator_t>& emulator, const
 
 		if (!unwind)
 		{
-			spdlog::warn("exception dispatch: rip 0x{:X} not in any module", current_rip);
+			THREAD_WARN_LOG("exception dispatch: rip 0x{:X} not in any module", current_rip);
 
 			break;
 		}
@@ -555,7 +555,7 @@ void kernel::handle_exception(const std::shared_ptr<emulator_t>& emulator, const
 		{
 			if (call_exception_handler(emulator, *unwind, rip, current_rip, code, faulting_address))
 			{
-				spdlog::info("exception handled at frame {}, continuing at 0x{:X}",
+				THREAD_LOG("exception handled at frame {}, continuing at 0x{:X}",
 					depth, emulator->read_register<x86::reg::rip, emulator_t::address_type>());
 
 				return;

@@ -5,7 +5,7 @@
 #include "../../util/util.hpp"
 
 #include <ia32-doc/ia32.hpp>
-#include <spdlog/spdlog.h>
+#include "../../util/logs.hpp"
 #include <random>
 #include <string>
 

@@ -1,6 +1,6 @@
 #include "kernel_string.hpp"
 
-#include <spdlog/spdlog.h>
+#include "../util/logs.hpp"
 
 template <class T>
 std::basic_string<T> read_guest_basic_string(const emulator_t& emulator, emulator_t::address_type address)
@@ -68,7 +68,7 @@ emulator_t::address_type allocate_basic_string(emulator_t& emulator, const std::
 		{
 			const auto rip = emulator.read_register<x86::reg::rip, emulator_t::address_type>();
 
-			spdlog::info("instruction at 0x{:X} accessed allocated string (string address=0x{:X})", rip, accessed_address);
+			THREAD_LOG("instruction at 0x{:X} accessed allocated string (string address=0x{:X})", rip, accessed_address);
 
 			return false;
 		},
