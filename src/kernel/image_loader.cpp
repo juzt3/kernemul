@@ -1,6 +1,7 @@
 #include "image_loader.hpp"
 #include "../emulator/object.hpp"
 #include "../image/pdb/pdb_file.hpp"
+#include "../impl/cng/cng_helpers.hpp"
 #include "../impl/ntoskrnl/nt_crashdump.hpp"
 #include "../impl/ntoskrnl/nt_debugger.hpp"
 #include "../impl/ntoskrnl/nt_helpers.hpp"
@@ -328,6 +329,11 @@ std::shared_ptr<kernel_image_t> kernel::map_kernel_image(const std::shared_ptr<e
 	if (!is_main_emulated_image)
 	{
 		monitor_data_sections(emulator, mapped_image, pe_image);
+	}
+
+	if (name == "cng.sys")
+	{
+		redirect_cng_bcrypt_functions(emulator, *mapped_image);
 	}
 
 	if (is_ntoskrnl)

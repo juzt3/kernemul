@@ -1,4 +1,5 @@
 #pragma once
+#include <random>
 #include <string>
 
 namespace util
@@ -14,5 +15,15 @@ namespace util
 		}
 
 		return result;
+	}
+
+	template <typename T>
+	T generate_random(T min_value, T max_value)
+	{
+		static std::mt19937_64 engine(std::random_device{}());
+
+		std::uniform_int_distribution<T> distribution(min_value, max_value);
+
+		return distribution(engine);
 	}
 }

@@ -1,4 +1,5 @@
 #include "nt_helpers.hpp"
+#include "../../util/util.hpp"
 #include "../../kernel/exception.hpp"
 
 #include <numeric>
@@ -981,7 +982,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 		{
 			const emulator_t::address_type seed_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
 
-			const std::uint32_t result = generate_random<std::uint32_t>(0, std::numeric_limits<LONG>::max() - 1);
+			const std::uint32_t result = util::generate_random<std::uint32_t>(0, std::numeric_limits<LONG>::max() - 1);
 
 			emulator_err_t error = emulator->write_virtual_memory(seed_address, &result, sizeof(result));
 			error.throw_if("RtlRandomEx: write seed");

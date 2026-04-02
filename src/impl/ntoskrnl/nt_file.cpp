@@ -519,6 +519,130 @@ void redirect_ntoskrnl_file_functions(const std::shared_ptr<emulator_t>& emulato
 		mapped_image, "ZwWriteFile"
 	);
 
+	const auto read_file_handler = [emulator](const std::string_view caller_name)
+	{
+		const auto file_handle = emulator->read_register<x86::reg::rcx, object_manager_t::handle_type>();
+		const auto event = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+		const auto apc_routine = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
+		const auto apc_context = emulator->read_register<x86::reg::r9, emulator_t::address_type>();
+
+		const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
+
+		emulator_t::address_type io_status_block = 0;
+		emulator_err_t error = emulator->read_virtual_memory(rsp + 0x28, &io_status_block, sizeof(io_status_block));
+		error.throw_if("read io status block ptr");
+
+		emulator_t::address_type buffer_address = 0;
+		error = emulator->read_virtual_memory(rsp + 0x30, &buffer_address, sizeof(buffer_address));
+		error.throw_if("read buffer ptr");
+
+		std::uint32_t length = 0;
+		error = emulator->read_virtual_memory(rsp + 0x38, &length, sizeof(length));
+		error.throw_if("read length");
+
+		emulator_t::address_type byte_offset_ptr = 0;
+		error = emulator->read_virtual_memory(rsp + 0x40, &byte_offset_ptr, sizeof(byte_offset_ptr));
+		error.throw_if("read byte offset ptr");
+
+		emulator_t::address_type key_ptr = 0;
+		error = emulator->read_virtual_memory(rsp + 0x48, &key_ptr, sizeof(key_ptr));
+		error.throw_if("read key ptr");
+
+		THREAD_LOG("{} called (handle=0x{:X}, event=0x{:X}, apc_routine=0x{:X}, apc_context=0x{:X}, io_status_block=0x{:X}, buffer=0x{:X}, length=0x{:X}, byte_offset_ptr=0x{:X}, key_ptr=0x{:X})",
+			caller_name, file_handle, event, apc_routine, apc_context, io_status_block, buffer_address, length, byte_offset_ptr, key_ptr);
+
+		const auto entry = kernel::object_manager->lookup_handle(file_handle);
+
+		if (!entry)
+		{
+			THREAD_WARN_LOG("{}: invalid handle 0x{:X}", caller_name, file_handle);
+
+			write_io_status(emulator, io_status_block, static_cast<std::int32_t>(0xC0000008), 0);
+			write_nt_status(emulator, 0xC0000008);
+
+			return;
+		}
+
+		if (!(entry->access & (object_manager_t::generic_read | object_manager_t::file_read_data | object_manager_t::generic_all)))
+		{
+			THREAD_WARN_LOG("{}: handle 0x{:X} not readable", caller_name, file_handle);
+
+			write_io_status(emulator, io_status_block, static_cast<std::int32_t>(0xC0000022), 0);
+			write_nt_status(emulator, 0xC0000022);
+
+			return;
+		}
+
+		if (!buffer_address || !length)
+		{
+			THREAD_WARN_LOG("{}: null buffer or zero length", caller_name);
+
+			write_io_status(emulator, io_status_block, static_cast<std::int32_t>(0xC000000D), 0);
+			write_nt_status(emulator, 0xC000000D);
+
+			return;
+		}
+
+		const auto host_object = kernel::object_manager->get_object_from_handle<file_object_t>(file_handle);
+
+		if (!host_object || !host_object->file)
+		{
+			THREAD_ERR_LOG("{}: handle 0x{:X} has no backing file", caller_name, file_handle);
+
+			write_io_status(emulator, io_status_block, static_cast<std::int32_t>(0xC0000008), 0);
+			write_nt_status(emulator, 0xC0000008);
+
+			return;
+		}
+
+		const auto file_data = host_object->file->read();
+		const auto file_size = file_data.size();
+
+		std::uint64_t offset = 0;
+
+		if (byte_offset_ptr)
+		{
+			std::int64_t byte_offset = 0;
+			error = emulator->read_virtual_memory(byte_offset_ptr, &byte_offset, sizeof(byte_offset));
+			error.throw_if("read byte offset");
+
+			offset = static_cast<std::uint64_t>(byte_offset);
+		}
+
+		if (offset >= file_size)
+		{
+			constexpr std::uint32_t status_end_of_file = 0xC0000011;
+
+			THREAD_LOG("{}: read past end of file (offset=0x{:X}, file_size=0x{:X})", caller_name, offset, file_size);
+
+			write_io_status(emulator, io_status_block, static_cast<std::int32_t>(status_end_of_file), 0);
+			write_nt_status(emulator, status_end_of_file);
+
+			return;
+		}
+
+		const auto available = file_size - offset;
+		const auto bytes_to_read = static_cast<std::uint32_t>(std::min(static_cast<std::uint64_t>(length), available));
+
+		error = emulator->write_virtual_memory(buffer_address, file_data.data() + offset, bytes_to_read);
+		error.throw_if("write read buffer to guest");
+
+		THREAD_LOG("{}: read {} bytes from handle 0x{:X} at offset 0x{:X}", caller_name, bytes_to_read, file_handle, offset);
+
+		write_io_status(emulator, io_status_block, 0, bytes_to_read);
+		write_nt_success(emulator);
+	};
+
+	redirect_function(
+		[read_file_handler] { read_file_handler("NtReadFile"); },
+		mapped_image, "NtReadFile"
+	);
+
+	redirect_function(
+		[read_file_handler] { read_file_handler("ZwReadFile"); },
+		mapped_image, "ZwReadFile"
+	);
+
 	redirect_function(
 		[emulator]
 		{
