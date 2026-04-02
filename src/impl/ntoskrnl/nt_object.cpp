@@ -18,6 +18,7 @@ void initialize_ntoskrnl_object_types(const std::shared_ptr<emulator_t>& emulato
 {
 	auto process_type = create_object_type(emulator, L"Process", "PsProcessType");
 	auto thread_type = create_object_type(emulator, L"Thread", "PsThreadType");
+	auto file_type = create_object_type(emulator, L"File", "IoFileObjectType");
 
 	if (const auto symbol = mapped_image.find_symbol("PsProcessType"))
 	{
@@ -31,6 +32,13 @@ void initialize_ntoskrnl_object_types(const std::shared_ptr<emulator_t>& emulato
 		const auto address = thread_type.address();
 		emulator_err_t error = emulator->write_virtual_memory(*symbol, &address, sizeof(address));
 		error.throw_if("write PsThreadType");
+	}
+
+	if (const auto symbol = mapped_image.find_symbol("IoFileObjectType"))
+	{
+		const auto address = file_type.address();
+		emulator_err_t error = emulator->write_virtual_memory(*symbol, &address, sizeof(address));
+		error.throw_if("write IoFileObjectType");
 	}
 }
 
@@ -100,26 +108,54 @@ void redirect_ntoskrnl_object_functions(const std::shared_ptr<emulator_t>& emula
 			THREAD_LOG("ZwOpenSection called (handle_address=0x{:X}, access=0x{:X}, name='{}')",
 				handle_address, desired_access, section_name);
 
+			auto host_object = std::make_shared<section_object_t>(nullptr);
+
+			constexpr std::size_t section_body_size = 0x40;
+			std::array<std::uint8_t, section_body_size> body{};
+			const auto body_address = kernel::object_manager->create_object(0, body.data(), body.size(), host_object);
+			const auto handle_value = kernel::object_manager->create_handle(body_address, desired_access);
+
+			if (handle_address)
+			{
+				emulator_err_t error = emulator->write_virtual_memory(handle_address, &handle_value, sizeof(handle_value));
+				error.throw_if("ZwOpenSection: write handle");
+			}
+
+			THREAD_LOG("ZwOpenSection: created handle 0x{:X} for section '{}' at 0x{:X}",
+				handle_value, section_name, body_address);
+
 			write_nt_success(emulator);
 		},
 		mapped_image,
 		"ZwOpenSection"
 	);
 
-	// todo: actually reference the object and write to *Object
 	redirect_function(
 		[emulator]
 		{
-			const auto handle = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto handle = emulator->read_register<x86::reg::rcx, object_manager_t::handle_type>();
 			const auto desired_access = emulator->read_register<x86::reg::rdx, std::uint32_t>();
 			const auto object_type = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
 
 			const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
 			emulator_t::address_type object_out = 0;
-			static_cast<void>(emulator->read_virtual_memory(rsp + 0x28, &object_out, sizeof(object_out)));
+			emulator_err_t error = emulator->read_virtual_memory(rsp + 0x28, &object_out, sizeof(object_out));
+			error.throw_if("ObReferenceObjectByHandle: read Object");
 
 			THREAD_LOG("ObReferenceObjectByHandle called (handle=0x{:X}, access=0x{:X}, type=0x{:X}, object_out=0x{:X})",
 				handle, desired_access, object_type, object_out);
+
+			const auto entry = kernel::object_manager->lookup_handle(handle);
+
+			if (entry && object_out)
+			{
+				kernel::object_manager->reference_object(entry->body_address);
+
+				error = emulator->write_virtual_memory(object_out, &entry->body_address, sizeof(entry->body_address));
+				error.throw_if("ObReferenceObjectByHandle: write Object");
+
+				THREAD_LOG("ObReferenceObjectByHandle: resolved handle 0x{:X} -> body 0x{:X}", handle, entry->body_address);
+			}
 
 			write_nt_success(emulator);
 		},
@@ -142,9 +178,11 @@ void redirect_ntoskrnl_object_functions(const std::shared_ptr<emulator_t>& emula
 
 	const auto close_handler = [emulator](const std::string_view caller_name)
 	{
-		const emulator_t::address_type handle = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+		const auto handle = emulator->read_register<x86::reg::rcx, object_manager_t::handle_type>();
 
 		THREAD_LOG("{} called (handle=0x{:X})", caller_name, handle);
+
+		kernel::object_manager->close_handle(handle);
 
 		write_nt_success(emulator);
 	};
@@ -213,11 +251,13 @@ void redirect_ntoskrnl_object_functions(const std::shared_ptr<emulator_t>& emula
 
 			if (handle_out)
 			{
-				const auto dummy_handle = emulator->heap_allocate(8, prot_read_write, true);
-				error = dummy_handle.error_or({});
-				error.throw_if("allocate ObRegisterCallbacks handle");
+				auto host_object = std::make_shared<ob_callback_object_t>();
 
-				error = emulator->write_virtual_memory(handle_out, &*dummy_handle, sizeof(*dummy_handle));
+				constexpr std::size_t ob_callback_body_size = 8;
+				std::array<std::uint8_t, ob_callback_body_size> body{};
+				const auto body_address = kernel::object_manager->create_object(0, body.data(), body.size(), host_object);
+
+				error = emulator->write_virtual_memory(handle_out, &body_address, sizeof(body_address));
 				error.throw_if("write ObRegisterCallbacks handle");
 			}
 
@@ -225,5 +265,39 @@ void redirect_ntoskrnl_object_functions(const std::shared_ptr<emulator_t>& emula
 		},
 		mapped_image,
 		"ObRegisterCallbacks"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto object = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+
+			THREAD_LOG("ObfReferenceObject called (object=0x{:X})", object);
+
+			kernel::object_manager->reference_object(object);
+		},
+		mapped_image,
+		"ObfReferenceObject"
+	);
+
+	const auto dereference_handler = [emulator](const std::string_view caller_name)
+	{
+		const auto object = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+
+		THREAD_LOG("{} called (object=0x{:X})", caller_name, object);
+
+		kernel::object_manager->dereference_object(object);
+	};
+
+	redirect_function(
+		[dereference_handler] { dereference_handler("ObfDereferenceObject"); },
+		mapped_image,
+		"ObfDereferenceObject"
+	);
+
+	redirect_function(
+		[dereference_handler] { dereference_handler("ObfDereferenceObjectWithTag"); },
+		mapped_image,
+		"ObfDereferenceObjectWithTag"
 	);
 }

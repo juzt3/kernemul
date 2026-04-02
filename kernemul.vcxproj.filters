@@ -189,6 +189,24 @@
     <ClCompile Include="src\kernel\exception.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="src\impl\ntoskrnl\nt_debugger.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\impl\ntoskrnl\nt_crashdump.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\impl\ntoskrnl\nt_object.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\kernel\object_manager.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\kernel\process_loader.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\kernel\thread.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="ext\portable_executable\data_directory.hpp">
@@ -420,6 +438,27 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\kernel\exception.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\impl\ntoskrnl\nt_crashdump.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\impl\ntoskrnl\nt_debugger.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\impl\ntoskrnl\nt_object.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\kernel\process_loader.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\kernel\thread.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\kernel\object_manager.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\util\logs.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

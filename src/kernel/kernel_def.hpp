@@ -2002,3 +2002,18 @@ struct _DEVICE_OBJECT
     CHAR StackSize;                                                          //0x4c
     UCHAR padding[0x103];                                                    //0x4d
 };
+
+//0x30 bytes (sizeof)
+struct _OBJECT_HEADER
+{
+    LONGLONG PointerCount;                                                   //0x0
+    LONGLONG HandleCount;                                                    //0x8
+    PVOID Lock;                                                              //0x10
+    UCHAR TypeIndex;                                                         //0x18
+    UCHAR TraceFlags;                                                        //0x19
+    UCHAR InfoMask;                                                          //0x1a
+    UCHAR Flags;                                                             //0x1b
+    ULONG Reserved;                                                          //0x1c
+    PVOID ObjectCreateInfo;                                                  //0x20
+    PVOID SecurityDescriptor;                                                //0x28
+};

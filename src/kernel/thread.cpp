@@ -27,24 +27,71 @@ std::shared_ptr<thread_t> kernel::create_thread(const std::shared_ptr<emulator_t
 	return thread;
 }
 
-void kernel::switch_thread()
+void kernel::switch_thread(const std::shared_ptr<emulator_t>& emulator, const bool delete_current, const bool force)
 {
-	if (pending_threads.empty() || !current_thread->is_expired())
+	GLOBAL_LOG("switch_thread called (delete_current={}, force={}, current_thread_id={}, pending_threads={})",
+		delete_current, force,
+		current_thread ? current_thread->id() : 0,
+		pending_threads.size());
+
+	if (pending_thread_switch || pending_threads.empty() || (!delete_current && !force && !current_thread->is_expired()))
 	{
 		return;
 	}
 
-	current_thread->stop();
+	const auto queue_size = pending_threads.size();
+	bool found_runnable = false;
 
-	const auto next_thread = pending_threads.front();
+	for (std::size_t i = 0; i < queue_size; ++i)
+	{
+		if (!pending_threads.front()->is_sleeping())
+		{
+			found_runnable = true;
+			break;
+		}
 
-	pending_threads.pop();
-	pending_threads.push(current_thread);
+		auto sleeping_thread = pending_threads.front();
+		pending_threads.pop();
+		pending_threads.push(std::move(sleeping_thread));
+	}
+
+	if (!found_runnable)
+	{
+		return;
+	}
+
+	const emulator_err_t error = emulator->stop();
+
+	error.throw_if("stop thread");
+
+	if (delete_current)
+	{
+		delete_current_thread = true;
+	}
+
+	pending_thread_switch = true;
+
+	GLOBAL_LOG("switch_thread succeeded");
+}
+
+void thread_t::update_last_time_ran()
+{
+	last_time_ran_ = time_point_now();
+}
+
+void thread_t::sleep_for(const std::chrono::milliseconds duration)
+{
+	sleep_until_ = time_point_now() + duration;
+}
+
+bool thread_t::is_sleeping() const
+{
+	return sleep_until_ > time_point_now();
 }
 
 void thread_t::start()
 {
-	last_time_ran_ = time_point_now();
+	update_last_time_ran();
 
 	load_state();
 

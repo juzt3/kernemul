@@ -70,6 +70,33 @@ bool hm::emulator_t::run_at(const address_type start_address, const address_type
 
 	processor.run();
 
+	if (!single_step_callbacks_.empty())
+	{
+		single_step_callbacks_.clear();
+
+		for (const auto& hook : hooks_)
+		{
+			if (hook->type != hook_type_t::memory_access)
+			{
+				continue;
+			}
+
+			const auto& hook_memory = std::get<hook_memory_t>(hook->extra_data);
+			const address_type start_page = align_down(hook->start_address, page_size);
+			const address_type end_page = align_up(hook->end_address, page_size);
+
+			for (address_type page = start_page; page < end_page; page += page_size)
+			{
+				const auto protection = partition_->query_physical_memory_protection(page);
+
+				if (protection && (*protection & hook_memory.protection))
+				{
+					partition_->protect_physical_memory(page, page_size, *protection & ~hook_memory.protection);
+				}
+			}
+		}
+	}
+
 	if (end_address && program_counter() != end_address)
 	{
 		return false;
@@ -78,11 +105,11 @@ bool hm::emulator_t::run_at(const address_type start_address, const address_type
 	return true;
 }
 
-bool hm::emulator_t::stop()
+void hm::emulator_t::stop()
 {
 	auto processor = virtual_processor();
 
-	return partition_->stop_virtual_processor(processor);
+	processor.stop();
 }
 
 bool hm::emulator_t::configure_single_step()

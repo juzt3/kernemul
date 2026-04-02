@@ -112,7 +112,9 @@ emulator_err_t hypermulator_t::run_at(const address_type start_address, const ad
 
 emulator_err_t hypermulator_t::stop()
 {
-	return emulator_err_t{ backend_->stop() };
+	backend_->stop();
+
+	return emulator_err_t{ };
 }
 
 emulator_err_t hypermulator_t::map_physical_memory(const address_type address, const size_type size,

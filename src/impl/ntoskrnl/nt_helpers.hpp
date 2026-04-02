@@ -18,7 +18,6 @@ void redirect_function(const std::function<void()>& function_impl,
 void write_return_value(const std::shared_ptr<emulator_t>& emulator, std::uint64_t value);
 void write_nt_status(const std::shared_ptr<emulator_t>& emulator, std::uint32_t code);
 void write_nt_success(const std::shared_ptr<emulator_t>& emulator);
-void write_dummy_handle(const std::shared_ptr<emulator_t>& emulator, emulator_t::address_type handle_address);
 
 std::uint64_t read_guest_vararg(const emulator_t& emulator, emulator_t::address_type va_list_address,
 	std::size_t& index);
@@ -66,8 +65,5 @@ T generate_random(T min_value, T max_value)
 	return distribution(engine);
 }
 
-class filesystem_t;
-
 void redirect_ntoskrnl_file_functions(const std::shared_ptr<emulator_t>& emulator,
-	const kernel_image_t& mapped_image,
-	const std::shared_ptr<filesystem_t>& filesystem);
+	const kernel_image_t& mapped_image);

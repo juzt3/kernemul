@@ -1,6 +1,8 @@
 #include "nt_helpers.hpp"
 #include "../../kernel/exception.hpp"
 
+#include <numeric>
+
 static std::uint8_t get_guest_irql(const std::shared_ptr<emulator_t>& emulator)
 {
 	return emulator->read_register<x86::reg::cr8, std::uint8_t>();
@@ -218,28 +220,17 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 			}
 
 			constexpr std::size_t callback_object_size = 0x38;
-			const auto allocation = emulator->heap_allocate(callback_object_size, prot_read_write);
-
-			if (!allocation)
-			{
-				THREAD_ERR_LOG("ExCreateCallback: heap allocation failed");
-				write_nt_status(emulator, 0xC000009A);
-				return;
-			}
-
-			const auto object_address = *allocation;
+			std::array<std::uint8_t, callback_object_size> body{};
 
 			constexpr std::uint32_t signature = 0x6C6C6143;
-			emulator_err_t error = emulator->write_virtual_memory(object_address, &signature, sizeof(signature));
-			error.throw_if("ExCreateCallback: write signature");
+			std::memcpy(body.data(), &signature, sizeof(signature));
 
-			constexpr std::uint64_t zero = 0;
-			error = emulator->write_virtual_memory(object_address + 0x08, &zero, sizeof(zero));
-			error.throw_if("ExCreateCallback: zero field at +0x08");
+			auto host_object = std::make_shared<callback_object_t>();
+			const auto object_address = kernel::object_manager->create_object(0, body.data(), body.size(), host_object);
 
 			const auto list_head_address = object_address + 0x10;
 			const std::uint64_t list_pointers[2] = { list_head_address, list_head_address };
-			error = emulator->write_virtual_memory(list_head_address, &list_pointers, sizeof(list_pointers));
+			emulator_err_t error = emulator->write_virtual_memory(list_head_address, &list_pointers, sizeof(list_pointers));
 			error.throw_if("ExCreateCallback: write RegisteredCallbacks list head");
 
 			error = emulator->write_virtual_memory(object_address + 0x20, &allow_multiple, sizeof(allow_multiple));
@@ -267,11 +258,13 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 			THREAD_LOG("ExRegisterCallback called (object=0x{:X}, function=0x{:X}, context=0x{:X})",
 				callback_object, callback_function, callback_context);
 
-			const auto handle = emulator->heap_allocate(8, prot_read_write, true);
-			emulator_err_t error = handle.error_or({});
-			error.throw_if("allocate ExRegisterCallback handle");
+			auto host_object = std::make_shared<callback_registration_object_t>();
 
-			write_return_value(emulator, *handle);
+			constexpr std::size_t registration_body_size = 8;
+			std::array<std::uint8_t, registration_body_size> body{};
+			const auto body_address = kernel::object_manager->create_object(0, body.data(), body.size(), host_object);
+
+			write_return_value(emulator, body_address);
 		},
 		mapped_image,
 		"ExRegisterCallback"
@@ -304,6 +297,40 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 		},
 		mapped_image,
 		"KeSetEvent"
+	);
+
+	const auto clear_event_handler = [emulator](const std::string_view caller_name)
+	{
+		const auto event_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+
+		std::int32_t previous_state = 0;
+
+		emulator_err_t error = emulator->read_virtual_memory(
+			event_address + offsetof(_KEVENT, Header.SignalState), &previous_state, sizeof(previous_state));
+		error.throw_if(std::format("{}: read SignalState", caller_name));
+
+		constexpr std::int32_t not_signaled = 0;
+
+		error = emulator->write_virtual_memory(
+			event_address + offsetof(_KEVENT, Header.SignalState), &not_signaled, sizeof(not_signaled));
+		error.throw_if(std::format("{}: write SignalState", caller_name));
+
+		THREAD_LOG("{} called (event=0x{:X}, previous_state={})",
+			caller_name, event_address, previous_state);
+
+		write_return_value(emulator, static_cast<std::uint32_t>(previous_state));
+	};
+
+	redirect_function(
+		[clear_event_handler] { clear_event_handler("KeClearEvent"); },
+		mapped_image,
+		"KeClearEvent"
+	);
+
+	redirect_function(
+		[clear_event_handler] { clear_event_handler("KeResetEvent"); },
+		mapped_image,
+		"KeResetEvent"
 	);
 
 	// todo: implement debug prompt interaction
@@ -495,10 +522,16 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 				error.throw_if("KeDelayExecutionThread: read interval");
 			}
 
-			THREAD_LOG("KeDelayExecutionThread called (wait_mode={}, alertable={}, interval={})",
-				wait_mode, alertable, interval);
+			const auto sleep_ms = std::chrono::milliseconds(std::abs(interval) / 10000);
+
+			THREAD_LOG("KeDelayExecutionThread called (wait_mode={}, alertable={}, interval={}, sleep_ms={})",
+				wait_mode, alertable, interval, sleep_ms.count());
+
+			kernel::current_thread->sleep_for(sleep_ms);
 
 			write_nt_success(emulator);
+
+			kernel::switch_thread(emulator, false, true);
 		},
 		mapped_image,
 		"KeDelayExecutionThread"
@@ -531,13 +564,14 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 		"KeCancelTimer"
 	);
 
-	// todo: actually dereference the adapter object
 	redirect_function(
 		[emulator]
 		{
 			const auto adapter = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
 
 			THREAD_LOG("HalPutDmaAdapter called (adapter=0x{:X})", adapter);
+
+			kernel::object_manager->dereference_object(adapter);
 		},
 		mapped_image,
 		"HalPutDmaAdapter"
@@ -903,7 +937,9 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 
 			if (thread_handle_out)
 			{
-				const emulator_t::address_type handle_value = thread->address();
+				kernel::object_manager->register_object(thread->address(), std::make_shared<thread_object_t>(thread));
+
+				const auto handle_value = kernel::object_manager->create_handle(thread->address(), object_manager_t::generic_all);
 				error = emulator->write_virtual_memory(thread_handle_out, &handle_value, sizeof(handle_value));
 				error.throw_if("PsCreateSystemThread: write handle");
 			}
@@ -922,6 +958,22 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 		},
 		mapped_image,
 		"PsCreateSystemThread"
+	);
+
+	redirect_function(
+		[emulator](bool& skip_return)
+		{
+			const auto exit_status = emulator->read_register<x86::reg::rcx, std::uint32_t>();
+
+			THREAD_LOG("PsTerminateSystemThread called (exit_status=0x{:X})", exit_status);
+
+			kernel::switch_thread(emulator, true);
+
+			skip_return = true;
+			emulator->write_register<x86::reg::rip>(emulator_t::thread_return_address);
+		},
+		mapped_image,
+		"PsTerminateSystemThread"
 	);
 
 	redirect_function(
@@ -996,13 +1048,12 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 			}
 
 			const std::uint32_t aligned_extension = (extension_size + 7) & ~7u;
-			const std::uint32_t total_size = sizeof(_DEVICE_OBJECT) + aligned_extension;
+			const std::uint32_t total_body_size = sizeof(_DEVICE_OBJECT) + aligned_extension;
 
-			const auto allocation = emulator->heap_allocate(total_size, prot_read_write, true);
-			error = allocation.error_or({});
-			error.throw_if("IoCreateDevice: allocate device object");
+			std::vector<std::uint8_t> body(total_body_size, 0);
 
-			const emulator_t::address_type device_address = *allocation;
+			auto host_object = std::make_shared<device_object_t>();
+			const auto device_address = kernel::object_manager->create_object(0, body.data(), body.size(), host_object);
 
 			_DEVICE_OBJECT device = { };
 
@@ -1135,5 +1186,258 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 		},
 		mapped_image,
 		"ExGetFirmwareEnvironmentVariable"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto base = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto num_elements = emulator->read_register<x86::reg::rdx, std::uint64_t>();
+			const auto element_size = emulator->read_register<x86::reg::r8, std::uint64_t>();
+			const auto comparator = emulator->read_register<x86::reg::r9, emulator_t::address_type>();
+
+			THREAD_LOG("qsort called (base=0x{:X}, num={}, size={}, comparator=0x{:X})",
+				base, num_elements, element_size, comparator);
+
+			if (!base || num_elements < 2 || !element_size || !comparator)
+			{
+				return;
+			}
+
+			const auto total_size = num_elements * element_size;
+
+			std::vector<std::uint8_t> buffer(total_size);
+			emulator_err_t error = emulator->read_virtual_memory(base, buffer.data(), total_size);
+			error.throw_if("qsort: read array");
+
+			const auto guest_base = emulator->heap_allocate(total_size, prot_read_write, true);
+			error = guest_base.error_or({});
+			error.throw_if("qsort: allocate temp buffer");
+
+			error = emulator->write_virtual_memory(*guest_base, buffer.data(), total_size);
+			error.throw_if("qsort: write temp buffer");
+
+			const auto saved_rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
+
+			constexpr std::size_t shadow_space = 0x20 + 8;
+			const auto call_stack = emulator->heap_allocate(shadow_space, prot_read_write, true);
+			error = call_stack.error_or({});
+			error.throw_if("qsort: allocate call stack");
+
+			std::vector<std::size_t> indices(num_elements);
+			std::iota(indices.begin(), indices.end(), 0);
+
+			std::sort(indices.begin(), indices.end(),
+				[&](const std::size_t a, const std::size_t b)
+				{
+					const auto addr_a = *guest_base + a * element_size;
+					const auto addr_b = *guest_base + b * element_size;
+
+					emulator->write_register<x86::reg::rcx>(addr_a);
+					emulator->write_register<x86::reg::rdx>(addr_b);
+					emulator->write_register<x86::reg::rsp>(*call_stack + shadow_space);
+
+					const auto run_result = emulator->run_at(comparator, emulator_t::thread_return_address);
+
+					if (!run_result)
+					{
+						THREAD_ERR_LOG("qsort: comparator call failed");
+						return false;
+					}
+
+					const auto result = emulator->read_register<x86::reg::rax, std::int32_t>();
+
+					return result < 0;
+				}
+			);
+
+			emulator->write_register<x86::reg::rsp>(saved_rsp);
+
+			std::vector<std::uint8_t> sorted(total_size);
+
+			for (std::size_t i = 0; i < num_elements; ++i)
+			{
+				std::memcpy(sorted.data() + i * element_size,
+					buffer.data() + indices[i] * element_size,
+					element_size);
+			}
+
+			error = emulator->write_virtual_memory(base, sorted.data(), total_size);
+			error.throw_if("qsort: write sorted array");
+
+			THREAD_LOG("qsort: sorted {} elements", num_elements);
+		},
+		mapped_image,
+		"qsort"
+	);
+
+	const auto wait_for_single_handler = [emulator](const std::string_view caller_name)
+	{
+		const auto object_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+		const auto wait_reason = emulator->read_register<x86::reg::rdx, std::uint32_t>();
+		const auto wait_mode = emulator->read_register<x86::reg::r8, std::uint8_t>();
+		const auto alertable = emulator->read_register<x86::reg::r9, std::uint8_t>();
+
+		const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
+		emulator_t::address_type timeout_ptr = 0;
+		static_cast<void>(emulator->read_virtual_memory(rsp + 0x28, &timeout_ptr, sizeof(timeout_ptr)));
+
+		std::int64_t timeout_value = 0;
+		bool has_timeout = false;
+
+		if (timeout_ptr)
+		{
+			static_cast<void>(emulator->read_virtual_memory(timeout_ptr, &timeout_value, sizeof(timeout_value)));
+			has_timeout = true;
+		}
+
+		std::int32_t signal_state = 0;
+		static_cast<void>(emulator->read_virtual_memory(
+			object_address + offsetof(_KEVENT, Header.SignalState), &signal_state, sizeof(signal_state)));
+
+		THREAD_LOG("{} called (object=0x{:X}, reason={}, mode={}, alertable={}, timeout={}, signal_state={})",
+			caller_name, object_address, wait_reason, wait_mode, alertable,
+			has_timeout ? std::format("{}", timeout_value) : "infinite", signal_state);
+
+		if (signal_state > 0)
+		{
+			write_nt_status(emulator, 0);
+			return;
+		}
+
+		if (has_timeout && timeout_value == 0)
+		{
+			constexpr std::uint32_t status_timeout = 0x102;
+			write_nt_status(emulator, status_timeout);
+			return;
+		}
+
+		write_nt_status(emulator, 0);
+	};
+
+	redirect_function(
+		[wait_for_single_handler] { wait_for_single_handler("KeWaitForSingleObject"); },
+		mapped_image,
+		"KeWaitForSingleObject"
+	);
+
+	redirect_function(
+		[emulator, wait_for_single_handler]
+		{
+			const auto count = emulator->read_register<x86::reg::rcx, std::uint32_t>();
+			const auto objects_ptr = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+			const auto wait_type = emulator->read_register<x86::reg::r8, std::uint32_t>();
+			const auto wait_reason = emulator->read_register<x86::reg::r9, std::uint32_t>();
+
+			const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
+
+			std::uint8_t wait_mode = 0;
+			static_cast<void>(emulator->read_virtual_memory(rsp + 0x28, &wait_mode, sizeof(wait_mode)));
+
+			std::uint8_t alertable = 0;
+			static_cast<void>(emulator->read_virtual_memory(rsp + 0x30, &alertable, sizeof(alertable)));
+
+			emulator_t::address_type timeout_ptr = 0;
+			static_cast<void>(emulator->read_virtual_memory(rsp + 0x38, &timeout_ptr, sizeof(timeout_ptr)));
+
+			std::int64_t timeout_value = 0;
+			bool has_timeout = false;
+
+			if (timeout_ptr)
+			{
+				static_cast<void>(emulator->read_virtual_memory(timeout_ptr, &timeout_value, sizeof(timeout_value)));
+				has_timeout = true;
+			}
+
+			THREAD_LOG("KeWaitForMultipleObjects called (count={}, objects=0x{:X}, type={}, reason={}, mode={}, alertable={}, timeout={})",
+				count, objects_ptr, wait_type, wait_reason, wait_mode, alertable,
+				has_timeout ? std::format("{}", timeout_value) : "infinite");
+
+			if (count == 1)
+			{
+				emulator_t::address_type single_object = 0;
+				static_cast<void>(emulator->read_virtual_memory(objects_ptr, &single_object, sizeof(single_object)));
+
+				emulator->write_register<x86::reg::rcx>(single_object);
+				emulator->write_register<x86::reg::rdx>(static_cast<std::uint64_t>(wait_reason));
+				emulator->write_register<x86::reg::r8>(static_cast<std::uint64_t>(wait_mode));
+				emulator->write_register<x86::reg::r9>(static_cast<std::uint64_t>(alertable));
+
+				const auto timeout_on_stack_address = rsp + 0x28;
+				static_cast<void>(emulator->write_virtual_memory(timeout_on_stack_address, &timeout_ptr, sizeof(timeout_ptr)));
+
+				wait_for_single_handler("KeWaitForMultipleObjects(1)");
+				return;
+			}
+
+			std::vector<emulator_t::address_type> object_addresses(count);
+			emulator_err_t error = emulator->read_virtual_memory(
+				objects_ptr, object_addresses.data(), count * sizeof(emulator_t::address_type));
+			error.throw_if("KeWaitForMultipleObjects: read object array");
+
+			constexpr std::uint32_t wait_all = 1;
+
+			if (wait_type == wait_all)
+			{
+				bool all_signaled = true;
+
+				for (std::uint32_t i = 0; i < count; ++i)
+				{
+					std::int32_t signal_state = 0;
+					static_cast<void>(emulator->read_virtual_memory(
+						object_addresses[i] + offsetof(_KEVENT, Header.SignalState), &signal_state, sizeof(signal_state)));
+
+					THREAD_LOG("  object[{}]=0x{:X} signal_state={}", i, object_addresses[i], signal_state);
+
+					if (signal_state <= 0)
+					{
+						all_signaled = false;
+					}
+				}
+
+				if (all_signaled)
+				{
+					write_nt_status(emulator, 0);
+					return;
+				}
+
+				if (has_timeout && timeout_value == 0)
+				{
+					constexpr std::uint32_t status_timeout = 0x102;
+					write_nt_status(emulator, status_timeout);
+					return;
+				}
+
+				write_nt_status(emulator, 0);
+			}
+			else
+			{
+				for (std::uint32_t i = 0; i < count; ++i)
+				{
+					std::int32_t signal_state = 0;
+					static_cast<void>(emulator->read_virtual_memory(
+						object_addresses[i] + offsetof(_KEVENT, Header.SignalState), &signal_state, sizeof(signal_state)));
+
+					THREAD_LOG("  object[{}]=0x{:X} signal_state={}", i, object_addresses[i], signal_state);
+
+					if (signal_state > 0)
+					{
+						write_nt_status(emulator, static_cast<std::uint32_t>(i));
+						return;
+					}
+				}
+
+				if (has_timeout && timeout_value == 0)
+				{
+					constexpr std::uint32_t status_timeout = 0x102;
+					write_nt_status(emulator, status_timeout);
+					return;
+				}
+
+				write_nt_status(emulator, 0);
+			}
+		},
+		mapped_image,
+		"KeWaitForMultipleObjects"
 	);
 }

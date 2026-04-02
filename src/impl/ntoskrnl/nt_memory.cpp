@@ -1,4 +1,60 @@
 #include "nt_helpers.hpp"
+#include <portable_executable/image.hpp>
+
+constexpr std::uint32_t sec_image = 0x1000000;
+
+static std::shared_ptr<file_t> map_pe_image(const std::shared_ptr<file_t>& raw_file)
+{
+	const auto data = raw_file->read();
+
+	if (data.size() < sizeof(portable_executable::dos_header_t))
+	{
+		return {};
+	}
+
+	const auto pe_image = reinterpret_cast<const portable_executable::image_t*>(data.data());
+	const auto dos = pe_image->dos_header();
+
+	if (!dos->valid())
+	{
+		return {};
+	}
+
+	const auto nt = pe_image->nt_headers();
+	const auto image_size = nt->optional_header.size_of_image;
+	const auto header_size = nt->optional_header.size_of_headers;
+
+	std::vector<std::uint8_t> image_buffer(image_size, 0);
+
+	const auto headers_to_copy = std::min(static_cast<std::size_t>(header_size), data.size());
+	std::memcpy(image_buffer.data(), data.data(), headers_to_copy);
+
+	for (const auto& section : pe_image->sections())
+	{
+		if (section.virtual_address == 0 || section.size_of_raw_data == 0)
+		{
+			continue;
+		}
+
+		const auto raw_offset = section.pointer_to_raw_data;
+		const auto raw_size = section.size_of_raw_data;
+		const auto virtual_offset = section.virtual_address;
+
+		if (raw_offset + raw_size > data.size())
+		{
+			continue;
+		}
+
+		if (virtual_offset + raw_size > image_size)
+		{
+			continue;
+		}
+
+		std::memcpy(image_buffer.data() + virtual_offset, data.data() + raw_offset, raw_size);
+	}
+
+	return std::make_shared<file_t>(std::move(image_buffer));
+}
 
 void redirect_ntoskrnl_memory_functions(const std::shared_ptr<emulator_t>& emulator,
 	const kernel_image_t& mapped_image)
@@ -305,6 +361,267 @@ void redirect_ntoskrnl_memory_functions(const std::shared_ptr<emulator_t>& emula
 		},
 		mapped_image,
 		"IoAllocateMdl"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto section_out = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto desired_access = emulator->read_register<x86::reg::rdx, std::uint32_t>();
+			const auto object_attributes = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
+			const auto max_size_ptr = emulator->read_register<x86::reg::r9, emulator_t::address_type>();
+
+			const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
+
+			std::uint32_t section_page_protection = 0;
+			emulator_err_t error = emulator->read_virtual_memory(rsp + 0x28, &section_page_protection, sizeof(section_page_protection));
+			error.throw_if("MmCreateSection: read SectionPageProtection");
+
+			std::uint32_t allocation_attributes = 0;
+			error = emulator->read_virtual_memory(rsp + 0x30, &allocation_attributes, sizeof(allocation_attributes));
+			error.throw_if("MmCreateSection: read AllocationAttributes");
+
+			emulator_t::address_type file_handle = 0;
+			error = emulator->read_virtual_memory(rsp + 0x38, &file_handle, sizeof(file_handle));
+			error.throw_if("MmCreateSection: read FileHandle");
+
+			emulator_t::address_type file_object_address = 0;
+			error = emulator->read_virtual_memory(rsp + 0x40, &file_object_address, sizeof(file_object_address));
+			error.throw_if("MmCreateSection: read FileObject");
+
+			std::int64_t max_size = 0;
+			if (max_size_ptr)
+			{
+				error = emulator->read_virtual_memory(max_size_ptr, &max_size, sizeof(max_size));
+				error.throw_if("MmCreateSection: read MaximumSize value");
+			}
+
+			std::shared_ptr<file_object_t> file_obj;
+			std::string file_path;
+
+			if (file_object_address)
+			{
+				file_obj = kernel::object_manager->get_object<file_object_t>(file_object_address);
+			}
+
+			if (!file_obj && file_handle)
+			{
+				file_obj = kernel::object_manager->get_object_from_handle<file_object_t>(file_handle);
+			}
+
+			if (file_obj)
+			{
+				file_path = file_obj->path;
+			}
+
+			THREAD_LOG("MmCreateSection called (section_out=0x{:X}, access=0x{:X}, oa=0x{:X}, max_size={}, protection=0x{:X}, alloc_attrs=0x{:X}, file_handle=0x{:X}, file_object=0x{:X}, path='{}')",
+				section_out, desired_access, object_attributes, max_size, section_page_protection, allocation_attributes, file_handle, file_object_address, file_path);
+
+			std::shared_ptr<file_t> backing_file;
+
+			if (file_obj && file_obj->file)
+			{
+				backing_file = file_obj->file;
+			}
+
+			if (backing_file && (allocation_attributes & sec_image))
+			{
+				auto mapped = map_pe_image(backing_file);
+
+				if (mapped)
+				{
+					THREAD_LOG("MmCreateSection: SEC_IMAGE detected, PE-mapped {} -> {} bytes", backing_file->size(), mapped->size());
+					backing_file = mapped;
+				}
+				else
+				{
+					THREAD_WARN_LOG("MmCreateSection: SEC_IMAGE set but PE mapping failed for '{}'", file_path);
+				}
+			}
+
+			auto host_object = std::make_shared<section_object_t>(backing_file);
+
+			constexpr std::size_t section_body_size = 0x40;
+			std::array<std::uint8_t, section_body_size> body{};
+
+			if (backing_file)
+			{
+				const std::int64_t file_size = static_cast<std::int64_t>(backing_file->size());
+				std::memcpy(body.data() + 0x30, &file_size, sizeof(file_size));
+			}
+			else if (max_size > 0)
+			{
+				std::memcpy(body.data() + 0x30, &max_size, sizeof(max_size));
+			}
+
+			const auto body_address = kernel::object_manager->create_object(0, body.data(), body.size(), host_object);
+
+			if (section_out)
+			{
+				error = emulator->write_virtual_memory(section_out, &body_address, sizeof(body_address));
+				error.throw_if("MmCreateSection: write output");
+			}
+
+			THREAD_LOG("MmCreateSection: created section at 0x{:X} (path='{}', size={})",
+				body_address, file_path, backing_file ? backing_file->size() : 0);
+
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"MmCreateSection"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto section_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto mapped_base_out = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+			const auto view_size_ptr = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
+
+			std::uint64_t view_size = 0;
+			if (view_size_ptr)
+			{
+				emulator_err_t error = emulator->read_virtual_memory(view_size_ptr, &view_size, sizeof(view_size));
+				error.throw_if("MmMapViewInSystemSpace: read ViewSize");
+			}
+
+			THREAD_LOG("MmMapViewInSystemSpace called (section=0x{:X}, mapped_base_out=0x{:X}, view_size_ptr=0x{:X}, view_size=0x{:X})",
+				section_address, mapped_base_out, view_size_ptr, view_size);
+
+			const auto section = kernel::object_manager->get_object<section_object_t>(section_address);
+
+			if (!section || !section->file)
+			{
+				THREAD_WARN_LOG("MmMapViewInSystemSpace: section 0x{:X} has no backing file", section_address);
+
+				write_nt_status(emulator, 0xC000000D);
+				return;
+			}
+
+			const auto data = section->file->read();
+			const std::uint64_t file_size = data.size();
+
+			if (view_size == 0)
+			{
+				view_size = file_size;
+			}
+
+			const auto mapping = emulator->heap_allocate(view_size, prot_read_write, true);
+			emulator_err_t error = mapping.error_or({});
+			error.throw_if("MmMapViewInSystemSpace: allocate mapping");
+
+			const std::uint64_t copy_size = std::min(view_size, file_size);
+
+			if (copy_size > 0)
+			{
+				error = emulator->write_virtual_memory(*mapping, data.data(), copy_size);
+				error.throw_if("MmMapViewInSystemSpace: write file data");
+			}
+
+			if (mapped_base_out)
+			{
+				error = emulator->write_virtual_memory(mapped_base_out, &*mapping, sizeof(*mapping));
+				error.throw_if("MmMapViewInSystemSpace: write MappedBase");
+			}
+
+			if (view_size_ptr)
+			{
+				error = emulator->write_virtual_memory(view_size_ptr, &view_size, sizeof(view_size));
+				error.throw_if("MmMapViewInSystemSpace: write ViewSize");
+			}
+
+			const auto mapping_base = *mapping;
+			const auto mapping_end = mapping_base + view_size;
+
+			THREAD_LOG("MmMapViewInSystemSpace: mapped 0x{:X} bytes at 0x{:X}", view_size, mapping_base);
+
+			const auto monitor_callback = [emulator, mapping_base](const emulator_t::address_type accessed_address, const protection_t access_type)
+			{
+				const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
+				const auto offset = accessed_address - mapping_base;
+				const auto type_str = (static_cast<std::uint32_t>(access_type) & static_cast<std::uint32_t>(prot_write)) ? "write" : "read";
+
+				THREAD_LOG("[section-view] {} at 0x{:X}+0x{:X} (rip=0x{:X})", type_str, mapping_base, offset, rip);
+
+				return false;
+			};
+
+			bool is_pe = false;
+
+			if (data.size() >= sizeof(portable_executable::dos_header_t))
+			{
+				const auto pe = reinterpret_cast<const portable_executable::image_t*>(data.data());
+
+				if (pe->dos_header()->valid())
+				{
+					is_pe = true;
+
+					const auto nt = pe->nt_headers();
+					const auto headers_size = nt->optional_header.size_of_headers;
+					const auto export_dir = nt->optional_header.data_directories.export_directory;
+					const auto export_rva_start = export_dir.virtual_address;
+					const auto export_rva_end = export_rva_start + export_dir.size;
+
+					for (const auto& pe_section : pe->sections())
+					{
+						if (pe_section.virtual_address < headers_size)
+						{
+							continue;
+						}
+
+						const auto section_rva_end = pe_section.virtual_address + pe_section.virtual_size;
+
+						if (export_rva_start && pe_section.virtual_address < export_rva_end && section_rva_end > export_rva_start)
+						{
+							continue;
+						}
+
+						const auto section_name = std::string(pe_section.name, strnlen(pe_section.name, 8));
+
+						if (section_name == ".edata")
+						{
+							continue;
+						}
+
+						const auto hook_start = mapping_base + pe_section.virtual_address;
+						const auto hook_end = mapping_base + section_rva_end;
+
+						if (hook_end > mapping_end)
+						{
+							continue;
+						}
+
+						const emulator_err_t hook_error = emulator->hook_memory(monitor_callback, prot_read_write, hook_start, hook_end).error_or({});
+						hook_error.throw_if("MmMapViewInSystemSpace: hook section");
+					}
+				}
+			}
+
+			if (!is_pe)
+			{
+				const emulator_err_t hook_error = emulator->hook_memory(monitor_callback, prot_read_write, mapping_base, mapping_end).error_or({});
+				hook_error.throw_if("MmMapViewInSystemSpace: hook mapping");
+			}
+
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"MmMapViewInSystemSpace"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto mapped_base = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+
+			THREAD_LOG("MmUnmapViewInSystemSpace called (mapped_base=0x{:X})", mapped_base);
+
+			// todo: actually free the guest memory mapping
+
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"MmUnmapViewInSystemSpace"
 	);
 
 	redirect_function(

@@ -36,15 +36,6 @@ void write_nt_success(const std::shared_ptr<emulator_t>& emulator)
 	write_nt_status(emulator, 0);
 }
 
-void write_dummy_handle(const std::shared_ptr<emulator_t>& emulator, const emulator_t::address_type handle_address)
-{
-	constexpr std::uint64_t handle_value = 0x1337;
-
-	const emulator_err_t error = emulator->write_virtual_memory(handle_address, &handle_value, sizeof(handle_value));
-
-	error.throw_if("write memory");
-}
-
 std::uint64_t read_guest_vararg(const emulator_t& emulator, const emulator_t::address_type va_list_address,
 	std::size_t& index)
 {

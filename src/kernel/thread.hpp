@@ -94,6 +94,12 @@ public:
 		return state_;
 	}
 
+	void update_last_time_ran();
+
+	void sleep_for(std::chrono::milliseconds duration);
+
+	[[nodiscard]] bool is_sleeping() const;
+
 	void start();
 	void stop();
 
@@ -114,6 +120,7 @@ protected:
 	emulator_object_t<_ETHREAD> object_;
 
 	time_point_type last_time_ran_ = { };
+	time_point_type sleep_until_ = { };
 	thread_state_t state_ = { };
 };
 
@@ -122,5 +129,5 @@ namespace kernel
 	[[nodiscard]] std::shared_ptr<thread_t> create_thread(const std::shared_ptr<emulator_t>& emulator,
 		thread_t::id_type thread_id, const std::shared_ptr<process_t>& process);
 
-	void switch_thread();
+	void switch_thread(const std::shared_ptr<emulator_t>& emulator, bool delete_current = false, bool force = false);
 }

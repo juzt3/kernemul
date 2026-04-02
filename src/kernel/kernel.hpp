@@ -4,6 +4,7 @@
 #include "../image/mapped_image.hpp"
 #include "../filesystem/filesystem.hpp"
 #include "kernel_def.hpp"
+#include "object_manager.hpp"
 #include "process_loader.hpp"
 #include "thread.hpp"
 
@@ -12,6 +13,7 @@
 #include <optional>
 #include <unordered_map>
 #include <vector>
+#include <atomic>
 #include <queue>
 
 namespace kernel
@@ -25,9 +27,12 @@ namespace kernel
 	inline std::vector<std::shared_ptr<process_t>> process_entries;
 
 	inline std::queue<std::shared_ptr<thread_t>> pending_threads;
+	inline std::atomic_bool pending_thread_switch = false;
+	inline std::atomic_bool delete_current_thread = false;
 	inline std::shared_ptr<thread_t> current_thread;
 
 	inline std::shared_ptr<filesystem_t> filesystem;
+	inline std::shared_ptr<object_manager_t> object_manager;
 	inline std::unordered_map<emulator_t::address_type, function_implementation_t> redirected_functions;
 
 	[[nodiscard]] std::shared_ptr<kernel_image_t> find_module(std::string_view name);

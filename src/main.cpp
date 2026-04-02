@@ -135,14 +135,17 @@ static void set_up_interrupt_flag(const std::shared_ptr<emulator_t>& emulator)
 
 static void run_main_module(const std::shared_ptr<emulator_t>& emulator, const emulator_t::address_type entry_point_address)
 {
-	std::atomic<bool> ended = false;
+	std::atomic_bool ended = false;
 
 	auto thread_scheduler = std::thread(
-		[&ended]()
+		[&ended, emulator]()
 		{
 			while (!ended)
 			{
-				kernel::switch_thread();
+				if (!kernel::pending_thread_switch)
+				{
+					kernel::switch_thread(emulator);
+				}
 
 				std::this_thread::sleep_for(std::chrono::milliseconds(15));
 			}
@@ -157,11 +160,35 @@ static void run_main_module(const std::shared_ptr<emulator_t>& emulator, const e
 
 	do
 	{
+		if (kernel::pending_thread_switch)
+		{
+			const auto next_thread = kernel::pending_threads.front();
+
+			kernel::pending_threads.pop();
+
+			if (!kernel::delete_current_thread)
+			{
+				kernel::pending_threads.push(kernel::current_thread);
+			}
+
+			kernel::current_thread = next_thread;
+
+			kernel::delete_current_thread = false;
+		}
+
+		GLOBAL_LOG("running thread {}", kernel::current_thread->id());
+
+		if (last_thread)
+		{
+			last_thread->save_state();
+		}
+
 		last_thread = kernel::current_thread;
 
+		kernel::pending_thread_switch = false;
 		kernel::current_thread->start();
 
-	} while (last_thread != kernel::current_thread);
+	} while (kernel::pending_thread_switch);
 
 	ended = true;
 
@@ -175,6 +202,7 @@ std::int32_t main()
 		const auto emulator = std::static_pointer_cast<emulator_t>(std::make_shared<hypermulator_t>());
 
 		kernel::filesystem = std::make_shared<filesystem_t>();
+		kernel::object_manager = std::make_shared<object_manager_t>(emulator);
 
 		kernel::filesystem->load_at("ntdll.dll", "system32/ntdll.dll");
 		kernel::filesystem->load_at("win32k.sys", "system32/win32k.sys");
@@ -217,8 +245,8 @@ std::int32_t main()
 		GLOBAL_LOG("mapped ntoskrnl at 0x{:X}", nt_image->base_address());
 		GLOBAL_LOG("mapped image at 0x{:X}", base_address);
 
-		const auto redirect_execute_handler = [emulator](
-			const emulator_t::address_type accessed_address, const protection_t) -> bool
+		const auto redirect_execute_handler = [emulator]
+		([[maybe_unused]] const emulator_t::address_type accessed_address, [[maybe_unused]] const protection_t protection) -> void
 		{
 			const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
 			const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
@@ -241,7 +269,7 @@ std::int32_t main()
 					emulator->write_register<x86::reg::rip>(return_address);
 				}
 
-				return true;
+				return;
 			}
 
 			const auto module = kernel::find_module_from_rip(rip);
@@ -271,7 +299,7 @@ std::int32_t main()
 
 			emulator->write_register<x86::reg::rip, emulator_t::address_type>(-1);
 
-			return true;
+			emulator->stop();
 		};
 
 		for (const auto& module : kernel::module_entries)
@@ -336,11 +364,17 @@ std::int32_t main()
 		run_main_module(emulator, entry_point_address);
 
 		const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
-		const auto rax = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
-		const auto rbx = emulator->read_register<x86::reg::rbx, emulator_t::address_type>();
+		const auto rax = emulator->read_register<x86::reg::rax, emulator_t::address_type>();
+		const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
 		const auto rdx = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
 
-		GLOBAL_LOG("emulation finished at rip=0x{:X}, rax=0x{:X}, rbx=0x{:X}, rdx=0x{:X}", rip, rax, rbx, rdx);
+		std::uint64_t rsp_38 = 0;
+		std::uint64_t rsp_40 = 0;
+		static_cast<void>(emulator->read_virtual_memory(rsp + 0x38, &rsp_38, sizeof(rsp_38)));
+		static_cast<void>(emulator->read_virtual_memory(rsp + 0x40, &rsp_40, sizeof(rsp_40)));
+
+		GLOBAL_LOG("emulation finished at rip=0x{:X}, rax=0x{:X}, rsp=0x{:X}, rdx=0x{:X}, [rsp+0x38]=0x{:X}, [rsp+0x40]=0x{:X}",
+			rip, rax, rsp, rdx, rsp_38, rsp_40);
 
 		error.throw_if("emulation running");
 	}

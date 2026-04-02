@@ -11,6 +11,8 @@ hm::guest_virtual_processor_t::id_type hm::guest_virtual_processor_t::id() const
 
 void hm::guest_virtual_processor_t::run()
 {
+	pending_stop_ = false;
+
 	vmexit_context_t vmexit_context;
 
 	do
@@ -20,9 +22,16 @@ void hm::guest_virtual_processor_t::run()
 			break;
 		}
 
-	} while (process_vmexit(vmexit_context));
+	} while (!pending_stop_ && process_vmexit(vmexit_context));
 
 	reset_exception_state();
+}
+
+void hm::guest_virtual_processor_t::stop()
+{
+	pending_stop_ = true;
+
+	partition_->stop_virtual_processor(*this);
 }
 
 std::optional<hm::guest_virtual_processor_t::address_type> hm::guest_virtual_processor_t::translate_virtual_address(

@@ -3,6 +3,7 @@
 
 #include <stdexcept>
 #include <optional>
+#include <atomic>
 #include <memory>
 #include <array>
 #include <span>
@@ -30,6 +31,7 @@ namespace hm
 		[[nodiscard]] id_type id() const;
 
 		void run();
+		void stop();
 
 		[[nodiscard]] std::optional<address_type> translate_virtual_address(address_type virtual_address) const;
 
@@ -115,5 +117,7 @@ namespace hm
 
 		std::shared_ptr<guest_partition_t> partition_ = { };
 		id_type id_ = 0;
+
+		bool pending_stop_ = false;
 	};
 }

@@ -207,6 +207,7 @@
     <ClCompile Include="src\impl\ntoskrnl\nt_time.cpp" />
     <ClCompile Include="src\kernel\exception.cpp" />
     <ClCompile Include="src\kernel\kernel.cpp" />
+    <ClCompile Include="src\kernel\object_manager.cpp" />
     <ClCompile Include="src\kernel\kernel_string.cpp" />
     <ClCompile Include="src\kernel\image_loader.cpp" />
     <ClCompile Include="src\kernel\process_loader.cpp" />
@@ -292,10 +293,12 @@
     <ClInclude Include="src\kernel\kernel.hpp" />
     <ClInclude Include="src\kernel\kernel_string.hpp" />
     <ClInclude Include="src\kernel\image_loader.hpp" />
+    <ClInclude Include="src\kernel\object_manager.hpp" />
     <ClInclude Include="src\kernel\process_loader.hpp" />
     <ClInclude Include="src\kernel\thread.hpp" />
     <ClInclude Include="src\kernel\segments.hpp" />
     <ClInclude Include="src\kernel\kernel_def.hpp" />
+    <ClInclude Include="src\util\logs.hpp" />
     <ClInclude Include="src\util\util.hpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

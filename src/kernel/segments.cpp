@@ -167,7 +167,6 @@ void kernel::set_up_idt(const std::shared_ptr<emulator_t>& emulator, const kerne
 {
 	constexpr std::uint32_t handler_count = 256;
 	constexpr emulator_t::size_type idt_size = handler_count * sizeof(segment_descriptor_interrupt_gate_64);
-	constexpr emulator_t::size_type handler_stride = 0x10;
 
 	const auto idt_base_address = emulator->heap_allocate(idt_size, prot_read_write, true);
 
@@ -178,7 +177,7 @@ void kernel::set_up_idt(const std::shared_ptr<emulator_t>& emulator, const kerne
 	
 	for (std::uint32_t i = 0; i < handler_count; i++)
 	{
-		const auto handler_address = handler_base + i * handler_stride;
+		const auto handler_address = handler_base + (i * sizeof(segment_descriptor_interrupt_gate_64));
 
 		constexpr std::array<std::uint32_t, 10> error_code_handlers = {
 			8, 10, 11,
