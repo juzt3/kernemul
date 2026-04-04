@@ -81,6 +81,9 @@
     <ClCompile Include="src\filesystem\filesystem.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="src\registry\registry.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="src\impl\ntoskrnl\nt_file.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -300,6 +303,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\filesystem\filesystem.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\registry\registry.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\impl\ntoskrnl\nt_helpers.hpp">

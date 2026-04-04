@@ -147,6 +147,13 @@ void hm::emulator_t::reset_guest_exit_state()
 		}
 	);
 
+	partition_->register_vmexit_callback(vmexit_reason_t::io_port_access,
+		[this](guest_virtual_processor_t& processor, vmexit_context_t& context)
+		{
+			return true;
+		}
+	);
+
 	partition_->set_cpuid_exiting(false);
 	partition_->set_rdtsc_exiting(false);
 

@@ -3,15 +3,6 @@
 
 #include <Windows.h>
 
-registry_key_object_t::~registry_key_object_t()
-{
-	if (host_key)
-	{
-		RegCloseKey(static_cast<HKEY>(host_key));
-		host_key = nullptr;
-	}
-}
-
 object_manager_t::object_manager_t(std::shared_ptr<emulator_t> emulator)
 	: emulator_(std::move(emulator))
 {

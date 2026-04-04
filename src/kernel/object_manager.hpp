@@ -8,6 +8,7 @@
 
 class file_t;
 class thread_t;
+class registry_key_t;
 
 struct object_t
 {
@@ -34,10 +35,8 @@ struct thread_object_t final : object_t
 
 struct registry_key_object_t final : object_t
 {
-	std::wstring path;
-	void* host_key = nullptr;
-
-	~registry_key_object_t() override;
+	std::shared_ptr<registry_key_t> key;
+	std::string path;
 };
 
 struct callback_object_t final : object_t

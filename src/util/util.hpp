@@ -17,6 +17,19 @@ namespace util
 		return result;
 	}
 
+	inline std::wstring widen_string(const std::string_view narrow)
+	{
+		std::wstring result;
+		result.reserve(narrow.size());
+
+		for (const auto c : narrow)
+		{
+			result += static_cast<wchar_t>(static_cast<unsigned char>(c));
+		}
+
+		return result;
+	}
+
 	template <typename T>
 	T generate_random(T min_value, T max_value)
 	{

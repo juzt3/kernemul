@@ -191,6 +191,7 @@
     <ClCompile Include="src\emulator\backend\unicorn_backend.cpp" />
     <ClCompile Include="src\emulator\emulator_memory.cpp" />
     <ClCompile Include="src\filesystem\filesystem.cpp" />
+    <ClCompile Include="src\registry\registry.cpp" />
     <ClCompile Include="src\image\pdb\pdb_file.cpp" />
     <ClCompile Include="src\image\pdb\symbol_server.cpp" />
     <ClCompile Include="src\impl\impl.cpp" />
@@ -285,6 +286,7 @@
     <ClInclude Include="src\emulator\emulator.hpp" />
     <ClInclude Include="src\emulator\object.hpp" />
     <ClInclude Include="src\filesystem\filesystem.hpp" />
+    <ClInclude Include="src\registry\registry.hpp" />
     <ClInclude Include="src\image\mapped_image.hpp" />
     <ClInclude Include="src\image\pdb\pdb_file.hpp" />
     <ClInclude Include="src\image\pdb\symbol_server.hpp" />

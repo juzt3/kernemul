@@ -3,6 +3,7 @@
 #include "../emulator/object.hpp"
 #include "../image/mapped_image.hpp"
 #include "../filesystem/filesystem.hpp"
+#include "../registry/registry.hpp"
 #include "kernel_def.hpp"
 #include "object_manager.hpp"
 #include "process_loader.hpp"
@@ -32,6 +33,7 @@ namespace kernel
 	inline std::shared_ptr<thread_t> current_thread;
 
 	inline std::shared_ptr<filesystem_t> filesystem;
+	inline std::shared_ptr<registry_t> registry;
 	inline std::shared_ptr<object_manager_t> object_manager;
 	inline std::unordered_map<emulator_t::address_type, function_implementation_t> redirected_functions;
 

@@ -11,6 +11,7 @@
 
 #include <ia32-doc/ia32.hpp>
 #include "util/logs.hpp"
+#include "util/util.hpp"
 
 #include "portable_executable/dos_header.hpp"
 #include "portable_executable/image.hpp"
@@ -202,7 +203,15 @@ std::int32_t main()
 		const auto emulator = std::static_pointer_cast<emulator_t>(std::make_shared<hypermulator_t>());
 
 		kernel::filesystem = std::make_shared<filesystem_t>();
+		kernel::registry = std::make_shared<registry_t>();
 		kernel::object_manager = std::make_shared<object_manager_t>(emulator);
+
+		const auto module_reg_key = kernel::registry->create_key(
+			registry_t::normalize_path(EMULATED_MODULE_REG_PATH));
+		module_reg_key->set_dword("Start", 1);
+		module_reg_key->set_dword("Type", 1);
+		module_reg_key->set_string("ImagePath",
+			std::wstring(EMULATED_MODULE_DIRECTORY) + util::widen_string(EMULATED_MODULE_NAME));
 
 		kernel::filesystem->load_at("ntoskrnl.exe", "system32/ntoskrnl.exe");
 		kernel::filesystem->load_at("ntdll.dll", "system32/ntdll.dll");

@@ -245,20 +245,68 @@ void hm::emulator_t::set_block_code_hook_step(const std::shared_ptr<hook_t>& hoo
 
 			block_pending_single_step_exception(step_processor);
 
-			if (!hook->in_aligned_range(*rip, step_context.processor_state.instruction_length))
+			auto active_hook = hook;
+
+			if (!active_hook->in_aligned_range(*rip, step_context.processor_state.instruction_length))
 			{
-				shadow_guest_interrupts(step_processor, false);
+				std::shared_ptr<hook_t> sibling_hook;
+
+				for (const auto& candidate : hooks_)
+				{
+					if (candidate.get() != hook.get()
+						&& (candidate->type == hook_type_t::basic_block || candidate->type == hook_type_t::code)
+						&& candidate->in_aligned_range(*rip, step_context.processor_state.instruction_length))
+					{
+						sibling_hook = candidate;
+						break;
+					}
+				}
+
+				if (!sibling_hook)
+				{
+					shadow_guest_interrupts(step_processor, false);
+
+					protect_block_code_hook_memory_range(hook->start_address, hook->end_address, false);
+
+					return false;
+				}
 
 				protect_block_code_hook_memory_range(hook->start_address, hook->end_address, false);
+				protect_block_code_hook_memory_range(sibling_hook->start_address, sibling_hook->end_address, true);
 
-				return false;
+				active_hook = sibling_hook;
+			}
+
+			const auto virtual_rip = step_context.processor_state.rip;
+			const size_type virt_page_offset = virtual_rip % page_size;
+			const size_type bytes_until_page_end = page_size - virt_page_offset;
+
+			address_type adjacent_physical_page = 0;
+			bool enabled_adjacent = false;
+
+			if (bytes_until_page_end < max_instruction_length)
+			{
+				const auto next_virtual_page = align_down(virtual_rip, page_size) + page_size;
+				const auto next_physical = partition_->translate_virtual_address(step_processor, next_virtual_page);
+
+				if (next_physical)
+				{
+					adjacent_physical_page = align_down(*next_physical, page_size);
+					const auto protection = partition_->query_physical_memory_protection(adjacent_physical_page);
+
+					if (protection && !(*protection & prot_execute))
+					{
+						partition_->protect_physical_memory(adjacent_physical_page, page_size, *protection | prot_execute);
+						enabled_adjacent = true;
+					}
+				}
 			}
 
 			if (step_context.reason == vmexit_reason_t::exception)
 			{
 				const exception_vmexit_t info = step_context.exception;
 
-				invoke_block_code_hook_step_callback(hook, *rip, info.instruction_bytes);
+				invoke_block_code_hook_step_callback(active_hook, *rip, info.instruction_bytes);
 			}
 			else
 			{
@@ -268,7 +316,17 @@ void hm::emulator_t::set_block_code_hook_step(const std::shared_ptr<hook_t>& hoo
 
 				if (step_processor.read_memory(*rip, instruction_bytes))
 				{
-					invoke_block_code_hook_step_callback(hook, *rip, instruction_bytes);
+					invoke_block_code_hook_step_callback(active_hook, *rip, instruction_bytes);
+				}
+			}
+
+			if (enabled_adjacent)
+			{
+				const auto protection = partition_->query_physical_memory_protection(adjacent_physical_page);
+
+				if (protection)
+				{
+					partition_->protect_physical_memory(adjacent_physical_page, page_size, *protection & ~prot_execute);
 				}
 			}
 
@@ -365,6 +423,27 @@ bool hm::emulator_t::memory_process_block_code_hook(guest_virtual_processor_t& p
 	if (info.type == memory_vmexit_t::access::execute && hook->in_aligned_range(*rip, max_instruction_length))
 	{
 		protect_block_code_hook_memory_range(hook->start_address, hook->end_address, true);
+
+		const auto virtual_rip = context.processor_state.rip;
+		const size_type page_offset = virtual_rip % page_size;
+		const size_type bytes_until_page_end = page_size - page_offset;
+
+		if (bytes_until_page_end < max_instruction_length)
+		{
+			const auto next_virtual_page = align_down(virtual_rip, page_size) + page_size;
+			const auto next_physical_page = partition_->translate_virtual_address(processor, next_virtual_page);
+
+			if (next_physical_page)
+			{
+				const auto next_phys_page_aligned = align_down(*next_physical_page, page_size);
+				const auto protection = partition_->query_physical_memory_protection(next_phys_page_aligned);
+
+				if (protection)
+				{
+					partition_->protect_physical_memory(next_phys_page_aligned, page_size, *protection | prot_execute);
+				}
+			}
+		}
 
 		set_block_code_hook_step(hook);
 
