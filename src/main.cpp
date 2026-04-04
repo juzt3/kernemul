@@ -204,8 +204,15 @@ std::int32_t main()
 		kernel::filesystem = std::make_shared<filesystem_t>();
 		kernel::object_manager = std::make_shared<object_manager_t>(emulator);
 
+		kernel::filesystem->load_at("ntoskrnl.exe", "system32/ntoskrnl.exe");
 		kernel::filesystem->load_at("ntdll.dll", "system32/ntdll.dll");
 		kernel::filesystem->load_at("win32k.sys", "system32/win32k.sys");
+
+		kernel::filesystem->create_at("physicaldrive0");
+		kernel::filesystem->create_at("physicaldrive1");
+		kernel::filesystem->create_at("physicaldrive2");
+		kernel::filesystem->create_at("physicaldrive3");
+		kernel::filesystem->create_at("physicaldrive4");
 
 		set_up_stack(*emulator);
 		set_up_user_shared_data(emulator);
@@ -225,7 +232,7 @@ std::int32_t main()
 		
 		kernel::set_up_initial_system_process(emulator);
 
-		constexpr thread_t::id_type current_thread_id = 8;
+		const auto current_thread_id = kernel::object_manager->allocate_id();
 
 		const auto& system_process = kernel::process_entries.front();
 		kernel::current_thread = kernel::create_thread(emulator, current_thread_id, system_process);
@@ -259,6 +266,8 @@ std::int32_t main()
 
 			if (const auto redirected_function = kernel::find_redirected_function(rip))
 			{
+				THREAD_LOG("redirecting function (return address=0x{:X})", return_address);
+
 				bool skip_return = false;
 
 				(*redirected_function)(skip_return);
@@ -289,7 +298,8 @@ std::int32_t main()
 
 			if (!symbol_name.empty())
 			{
-				THREAD_ERR_LOG("unimplemented function '{}' (address=0x{:X}, return address=0x{:X})", symbol_name, rip, return_address);
+				const auto module_name = module ? module->name() : "unknown";
+				THREAD_ERR_LOG("unimplemented function '{}!{}' (address=0x{:X}, return address=0x{:X})", module_name, symbol_name, rip, return_address);
 			}
 			else
 			{
@@ -344,37 +354,14 @@ std::int32_t main()
 
 		error.throw_if("instruction hook attach");
 
-		error = emulator->hook_instruction(x86::insn::rdtsc,
-			[emulator]()
-			{
-				const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
-
-				spdlog::info("rdtsc executed at 0x{:X}", rip);
-
-				return false;
-			},
-			emulator_t::default_start_address,
-			emulator_t::default_end_address
-		).error_or({});
-
-		error.throw_if("instruction hook attach");
-
 		set_up_driver_entry(emulator);
 
 		run_main_module(emulator, entry_point_address);
 
 		const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
 		const auto rax = emulator->read_register<x86::reg::rax, emulator_t::address_type>();
-		const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
-		const auto rdx = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
 
-		std::uint64_t rsp_38 = 0;
-		std::uint64_t rsp_40 = 0;
-		static_cast<void>(emulator->read_virtual_memory(rsp + 0x38, &rsp_38, sizeof(rsp_38)));
-		static_cast<void>(emulator->read_virtual_memory(rsp + 0x40, &rsp_40, sizeof(rsp_40)));
-
-		GLOBAL_LOG("emulation finished at rip=0x{:X}, rax=0x{:X}, rsp=0x{:X}, rdx=0x{:X}, [rsp+0x38]=0x{:X}, [rsp+0x40]=0x{:X}",
-			rip, rax, rsp, rdx, rsp_38, rsp_40);
+		GLOBAL_LOG("emulation finished at rip=0x{:X}, rax=0x{:X}", rip, rax);
 
 		error.throw_if("emulation running");
 	}

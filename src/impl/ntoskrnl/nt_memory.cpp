@@ -366,6 +366,17 @@ void redirect_ntoskrnl_memory_functions(const std::shared_ptr<emulator_t>& emula
 	redirect_function(
 		[emulator]
 		{
+			const auto mdl_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+
+			THREAD_LOG("IoFreeMdl called (mdl=0x{:X})", mdl_address);
+		},
+		mapped_image,
+		"IoFreeMdl"
+	);
+
+	redirect_function(
+		[emulator]
+		{
 			const auto section_out = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
 			const auto desired_access = emulator->read_register<x86::reg::rdx, std::uint32_t>();
 			const auto object_attributes = emulator->read_register<x86::reg::r8, emulator_t::address_type>();

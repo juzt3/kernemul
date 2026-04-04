@@ -182,6 +182,40 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 		"KeSetTimer"
 	);
 
+	redirect_function(
+		[emulator]
+		{
+			const auto timer_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+
+			std::int32_t signal_state = 0;
+			static_cast<void>(emulator->read_virtual_memory(
+				timer_address + offsetof(_KEVENT, Header.SignalState), &signal_state, sizeof(signal_state)));
+
+			THREAD_LOG("KeReadStateTimer called (timer=0x{:X}, signal_state={})", timer_address, signal_state);
+
+			write_return_value(emulator, signal_state != 0 ? 1 : 0);
+		},
+		mapped_image,
+		"KeReadStateTimer"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto mutant_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+
+			std::int32_t signal_state = 0;
+			static_cast<void>(emulator->read_virtual_memory(
+				mutant_address + offsetof(_KEVENT, Header.SignalState), &signal_state, sizeof(signal_state)));
+
+			THREAD_LOG("KeReadStateMutant called (mutant=0x{:X}, signal_state={})", mutant_address, signal_state);
+
+			write_return_value(emulator, static_cast<std::uint64_t>(signal_state));
+		},
+		mapped_image,
+		"KeReadStateMutant"
+	);
+
 	// todo: actually track callback registrations and fire them on relevant events
 	redirect_function(
 		[emulator]
@@ -481,6 +515,38 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 		[emulator]
 		{
 			const auto spin_lock = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+
+			const auto old_irql = get_guest_irql(emulator);
+
+			constexpr std::uint64_t dispatch_level = 2;
+			emulator->write_register<x86::reg::cr8>(dispatch_level);
+
+			THREAD_LOG("ExAcquireSpinLockShared called (spin_lock=0x{:X}, old_irql={})", spin_lock, old_irql);
+
+			write_return_value(emulator, old_irql);
+		},
+		mapped_image,
+		"ExAcquireSpinLockShared"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto spin_lock = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto old_irql = emulator->read_register<x86::reg::rdx, std::uint8_t>();
+
+			THREAD_LOG("ExReleaseSpinLockShared called (spin_lock=0x{:X}, old_irql={})", spin_lock, old_irql);
+
+			emulator->write_register<x86::reg::cr8>(static_cast<std::uint64_t>(old_irql));
+		},
+		mapped_image,
+		"ExReleaseSpinLockShared"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto spin_lock = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
 			const auto new_irql = emulator->read_register<x86::reg::rdx, std::uint8_t>();
 
 			THREAD_LOG("KeReleaseSpinLock called (spin_lock=0x{:X}, new_irql={})", spin_lock, new_irql);
@@ -751,6 +817,24 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 	);
 
 	redirect_function(
+		[emulator]
+		{
+			const auto process_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+
+			emulator_t::address_type unique_process_id = 0;
+			emulator_err_t error = emulator->read_virtual_memory(
+				process_address + offsetof(_EPROCESS, UniqueProcessId), &unique_process_id, sizeof(unique_process_id));
+			error.throw_if("PsGetProcessId: read UniqueProcessId");
+
+			THREAD_LOG("PsGetProcessId called (process=0x{:X}, id=0x{:X})", process_address, unique_process_id);
+
+			write_return_value(emulator, unique_process_id);
+		},
+		mapped_image,
+		"PsGetProcessId"
+	);
+
+	redirect_function(
 		kernel::function_implementation_t([emulator](bool& skip_return)
 		{
 			const auto slist_head = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
@@ -857,6 +941,50 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 		"PsGetProcessImageFileName"
 	);
 
+	const auto read_process_protection = [emulator]() -> _PS_PROTECTION
+	{
+		const auto process_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+
+		_PS_PROTECTION protection;
+		emulator_err_t error = emulator->read_virtual_memory(
+			process_address + offsetof(_EPROCESS, Protection), &protection, sizeof(protection));
+		error.throw_if("read _EPROCESS.Protection");
+
+		return protection;
+	};
+
+	redirect_function(
+		[emulator, read_process_protection]
+		{
+			const auto protection = read_process_protection();
+			const std::uint64_t result = protection.Type != 0;
+
+			THREAD_LOG("PsIsProtectedProcess called (type={}, signer={}, result={})",
+				static_cast<std::uint32_t>(protection.Type),
+				static_cast<std::uint32_t>(protection.Signer), result);
+
+			write_return_value(emulator, result);
+		},
+		mapped_image,
+		"PsIsProtectedProcess"
+	);
+
+	redirect_function(
+		[emulator, read_process_protection]
+		{
+			const auto protection = read_process_protection();
+			const std::uint64_t result = protection.Type == 1;
+
+			THREAD_LOG("PsIsProtectedProcessLight called (type={}, signer={}, result={})",
+				static_cast<std::uint32_t>(protection.Type),
+				static_cast<std::uint32_t>(protection.Signer), result);
+
+			write_return_value(emulator, result);
+		},
+		mapped_image,
+		"PsIsProtectedProcessLight"
+	);
+
 	redirect_function(
 		[emulator]
 		{
@@ -908,8 +1036,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 			error = emulator->read_virtual_memory(rsp + 0x38, &start_context, sizeof(start_context));
 			error.throw_if("PsCreateSystemThread: read StartContext");
 
-			static thread_t::id_type next_thread_id = 100;
-			const thread_t::id_type thread_id = next_thread_id++;
+			const thread_t::id_type thread_id = kernel::object_manager->allocate_id();
 
 			const auto& process = kernel::current_thread->process();
 			auto thread = kernel::create_thread(emulator, thread_id, process);
@@ -1081,6 +1208,9 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 			error.throw_if("IoCreateDevice: write device object");
 
 			error = emulator->write_virtual_memory(device_object_out, &device_address, sizeof(device_address));
+			error.throw_if("IoCreateDevice: write output pointer");
+
+			error = emulator->write_virtual_memory(driver_object + 8, &device_address, sizeof(device_address));
 			error.throw_if("IoCreateDevice: write output pointer");
 
 			THREAD_LOG("IoCreateDevice called (driver=0x{:X}, ext_size=0x{:X}, name='{}', type=0x{:X}, chars=0x{:X}) -> 0x{:X}",

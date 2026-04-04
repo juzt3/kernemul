@@ -4,6 +4,8 @@
 
 #include "../util/logs.hpp"
 
+#include <cassert>
+
 #include <format>
 
 static emulator_t::address_type get_active_process_links_address(const process_t& process)
@@ -46,9 +48,9 @@ void kernel::set_up_initial_system_process(const std::shared_ptr<emulator_t>& em
 		throw std::runtime_error("unable to find ntoskrnl.exe");
 	}
 
-	constexpr process_t::id_type system_process_id = 4;
+	const process_t::id_type system_process_id = object_manager->allocate_id();
+	assert(system_process_id == 4 && "system process must be the first ID allocated");
 
-	// todo: check image file name for system process (id=4)
 	const auto system_process = create_process(emulator, system_process_id, "System", ntoskrnl->base_address());
 
 	if (const auto symbol = ntoskrnl->find_symbol("PsInitialSystemProcess"))

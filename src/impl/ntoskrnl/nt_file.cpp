@@ -308,51 +308,59 @@ void redirect_ntoskrnl_file_functions(const std::shared_ptr<emulator_t>& emulato
 		"NtOpenFile"
 	);
 
+	const auto create_file_handler = [emulator](const std::string_view caller_name)
+	{
+		const auto rcx = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+		const auto rdx = emulator->read_register<x86::reg::rdx, std::uint32_t>();
+		const auto r8 = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
+		const auto r9 = emulator->read_register<x86::reg::r9, emulator_t::address_type>();
+
+		const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
+
+		std::uint64_t allocation_size = 0;
+		emulator_err_t error = emulator->read_virtual_memory(rsp + 0x28, &allocation_size, sizeof(allocation_size));
+		error.throw_if("read allocation size ptr");
+
+		std::uint32_t file_attributes = 0;
+		error = emulator->read_virtual_memory(rsp + 0x30, &file_attributes, sizeof(file_attributes));
+		error.throw_if("read file attributes");
+
+		std::uint32_t share_access = 0;
+		error = emulator->read_virtual_memory(rsp + 0x38, &share_access, sizeof(share_access));
+		error.throw_if("read share access");
+
+		std::uint32_t create_disposition = 0;
+		error = emulator->read_virtual_memory(rsp + 0x40, &create_disposition, sizeof(create_disposition));
+		error.throw_if("read create disposition");
+
+		std::uint32_t create_options = 0;
+		error = emulator->read_virtual_memory(rsp + 0x48, &create_options, sizeof(create_options));
+		error.throw_if("read create options");
+
+		std::uint64_t ea_buffer = 0;
+		error = emulator->read_virtual_memory(rsp + 0x50, &ea_buffer, sizeof(ea_buffer));
+		error.throw_if("read ea buffer");
+
+		std::uint32_t ea_length = 0;
+		error = emulator->read_virtual_memory(rsp + 0x58, &ea_length, sizeof(ea_length));
+		error.throw_if("read ea length");
+
+		THREAD_LOG("{} called (file_handle_out=0x{:X}, desired_access=0x{:X}, object_attributes=0x{:X}, io_status_block=0x{:X}, allocation_size=0x{:X}, file_attributes=0x{:X}, share_access=0x{:X}, create_disposition=0x{:X}, create_options=0x{:X}, ea_buffer=0x{:X}, ea_length=0x{:X})",
+			caller_name, rcx, rdx, r8, r9, allocation_size, file_attributes, share_access, create_disposition, create_options, ea_buffer, ea_length);
+
+		iop_create_file(emulator, rcx, rdx, r8, r9, create_disposition, std::string(caller_name));
+	};
+
 	redirect_function(
-		[emulator]
-		{
-			const auto rcx = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
-			const auto rdx = emulator->read_register<x86::reg::rdx, std::uint32_t>();
-			const auto r8 = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
-			const auto r9 = emulator->read_register<x86::reg::r9, emulator_t::address_type>();
-
-			const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
-
-			std::uint64_t allocation_size = 0;
-			emulator_err_t error = emulator->read_virtual_memory(rsp + 0x28, &allocation_size, sizeof(allocation_size));
-			error.throw_if("read allocation size ptr");
-
-			std::uint32_t file_attributes = 0;
-			error = emulator->read_virtual_memory(rsp + 0x30, &file_attributes, sizeof(file_attributes));
-			error.throw_if("read file attributes");
-
-			std::uint32_t share_access = 0;
-			error = emulator->read_virtual_memory(rsp + 0x38, &share_access, sizeof(share_access));
-			error.throw_if("read share access");
-
-			std::uint32_t create_disposition = 0;
-			error = emulator->read_virtual_memory(rsp + 0x40, &create_disposition, sizeof(create_disposition));
-			error.throw_if("read create disposition");
-
-			std::uint32_t create_options = 0;
-			error = emulator->read_virtual_memory(rsp + 0x48, &create_options, sizeof(create_options));
-			error.throw_if("read create options");
-
-			std::uint64_t ea_buffer = 0;
-			error = emulator->read_virtual_memory(rsp + 0x50, &ea_buffer, sizeof(ea_buffer));
-			error.throw_if("read ea buffer");
-
-			std::uint32_t ea_length = 0;
-			error = emulator->read_virtual_memory(rsp + 0x58, &ea_length, sizeof(ea_length));
-			error.throw_if("read ea length");
-
-			THREAD_LOG("NtCreateFile called (file_handle_out=0x{:X}, desired_access=0x{:X}, object_attributes=0x{:X}, io_status_block=0x{:X}, allocation_size=0x{:X}, file_attributes=0x{:X}, share_access=0x{:X}, create_disposition=0x{:X}, create_options=0x{:X}, ea_buffer=0x{:X}, ea_length=0x{:X})",
-				rcx, rdx, r8, r9, allocation_size, file_attributes, share_access, create_disposition, create_options, ea_buffer, ea_length);
-
-			iop_create_file(emulator, rcx, rdx, r8, r9, create_disposition, "NtCreateFile");
-		},
+		[create_file_handler] { create_file_handler("NtCreateFile"); },
 		mapped_image,
 		"NtCreateFile"
+	);
+
+	redirect_function(
+		[create_file_handler] { create_file_handler("ZwCreateFile"); },
+		mapped_image,
+		"ZwCreateFile"
 	);
 
 	redirect_function(
@@ -781,5 +789,49 @@ void redirect_ntoskrnl_file_functions(const std::shared_ptr<emulator_t>& emulato
 		},
 		mapped_image,
 		"IoQueryFileInformation"
+	);
+
+	const auto device_io_control_handler = [emulator](const std::string_view caller_name)
+	{
+		const auto file_handle = emulator->read_register<x86::reg::rcx, object_manager_t::handle_type>();
+		const auto event = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+		const auto apc_routine = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
+		const auto apc_context = emulator->read_register<x86::reg::r9, emulator_t::address_type>();
+
+		const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
+
+		emulator_t::address_type io_status_block = 0;
+		static_cast<void>(emulator->read_virtual_memory(rsp + 0x28, &io_status_block, sizeof(io_status_block)));
+
+		std::uint32_t io_control_code = 0;
+		static_cast<void>(emulator->read_virtual_memory(rsp + 0x30, &io_control_code, sizeof(io_control_code)));
+
+		emulator_t::address_type input_buffer = 0;
+		static_cast<void>(emulator->read_virtual_memory(rsp + 0x38, &input_buffer, sizeof(input_buffer)));
+
+		std::uint32_t input_buffer_length = 0;
+		static_cast<void>(emulator->read_virtual_memory(rsp + 0x40, &input_buffer_length, sizeof(input_buffer_length)));
+
+		emulator_t::address_type output_buffer = 0;
+		static_cast<void>(emulator->read_virtual_memory(rsp + 0x48, &output_buffer, sizeof(output_buffer)));
+
+		std::uint32_t output_buffer_length = 0;
+		static_cast<void>(emulator->read_virtual_memory(rsp + 0x50, &output_buffer_length, sizeof(output_buffer_length)));
+
+		THREAD_LOG("{} called (handle=0x{:X}, ioctl=0x{:X}, input=0x{:X}, input_len=0x{:X}, output=0x{:X}, output_len=0x{:X})",
+			caller_name, file_handle, io_control_code, input_buffer, input_buffer_length, output_buffer, output_buffer_length);
+
+		write_io_status(emulator, io_status_block, 0, 0);
+		write_nt_success(emulator);
+	};
+
+	redirect_function(
+		[device_io_control_handler] { device_io_control_handler("NtDeviceIoControlFile"); },
+		mapped_image, "NtDeviceIoControlFile"
+	);
+
+	redirect_function(
+		[device_io_control_handler] { device_io_control_handler("ZwDeviceIoControlFile"); },
+		mapped_image, "ZwDeviceIoControlFile"
 	);
 }

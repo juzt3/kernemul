@@ -242,4 +242,42 @@ void redirect_cng_bcrypt_functions(const std::shared_ptr<emulator_t>& emulator,
 		mapped_image,
 		"BCryptFinishHash"
 	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto hash_handle = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+
+			THREAD_LOG("BCryptDestroyHash called (handle=0x{:X})", hash_handle);
+
+			const auto status = BCryptDestroyHash(reinterpret_cast<BCRYPT_HASH_HANDLE>(hash_handle));
+
+			THREAD_LOG("BCryptDestroyHash: status=0x{:X}", static_cast<std::uint32_t>(status));
+
+			emulator->write_register<x86::reg::rax>(static_cast<std::uint64_t>(status));
+		},
+		mapped_image,
+		"BCryptDestroyHash"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto algorithm_handle = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto flags = emulator->read_register<x86::reg::rdx, std::uint32_t>();
+
+			THREAD_LOG("BCryptCloseAlgorithmProvider called (handle=0x{:X}, flags=0x{:X})", algorithm_handle, flags);
+
+			const auto status = BCryptCloseAlgorithmProvider(
+				reinterpret_cast<BCRYPT_ALG_HANDLE>(algorithm_handle),
+				flags
+			);
+
+			THREAD_LOG("BCryptCloseAlgorithmProvider: status=0x{:X}", static_cast<std::uint32_t>(status));
+
+			emulator->write_register<x86::reg::rax>(static_cast<std::uint64_t>(status));
+		},
+		mapped_image,
+		"BCryptCloseAlgorithmProvider"
+	);
 }

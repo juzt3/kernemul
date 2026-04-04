@@ -34,6 +34,10 @@ struct thread_object_t final : object_t
 
 struct registry_key_object_t final : object_t
 {
+	std::wstring path;
+	void* host_key = nullptr;
+
+	~registry_key_object_t() override;
 };
 
 struct callback_object_t final : object_t
@@ -139,6 +143,8 @@ public:
 	void reference_object(emulator_t::address_type body_address);
 	void dereference_object(emulator_t::address_type body_address);
 
+	[[nodiscard]] std::uint64_t allocate_id();
+
 private:
 	[[nodiscard]] handle_type allocate_handle();
 
@@ -146,4 +152,5 @@ private:
 	std::unordered_map<emulator_t::address_type, object_entry_t> objects_;
 	std::unordered_map<handle_type, handle_entry_t> handles_;
 	handle_type next_handle_ = 4;
+	std::uint64_t next_id_ = 4;
 };
