@@ -380,7 +380,7 @@ void redirect_ntoskrnl_registry_functions(const std::shared_ptr<emulator_t>& emu
 		mapped_image, "ZwDeleteKey"
 	);
 
-	// ZwFlushKey — no-op for in-memory registry
+	// ZwFlushKey - no-op for in-memory registry
 	redirect_function(
 		[emulator]
 		{
@@ -768,7 +768,7 @@ void redirect_ntoskrnl_registry_functions(const std::shared_ptr<emulator_t>& emu
 		mapped_image, "ZwQueryKey"
 	);
 
-	// CmRegisterCallbackEx — stub
+	// CmRegisterCallbackEx - stub
 	redirect_function(
 		[emulator]
 		{

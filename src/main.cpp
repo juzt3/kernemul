@@ -134,68 +134,6 @@ static void set_up_interrupt_flag(const std::shared_ptr<emulator_t>& emulator)
 	emulator->write_register<x86::reg::rflags>(flags.flags);
 }
 
-static void run_main_module(const std::shared_ptr<emulator_t>& emulator, const emulator_t::address_type entry_point_address)
-{
-	std::atomic_bool ended = false;
-
-	auto thread_scheduler = std::thread(
-		[&ended, emulator]()
-		{
-			while (!ended)
-			{
-				if (!kernel::pending_thread_switch)
-				{
-					kernel::switch_thread(emulator);
-				}
-
-				std::this_thread::sleep_for(std::chrono::milliseconds(15));
-			}
-		}
-	);
-
-	emulator->write_register<x86::reg::rip>(entry_point_address);
-
-	kernel::current_thread->save_state();
-
-	std::shared_ptr<thread_t> last_thread;
-
-	do
-	{
-		if (kernel::pending_thread_switch)
-		{
-			const auto next_thread = kernel::pending_threads.front();
-
-			kernel::pending_threads.pop();
-
-			if (!kernel::delete_current_thread)
-			{
-				kernel::pending_threads.push(kernel::current_thread);
-			}
-
-			kernel::current_thread = next_thread;
-
-			kernel::delete_current_thread = false;
-		}
-
-		GLOBAL_LOG("running thread {}", kernel::current_thread->id());
-
-		if (last_thread)
-		{
-			last_thread->save_state();
-		}
-
-		last_thread = kernel::current_thread;
-
-		kernel::pending_thread_switch = false;
-		kernel::current_thread->start();
-
-	} while (kernel::pending_thread_switch);
-
-	ended = true;
-
-	thread_scheduler.join();
-}
-
 std::int32_t main()
 {
 	try
@@ -365,7 +303,7 @@ std::int32_t main()
 
 		set_up_driver_entry(emulator);
 
-		run_main_module(emulator, entry_point_address);
+		kernel::run_all_threads(emulator, entry_point_address);
 
 		const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
 		const auto rax = emulator->read_register<x86::reg::rax, emulator_t::address_type>();

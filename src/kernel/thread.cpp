@@ -5,6 +5,7 @@
 #include "../util/logs.hpp"
 
 #include <format>
+#include <thread>
 
 std::shared_ptr<thread_t> kernel::create_thread(const std::shared_ptr<emulator_t>& emulator,
 	const thread_t::id_type thread_id, const std::shared_ptr<process_t>& process)
@@ -34,28 +35,8 @@ void kernel::switch_thread(const std::shared_ptr<emulator_t>& emulator, const bo
 		current_thread ? current_thread->id() : 0,
 		pending_threads.size());
 
-	if (pending_thread_switch || pending_threads.empty() || (!delete_current && !force && !current_thread->is_expired()))
-	{
-		return;
-	}
-
-	const auto queue_size = pending_threads.size();
-	bool found_runnable = false;
-
-	for (std::size_t i = 0; i < queue_size; ++i)
-	{
-		if (!pending_threads.front()->is_sleeping())
-		{
-			found_runnable = true;
-			break;
-		}
-
-		auto sleeping_thread = pending_threads.front();
-		pending_threads.pop();
-		pending_threads.push(std::move(sleeping_thread));
-	}
-
-	if (!found_runnable)
+	if (pending_thread_switch ||
+		(!force && (pending_threads.empty() || (!delete_current && !current_thread->is_expired()))))
 	{
 		return;
 	}
@@ -89,7 +70,12 @@ bool thread_t::is_sleeping() const
 	return sleep_until_ > time_point_now();
 }
 
-void thread_t::start()
+thread_t::time_point_type thread_t::sleep_until() const
+{
+	return sleep_until_;
+}
+
+bool thread_t::start()
 {
 	update_last_time_ran();
 
@@ -97,7 +83,7 @@ void thread_t::start()
 
 	const auto rip = emulator_->read_register<x86::reg::rip, emulator_t::address_type>();
 
-	(void)emulator_->run_at(rip, emulator_t::thread_return_address);
+	return static_cast<bool>(emulator_->run_at(rip, emulator_t::thread_return_address)) == false;
 }
 
 void thread_t::stop()
@@ -172,4 +158,145 @@ void thread_t::load_state()
 	LOAD_XMM(4);  LOAD_XMM(5);  LOAD_XMM(6);  LOAD_XMM(7);
 	LOAD_XMM(8);  LOAD_XMM(9);  LOAD_XMM(10); LOAD_XMM(11);
 	LOAD_XMM(12); LOAD_XMM(13); LOAD_XMM(14); LOAD_XMM(15);
+}
+
+static bool find_next_runnable_thread()
+{
+	const auto queue_size = kernel::pending_threads.size();
+
+	for (std::size_t i = 0; i < queue_size; ++i)
+	{
+		if (!kernel::pending_threads.front()->is_sleeping())
+		{
+			return true;
+		}
+
+		auto sleeping = kernel::pending_threads.front();
+		kernel::pending_threads.pop();
+		kernel::pending_threads.push(std::move(sleeping));
+	}
+
+	return false;
+}
+
+static bool wait_for_runnable_thread()
+{
+	while (true)
+	{
+		if (find_next_runnable_thread())
+		{
+			return false;
+		}
+
+		// all queued threads are asleep - if current thread is still runnable, just re-enter it
+		if (!kernel::delete_current_thread && !kernel::current_thread->is_sleeping())
+		{
+			GLOBAL_LOG("all queued threads sleeping, re-entering current thread {}", kernel::current_thread->id());
+			return true;
+		}
+
+		// all threads asleep - sleep host until the earliest one wakes
+		auto earliest = thread_t::time_point_type::max();
+
+		// include current thread's wake time if it's sleeping and not being deleted
+		if (!kernel::delete_current_thread && kernel::current_thread->is_sleeping())
+		{
+			earliest = kernel::current_thread->sleep_until();
+		}
+
+		auto temp_queue = kernel::pending_threads;
+		while (!temp_queue.empty())
+		{
+			const auto& t = temp_queue.front();
+			if (t->sleep_until() < earliest)
+			{
+				earliest = t->sleep_until();
+			}
+			temp_queue.pop();
+		}
+
+		const auto now = std::chrono::steady_clock::now();
+
+		if (earliest > now)
+		{
+			GLOBAL_LOG("all threads sleeping, host sleeping for {}ms",
+				std::chrono::duration_cast<std::chrono::milliseconds>(earliest - now).count());
+			std::this_thread::sleep_until(earliest);
+		}
+	}
+}
+
+static void perform_thread_switch()
+{
+	const auto next_thread = kernel::pending_threads.front();
+	kernel::pending_threads.pop();
+
+	if (!kernel::delete_current_thread)
+	{
+		kernel::pending_threads.push(kernel::current_thread);
+	}
+
+	kernel::current_thread = next_thread;
+	kernel::delete_current_thread = false;
+}
+
+void kernel::run_all_threads(const std::shared_ptr<emulator_t>& emulator, const emulator_t::address_type entry_point_address)
+{
+	std::atomic_bool ended = false;
+
+	auto thread_scheduler = std::thread(
+		[&ended, emulator]()
+		{
+			while (!ended)
+			{
+				if (!pending_thread_switch)
+				{
+					switch_thread(emulator);
+				}
+
+				std::this_thread::sleep_for(std::chrono::milliseconds(15));
+			}
+		}
+	);
+
+	emulator->write_register<x86::reg::rip>(entry_point_address);
+
+	current_thread->save_state();
+
+	std::shared_ptr<thread_t> last_thread;
+
+	do
+	{
+		if (pending_thread_switch)
+		{
+			if (!wait_for_runnable_thread())
+			{
+				perform_thread_switch();
+			}
+		}
+
+		GLOBAL_LOG("running thread {}", current_thread->id());
+
+		if (last_thread)
+		{
+			last_thread->save_state();
+		}
+
+		last_thread = current_thread;
+
+		pending_thread_switch = false;
+
+		if (const bool thread_finished = current_thread->start())
+		{
+			THREAD_LOG("thread returned to default return address and is now finished");
+
+			delete_current_thread = true;
+			pending_thread_switch = true;
+		}
+
+	} while (pending_thread_switch);
+
+	ended = true;
+
+	thread_scheduler.join();
 }

@@ -99,8 +99,9 @@ public:
 	void sleep_for(std::chrono::milliseconds duration);
 
 	[[nodiscard]] bool is_sleeping() const;
+	[[nodiscard]] time_point_type sleep_until() const;
 
-	void start();
+	bool start();
 	void stop();
 
 	[[nodiscard]] bool is_expired() const;
@@ -130,4 +131,6 @@ namespace kernel
 		thread_t::id_type thread_id, const std::shared_ptr<process_t>& process);
 
 	void switch_thread(const std::shared_ptr<emulator_t>& emulator, bool delete_current = false, bool force = false);
+
+	void run_all_threads(const std::shared_ptr<emulator_t>& emulator, emulator_t::address_type entry_point_address);
 }
