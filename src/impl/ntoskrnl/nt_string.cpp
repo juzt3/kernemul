@@ -363,6 +363,84 @@ void redirect_ntoskrnl_string_functions(const std::shared_ptr<emulator_t>& emula
 	redirect_function(
 		[emulator]
 		{
+			const auto str1_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto str2_address = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+			auto max_count = emulator->read_register<x86::reg::r8, std::uint64_t>();
+
+			if (!max_count)
+			{
+				write_return_value(emulator, 0);
+				return;
+			}
+
+			const auto str1 = kernel::read_guest_string(*emulator, str1_address);
+			const auto str2 = kernel::read_guest_string(*emulator, str2_address);
+
+			const auto len1 = str1.size();
+			const auto len2 = str2.size();
+			const auto limit = static_cast<std::size_t>(max_count);
+
+			std::int32_t result = 0;
+
+			for (std::size_t i = 0; i < limit; ++i)
+			{
+				const auto c1 = i < len1 ? static_cast<unsigned char>(str1[i]) : 0u;
+				const auto c2 = i < len2 ? static_cast<unsigned char>(str2[i]) : 0u;
+
+				if (c1 < c2)
+				{
+					result = -1;
+					break;
+				}
+
+				if (c1 > c2)
+				{
+					result = 1;
+					break;
+				}
+
+				if (c1 == 0)
+					break;
+			}
+
+			THREAD_LOG("strncmp called (str1='{}', str2='{}', max_count={}, result={})",
+				str1, str2, max_count, result);
+
+			write_return_value(emulator, static_cast<std::uint32_t>(result));
+		},
+		mapped_image,
+		"strncmp"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto str1_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto str2_address = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+
+			const auto str1 = kernel::read_guest_string(*emulator, str1_address);
+			const auto str2 = kernel::read_guest_string(*emulator, str2_address);
+
+			const char* result = std::strstr(str1.c_str(), str2.c_str());
+
+			emulator_t::address_type guest_result = 0;
+
+			if (result)
+			{
+				guest_result = str1_address + static_cast<std::uint64_t>(result - str1.c_str());
+			}
+
+			THREAD_LOG("strstr called (str1='{}', str2='{}', found={})", str1, str2, guest_result != 0);
+
+			write_return_value(emulator, guest_result);
+		},
+		mapped_image,
+		"strstr"
+	);
+
+	redirect_function(
+		[emulator]
+		{
 			const auto dst_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
 			const auto size_in_words = emulator->read_register<x86::reg::rdx, std::uint64_t>();
 			const auto src_address = emulator->read_register<x86::reg::r8, emulator_t::address_type>();

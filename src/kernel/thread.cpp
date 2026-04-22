@@ -183,6 +183,11 @@ static bool wait_for_runnable_thread()
 {
 	while (true)
 	{
+		if (kernel::pending_threads.empty() && kernel::delete_current_thread)
+		{
+			return false;
+		}
+
 		if (find_next_runnable_thread())
 		{
 			return false;
@@ -271,6 +276,11 @@ void kernel::run_all_threads(const std::shared_ptr<emulator_t>& emulator, const 
 		{
 			if (!wait_for_runnable_thread())
 			{
+				if (pending_threads.empty() && delete_current_thread)
+				{
+					break;
+				}
+
 				perform_thread_switch();
 			}
 		}

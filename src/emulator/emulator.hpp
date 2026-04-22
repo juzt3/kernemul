@@ -249,6 +249,7 @@ public:
 	using size_type = std::size_t;
 	using protection_type = std::int32_t;
 	using hook_type = std::shared_ptr<emulator_hook_t>;
+	using msr_value_type = std::uint64_t;
 
 	static constexpr address_type default_start_address = 0;
 	static constexpr address_type default_end_address = std::numeric_limits<address_type>::max();
@@ -287,6 +288,8 @@ public:
 
 	std::optional<address_type> translate_virtual_address(address_type address);
 
+	bool is_physical_address_valid(address_type physical_address) const;
+
 	[[nodiscard]] std::vector<physical_memory_range_t> physical_memory_ranges() const;
 
 	[[nodiscard]] std::expected<address_type, emulator_err_t> heap_allocate(
@@ -299,8 +302,6 @@ public:
 	[[nodiscard]] virtual emulator_err_t write_gdt(address_type base, size_type limit) = 0;
 	[[nodiscard]] virtual emulator_err_t write_tr(uint16_t selector, address_type base, size_type limit, uint16_t attributes) = 0;
 	[[nodiscard]] virtual emulator_err_t write_segment(x86::segment_reg seg, uint16_t selector, address_type base, uint32_t limit, uint16_t attributes) = 0;
-
-	using msr_value_type = std::uint64_t;
 
 	[[nodiscard]] virtual std::expected<msr_value_type, emulator_err_t> read_msr(x86::msr msr) const = 0;
 	[[nodiscard]] virtual emulator_err_t write_msr(x86::msr msr, msr_value_type value) = 0;

@@ -83,6 +83,12 @@ void redirect_ntoskrnl_memory_functions(const std::shared_ptr<emulator_t>& emula
 	);
 
 	redirect_function(
+		[pool_allocate_handler] { pool_allocate_handler("ExAllocatePool2"); },
+		mapped_image,
+		"ExAllocatePool2"
+	);
+
+	redirect_function(
 		[pool_allocate_handler, emulator]
 		{
 			constexpr std::uint64_t default_tag = 0x656E6F4E;
@@ -323,6 +329,72 @@ void redirect_ntoskrnl_memory_functions(const std::shared_ptr<emulator_t>& emula
 		},
 		mapped_image,
 		"MmGetPhysicalAddress"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto physical_address = emulator->read_register<x86::reg::rcx, std::uint64_t>();
+			const auto number_of_bytes = emulator->read_register<x86::reg::rdx, std::uint64_t>();
+			const auto cache_type = emulator->read_register<x86::reg::r8, std::uint32_t>() & 0xFF;
+
+			if (!number_of_bytes || cache_type >= 6)
+			{
+				THREAD_WARN_LOG("MmMapIoSpace called with invalid params (phys=0x{:X}, size=0x{:X}, cache_type={})",
+					physical_address, number_of_bytes, cache_type);
+				write_return_value(emulator, 0);
+				return;
+			}
+
+			constexpr std::uint64_t page_size = 0x1000;
+			const auto aligned_physical = physical_address & ~(page_size - 1);
+			const auto end_address = physical_address + number_of_bytes;
+			const auto aligned_size = ((end_address + page_size - 1) & ~(page_size - 1)) - aligned_physical;
+
+			for (std::uint64_t offset = 0; offset < aligned_size; offset += page_size)
+			{
+				if (!emulator->is_physical_address_valid(aligned_physical + offset))
+				{
+					THREAD_WARN_LOG("MmMapIoSpace called - physical address 0x{:X} not valid (phys=0x{:X}, size=0x{:X})",
+						aligned_physical + offset, physical_address, number_of_bytes);
+					write_return_value(emulator, 0);
+					return;
+				}
+			}
+
+			const auto allocation = emulator->heap_allocate(aligned_size, prot_read_write, true);
+			emulator_err_t error = allocation.error_or({});
+			error.throw_if("MmMapIoSpace: allocate virtual range");
+
+			const auto virtual_base = *allocation;
+
+			for (std::uint64_t offset = 0; offset < aligned_size; offset += page_size)
+			{
+				error = emulator->map_virtual_page(virtual_base + offset, aligned_physical + offset);
+				error.throw_if("MmMapIoSpace: map virtual page");
+			}
+
+			const auto result = virtual_base + (physical_address - aligned_physical);
+
+			THREAD_LOG("MmMapIoSpace called (phys=0x{:X}, size=0x{:X}, cache_type={}) -> 0x{:X}",
+				physical_address, number_of_bytes, cache_type, result);
+
+			write_return_value(emulator, result);
+		},
+		mapped_image,
+		"MmMapIoSpace"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto base_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto number_of_bytes = emulator->read_register<x86::reg::rdx, std::uint64_t>();
+
+			THREAD_LOG("MmUnmapIoSpace called (base address=0x{:X}, size=0x{:X})", base_address, number_of_bytes);
+		},
+		mapped_image,
+		"MmUnmapIoSpace"
 	);
 
 	redirect_function(

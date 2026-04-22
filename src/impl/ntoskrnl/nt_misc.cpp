@@ -1,4 +1,5 @@
 #include "nt_helpers.hpp"
+#include "../../kernel/thread.hpp"
 #include "../../util/util.hpp"
 #include "../../kernel/exception.hpp"
 
@@ -533,6 +534,24 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 		[emulator]
 		{
 			const auto spin_lock = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+
+			const auto old_irql = get_guest_irql(emulator);
+
+			constexpr std::uint64_t dispatch_level = 2;
+			emulator->write_register<x86::reg::cr8>(dispatch_level);
+
+			THREAD_LOG("ExAcquireSpinLockExclusive called (spin_lock=0x{:X}, old_irql={})", spin_lock, old_irql);
+
+			write_return_value(emulator, old_irql);
+		},
+		mapped_image,
+		"ExAcquireSpinLockExclusive"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto spin_lock = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
 			const auto old_irql = emulator->read_register<x86::reg::rdx, std::uint8_t>();
 
 			THREAD_LOG("ExReleaseSpinLockShared called (spin_lock=0x{:X}, old_irql={})", spin_lock, old_irql);
@@ -541,6 +560,20 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 		},
 		mapped_image,
 		"ExReleaseSpinLockShared"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto spin_lock = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto old_irql = emulator->read_register<x86::reg::rdx, std::uint8_t>();
+
+			THREAD_LOG("ExReleaseSpinLockExclusive called (spin_lock=0x{:X}, old_irql={})", spin_lock, old_irql);
+
+			emulator->write_register<x86::reg::cr8>(static_cast<std::uint64_t>(old_irql));
+		},
+		mapped_image,
+		"ExReleaseSpinLockExclusive"
 	);
 
 	redirect_function(
@@ -1570,5 +1603,185 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 		},
 		mapped_image,
 		"KeWaitForMultipleObjects"
+	);
+
+	const auto nt_build_number_addr = mapped_image.find_symbol("NtBuildNumber");
+	const auto cm_csd_version_addr = mapped_image.find_symbol("CmNtCSDVersion");
+	const auto init_phase_addr = mapped_image.find_symbol("InitializationPhase");
+
+	redirect_function(
+		[emulator, nt_build_number_addr, cm_csd_version_addr, init_phase_addr]
+		{
+			const auto version_info_addr = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+
+			std::uint32_t info_size = 0;
+			emulator->read_virtual_memory(version_info_addr, &info_size, sizeof(info_size))
+				.throw_if("RtlGetVersion: read dwOSVersionInfoSize");
+
+			// read NtBuildNumber from ntoskrnl symbol
+			std::uint32_t nt_build_number = 0;
+			if (nt_build_number_addr)
+			{
+				emulator->read_virtual_memory(*nt_build_number_addr, &nt_build_number, sizeof(nt_build_number))
+					.throw_if("RtlGetVersion: read NtBuildNumber");
+			}
+
+			// check if extended structure (OSVERSIONINFOEXW = 284, or extended variant = 292)
+			const bool is_extended = ((info_size - sizeof(OSVERSIONINFOEXW)) & 0xFFFFFFF7) == 0;
+
+			if (is_extended)
+			{
+				OSVERSIONINFOEXW info = { };
+				info.dwOSVersionInfoSize = info_size;
+				info.dwMajorVersion = 10; // hardcoded in real ntoskrnl
+				info.dwMinorVersion = 0;
+				info.dwBuildNumber = nt_build_number & 0xFFFF;
+				info.dwPlatformId = VER_PLATFORM_WIN32_NT;
+
+				std::uint32_t cm_csd_version = 0;
+				if (cm_csd_version_addr)
+				{
+					emulator->read_virtual_memory(*cm_csd_version_addr, &cm_csd_version, sizeof(cm_csd_version))
+						.throw_if("RtlGetVersion: read CmNtCSDVersion");
+				}
+
+				info.wServicePackMajor = static_cast<WORD>((cm_csd_version >> 8) & 0xFF);
+				info.wServicePackMinor = static_cast<WORD>(cm_csd_version & 0xFF);
+
+				std::uint32_t init_phase = 0;
+				if (init_phase_addr)
+				{
+					emulator->read_virtual_memory(*init_phase_addr, &init_phase, sizeof(init_phase))
+						.throw_if("RtlGetVersion: read InitializationPhase");
+				}
+
+				if (init_phase != 0)
+				{
+					constexpr emulator_t::address_type kuser_shared_data = 0xFFFFF78000000000;
+
+					_KUSER_SHARED_DATA shared_data = { };
+					emulator->read_virtual_memory(kuser_shared_data, &shared_data, sizeof(shared_data))
+						.throw_if("RtlGetVersion: read KUSER_SHARED_DATA");
+
+					if (shared_data.ProductTypeIsValid)
+					{
+						info.wProductType = static_cast<BYTE>(shared_data.NtProductType);
+					}
+
+					info.wSuiteMask = static_cast<WORD>(shared_data.SuiteMask);
+				}
+
+				emulator->write_virtual_memory(version_info_addr, &info, sizeof(info))
+					.throw_if("RtlGetVersion: write OSVERSIONINFOEXW");
+
+				THREAD_LOG("RtlGetVersion called (OSVERSIONINFOEXW, version={}.{}.{}, sp={}.{}, product_type={}, suite_mask=0x{:X})",
+					info.dwMajorVersion, info.dwMinorVersion, info.dwBuildNumber,
+					info.wServicePackMajor, info.wServicePackMinor, info.wProductType, info.wSuiteMask);
+			}
+			else
+			{
+				OSVERSIONINFOW info = { };
+				info.dwOSVersionInfoSize = info_size;
+				info.dwMajorVersion = 10;
+				info.dwMinorVersion = 0;
+				info.dwBuildNumber = nt_build_number & 0xFFFF;
+				info.dwPlatformId = VER_PLATFORM_WIN32_NT;
+
+				emulator->write_virtual_memory(version_info_addr, &info, sizeof(info))
+					.throw_if("RtlGetVersion: write OSVERSIONINFOW");
+
+				THREAD_LOG("RtlGetVersion called (OSVERSIONINFOW, version={}.{}.{})",
+					info.dwMajorVersion, info.dwMinorVersion, info.dwBuildNumber);
+			}
+
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"RtlGetVersion"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto context_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
+
+			CONTEXT ctx = {};
+			ctx.ContextFlags = 0x10000F;
+
+			ctx.Rax = emulator->read_register<x86::reg::rax, std::uint64_t>();
+			ctx.Rcx = context_address;
+			ctx.Rdx = emulator->read_register<x86::reg::rdx, std::uint64_t>();
+			ctx.Rbx = emulator->read_register<x86::reg::rbx, std::uint64_t>();
+			ctx.Rsp = rsp + 8;
+			ctx.Rbp = emulator->read_register<x86::reg::rbp, std::uint64_t>();
+			ctx.Rsi = emulator->read_register<x86::reg::rsi, std::uint64_t>();
+			ctx.Rdi = emulator->read_register<x86::reg::rdi, std::uint64_t>();
+			ctx.R8 = emulator->read_register<x86::reg::r8, std::uint64_t>();
+			ctx.R9 = emulator->read_register<x86::reg::r9, std::uint64_t>();
+			ctx.R10 = emulator->read_register<x86::reg::r10, std::uint64_t>();
+			ctx.R11 = emulator->read_register<x86::reg::r11, std::uint64_t>();
+			ctx.R12 = emulator->read_register<x86::reg::r12, std::uint64_t>();
+			ctx.R13 = emulator->read_register<x86::reg::r13, std::uint64_t>();
+			ctx.R14 = emulator->read_register<x86::reg::r14, std::uint64_t>();
+			ctx.R15 = emulator->read_register<x86::reg::r15, std::uint64_t>();
+
+			std::uint64_t return_address = 0;
+			static_cast<void>(emulator->read_virtual_memory(rsp, &return_address, sizeof(return_address)));
+			ctx.Rip = return_address;
+
+			ctx.EFlags = emulator->read_register<x86::reg::rflags, std::uint32_t>();
+
+			ctx.SegCs = 0x10;
+			ctx.SegDs = 0x18;
+			ctx.SegEs = 0x18;
+			ctx.SegSs = 0x18;
+			ctx.SegFs = 0x18;
+			ctx.SegGs = 0x18;
+
+			ctx.MxCsr = 0x1F80;
+			ctx.FltSave.MxCsr = 0x1F80;
+
+			const auto xmm0 = emulator->read_register<x86::reg::xmm0, xmm_state_register_t>();
+			const auto xmm1 = emulator->read_register<x86::reg::xmm1, xmm_state_register_t>();
+			const auto xmm2 = emulator->read_register<x86::reg::xmm2, xmm_state_register_t>();
+			const auto xmm3 = emulator->read_register<x86::reg::xmm3, xmm_state_register_t>();
+			const auto xmm4 = emulator->read_register<x86::reg::xmm4, xmm_state_register_t>();
+			const auto xmm5 = emulator->read_register<x86::reg::xmm5, xmm_state_register_t>();
+			const auto xmm6 = emulator->read_register<x86::reg::xmm6, xmm_state_register_t>();
+			const auto xmm7 = emulator->read_register<x86::reg::xmm7, xmm_state_register_t>();
+			const auto xmm8 = emulator->read_register<x86::reg::xmm8, xmm_state_register_t>();
+			const auto xmm9 = emulator->read_register<x86::reg::xmm9, xmm_state_register_t>();
+			const auto xmm10 = emulator->read_register<x86::reg::xmm10, xmm_state_register_t>();
+			const auto xmm11 = emulator->read_register<x86::reg::xmm11, xmm_state_register_t>();
+			const auto xmm12 = emulator->read_register<x86::reg::xmm12, xmm_state_register_t>();
+			const auto xmm13 = emulator->read_register<x86::reg::xmm13, xmm_state_register_t>();
+			const auto xmm14 = emulator->read_register<x86::reg::xmm14, xmm_state_register_t>();
+			const auto xmm15 = emulator->read_register<x86::reg::xmm15, xmm_state_register_t>();
+
+			std::memcpy(&ctx.FltSave.XmmRegisters[0], &xmm0, sizeof(xmm_state_register_t));
+			std::memcpy(&ctx.FltSave.XmmRegisters[1], &xmm1, sizeof(xmm_state_register_t));
+			std::memcpy(&ctx.FltSave.XmmRegisters[2], &xmm2, sizeof(xmm_state_register_t));
+			std::memcpy(&ctx.FltSave.XmmRegisters[3], &xmm3, sizeof(xmm_state_register_t));
+			std::memcpy(&ctx.FltSave.XmmRegisters[4], &xmm4, sizeof(xmm_state_register_t));
+			std::memcpy(&ctx.FltSave.XmmRegisters[5], &xmm5, sizeof(xmm_state_register_t));
+			std::memcpy(&ctx.FltSave.XmmRegisters[6], &xmm6, sizeof(xmm_state_register_t));
+			std::memcpy(&ctx.FltSave.XmmRegisters[7], &xmm7, sizeof(xmm_state_register_t));
+			std::memcpy(&ctx.FltSave.XmmRegisters[8], &xmm8, sizeof(xmm_state_register_t));
+			std::memcpy(&ctx.FltSave.XmmRegisters[9], &xmm9, sizeof(xmm_state_register_t));
+			std::memcpy(&ctx.FltSave.XmmRegisters[10], &xmm10, sizeof(xmm_state_register_t));
+			std::memcpy(&ctx.FltSave.XmmRegisters[11], &xmm11, sizeof(xmm_state_register_t));
+			std::memcpy(&ctx.FltSave.XmmRegisters[12], &xmm12, sizeof(xmm_state_register_t));
+			std::memcpy(&ctx.FltSave.XmmRegisters[13], &xmm13, sizeof(xmm_state_register_t));
+			std::memcpy(&ctx.FltSave.XmmRegisters[14], &xmm14, sizeof(xmm_state_register_t));
+			std::memcpy(&ctx.FltSave.XmmRegisters[15], &xmm15, sizeof(xmm_state_register_t));
+
+			static_cast<void>(emulator->write_virtual_memory(context_address, &ctx, sizeof(ctx)));
+
+			THREAD_LOG("RtlCaptureContext called (context=0x{:X}, rip=0x{:X}, rsp=0x{:X})",
+				context_address, ctx.Rip, ctx.Rsp);
+		},
+		mapped_image,
+		"RtlCaptureContext"
 	);
 }

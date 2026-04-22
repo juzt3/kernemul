@@ -187,4 +187,28 @@ void redirect_ntoskrnl_time_functions(const std::shared_ptr<emulator_t>& emulato
 		mapped_image,
 		"RtlTimeToTimeFields"
 	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto frequency_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+
+			static std::uint64_t counter = 0;
+			constexpr std::uint64_t frequency = 10000000;
+
+			counter += 100000;
+
+			if (frequency_address)
+			{
+				static_cast<void>(emulator->write_virtual_memory(
+					frequency_address, &frequency, sizeof(frequency)));
+			}
+
+			THREAD_LOG("KeQueryPerformanceCounter called (counter=0x{:X})", counter);
+
+			write_return_value(emulator, counter);
+		},
+		mapped_image,
+		"KeQueryPerformanceCounter"
+	);
 }

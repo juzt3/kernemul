@@ -180,6 +180,21 @@ std::optional<emulator_t::address_type> emulator_t::translate_virtual_address(co
 	return mapping.physical_address + virtual_address.page_offset;
 }
 
+bool emulator_t::is_physical_address_valid(const address_type physical_address) const
+{
+	const address_type aligned_physical = align_down(physical_address, page_size);
+
+	for (const auto& mapping : virtual_page_mappings_ | std::views::values)
+	{
+		if (mapping.physical_address == aligned_physical)
+		{
+			return true;
+		}
+	}
+
+	return false;
+}
+
 std::vector<physical_memory_range_t> emulator_t::physical_memory_ranges() const
 {
 	// todo: include page table entry allocations in here

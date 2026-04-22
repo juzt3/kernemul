@@ -3,6 +3,7 @@
 #include "../image/pdb/pdb_file.hpp"
 #include "../impl/ci/ci_helpers.hpp"
 #include "../impl/cng/cng_helpers.hpp"
+#include "../impl/fltmgr/flt_helpers.hpp"
 #include "../impl/ntoskrnl/nt_crashdump.hpp"
 #include "../impl/ntoskrnl/nt_debugger.hpp"
 #include "../impl/ntoskrnl/nt_helpers.hpp"
@@ -146,7 +147,7 @@ static void monitor_data_sections(const std::shared_ptr<emulator_t>& emulator,
 
 	for (const auto& section : pe_image->sections())
 	{
-		if (section.characteristics.mem_execute)
+		if (section.characteristics.mem_execute || section.characteristics.mem_discardable)
 		{
 			continue;
 		}
@@ -166,10 +167,14 @@ static void monitor_data_sections(const std::shared_ptr<emulator_t>& emulator,
 		const auto section_address = mapped_image->base_address() + section.virtual_address;
 		const auto section_size = section.virtual_size;
 
+		const std::string section_name = section.to_str();
+
 		const emulator_err_t error = emulator->hook_memory(
-			[emulator, mapped_image](const emulator_t::address_type accessed_address, const protection_t)
+			[emulator, mapped_image, section_name](const emulator_t::address_type accessed_address, const protection_t)
 			{
 				const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
+
+				bool is_symbol = false;
 
 				if (const auto symbol = mapped_image->find_symbol_by_address(accessed_address))
 				{
@@ -177,18 +182,23 @@ static void monitor_data_sections(const std::shared_ptr<emulator_t>& emulator,
 
 					if (offset == 0)
 					{
-					THREAD_LOG("instruction at 0x{:X} accessed {}!{}", rip, mapped_image->name(), symbol->first);
-				}
-				else
-				{
-					THREAD_LOG("instruction at 0x{:X} accessed {}!{}+0x{:X}", rip, mapped_image->name(), symbol->first, offset);
-				}
-			}
-			else
-			{
-				const auto offset = accessed_address - mapped_image->base_address();
+						THREAD_LOG("instruction at 0x{:X} accessed {}!{}", rip, mapped_image->name(), symbol->first);
 
-				THREAD_LOG("instruction at 0x{:X} accessed {}+0x{:X} (0x{:X})", rip, mapped_image->name(), offset, accessed_address);
+						is_symbol = true;
+					}
+					else if (offset < emulator_t::page_size)
+					{
+						THREAD_LOG("instruction at 0x{:X} accessed {}!{}+0x{:X}", rip, mapped_image->name(), symbol->first, offset);
+
+						is_symbol = true;
+					}
+				}
+
+				if (!is_symbol)
+				{
+					const auto offset = accessed_address - mapped_image->base_address();
+
+					THREAD_LOG("instruction at 0x{:X} accessed {}+0x{:X} (section name='{}', accessed address=0x{:X})", rip, mapped_image->name(), offset, section_name, accessed_address);
 				}
 
 				return false;
@@ -340,6 +350,11 @@ std::shared_ptr<kernel_image_t> kernel::map_kernel_image(const std::shared_ptr<e
 	if (name == "cng.sys")
 	{
 		redirect_cng_bcrypt_functions(emulator, *mapped_image);
+	}
+
+	if (name == "FLTMGR.SYS")
+	{
+		redirect_fltmgr_misc_functions(emulator, *mapped_image);
 	}
 
 	if (is_ntoskrnl)

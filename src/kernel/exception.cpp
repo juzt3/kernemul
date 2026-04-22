@@ -568,7 +568,7 @@ void kernel::handle_exception(const std::shared_ptr<emulator_t>& emulator, const
 		current_rip = unwind->return_address;
 	}
 
-	const std::string error = std::format("exception dispatch: unhandled exception code=0x{:X} at 0x{:X}", code, rip);
+	spdlog::error("exception dispatch: unhandled exception code=0x{:X} at 0x{:X}", code, rip);
 
-	throw std::runtime_error(error);
+	emulator->stop();
 }

@@ -498,6 +498,29 @@ void redirect_ntoskrnl_format_functions(const std::shared_ptr<emulator_t>& emula
 	redirect_function(
 		[emulator]
 		{
+			const auto component_id = emulator->read_register<x86::reg::rcx, std::uint32_t>();
+			const auto level = emulator->read_register<x86::reg::rdx, std::uint32_t>();
+			const auto format_address = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
+			const auto r9 = emulator->read_register<x86::reg::r9, std::uint64_t>();
+			const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
+
+			const emulator_t::address_type va_list_address = rsp + 0x20;
+			emulator->write_virtual_memory(va_list_address, &r9, sizeof(r9)).throw_if("write memory");
+
+			const auto format_string = kernel::read_guest_string(*emulator, format_address);
+			const auto formatted = guest_vsprintf(*emulator, format_string, va_list_address);
+
+			THREAD_LOG("DbgPrintEx called (component={}, level={}) : {}", component_id, level, formatted);
+
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"DbgPrintEx"
+	);
+
+	redirect_function(
+		[emulator]
+		{
 			const auto rcx = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
 			const auto rdx = emulator->read_register<x86::reg::rdx, std::uint64_t>();
 			const auto r8 = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
@@ -660,5 +683,135 @@ void redirect_ntoskrnl_format_functions(const std::shared_ptr<emulator_t>& emula
 		},
 		mapped_image,
 		"_vsnwprintf"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto dst_buf = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto size_in_words = emulator->read_register<x86::reg::rdx, std::uint64_t>();
+			const auto max_count = emulator->read_register<x86::reg::r8, std::uint64_t>();
+			const auto format_address = emulator->read_register<x86::reg::r9, emulator_t::address_type>();
+
+			const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
+
+			emulator_t::address_type va_list_address = 0;
+			static_cast<void>(emulator->read_virtual_memory(rsp + 0x28, &va_list_address, sizeof(va_list_address)));
+
+			if (!format_address)
+			{
+				THREAD_WARN_LOG("_vsnwprintf_s called with null format");
+				write_return_value(emulator, static_cast<std::uint64_t>(-1));
+				return;
+			}
+
+			if (!max_count && !dst_buf && !size_in_words)
+			{
+				write_return_value(emulator, 0);
+				return;
+			}
+
+			if (!dst_buf || !size_in_words)
+			{
+				THREAD_WARN_LOG("_vsnwprintf_s called with null dest or zero size");
+				write_return_value(emulator, static_cast<std::uint64_t>(-1));
+				return;
+			}
+
+			const auto format_string = kernel::read_guest_wstring(*emulator, format_address);
+			const auto formatted = guest_vswprintf(*emulator, format_string, va_list_address);
+
+			const auto effective_size = (size_in_words > max_count) ? max_count + 1 : size_in_words;
+
+			if (formatted.size() >= effective_size)
+			{
+				constexpr wchar_t null_terminator = L'\0';
+				static_cast<void>(emulator->write_virtual_memory(dst_buf, &null_terminator, sizeof(null_terminator)));
+
+				THREAD_WARN_LOG("_vsnwprintf_s called (result truncated, format='{}')",
+					util::narrow_wstring(format_string));
+
+				write_return_value(emulator, static_cast<std::uint64_t>(-1));
+				return;
+			}
+
+			write_guest_wstring_buffer(*emulator, dst_buf, effective_size, formatted);
+
+			THREAD_LOG("_vsnwprintf_s called (result='{}')", util::narrow_wstring(formatted));
+
+			write_return_value(emulator, static_cast<std::uint64_t>(formatted.size()));
+		},
+		mapped_image,
+		"_vsnwprintf_s"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto dst_buf = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto size_in_bytes = emulator->read_register<x86::reg::rdx, std::uint64_t>();
+			const auto max_count = emulator->read_register<x86::reg::r8, std::uint64_t>();
+			const auto format_address = emulator->read_register<x86::reg::r9, emulator_t::address_type>();
+
+			const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
+
+			emulator_t::address_type va_list_address = 0;
+			static_cast<void>(emulator->read_virtual_memory(rsp + 0x28, &va_list_address, sizeof(va_list_address)));
+
+			if (!format_address)
+			{
+				THREAD_WARN_LOG("_vsnprintf_s called with null format");
+				write_return_value(emulator, static_cast<std::uint64_t>(-1));
+				return;
+			}
+
+			if (!max_count && !dst_buf && !size_in_bytes)
+			{
+				write_return_value(emulator, 0);
+				return;
+			}
+
+			if (!dst_buf || !size_in_bytes)
+			{
+				THREAD_WARN_LOG("_vsnprintf_s called with null dest or zero size");
+				write_return_value(emulator, static_cast<std::uint64_t>(-1));
+				return;
+			}
+
+			const auto format_string = kernel::read_guest_string(*emulator, format_address);
+			const auto formatted = guest_vsprintf(*emulator, format_string, va_list_address);
+
+			const auto effective_size = (size_in_bytes > max_count) ? max_count + 1 : size_in_bytes;
+
+			if (formatted.size() >= effective_size)
+			{
+				constexpr char null_terminator = '\0';
+				static_cast<void>(emulator->write_virtual_memory(dst_buf, &null_terminator, sizeof(null_terminator)));
+
+				THREAD_WARN_LOG("_vsnprintf_s called (result truncated, format='{}')", format_string);
+
+				write_return_value(emulator, static_cast<std::uint64_t>(-1));
+				return;
+			}
+
+			const std::size_t chars_to_write = formatted.size();
+			if (chars_to_write > 0)
+			{
+				const emulator_err_t error = emulator->write_virtual_memory(
+					dst_buf, formatted.data(), chars_to_write);
+				error.throw_if("write memory");
+			}
+
+			constexpr char null_terminator = '\0';
+			const emulator_err_t error = emulator->write_virtual_memory(
+				dst_buf + chars_to_write, &null_terminator, sizeof(null_terminator));
+			error.throw_if("write memory");
+
+			THREAD_LOG("_vsnprintf_s called (result='{}')", formatted);
+
+			write_return_value(emulator, static_cast<std::uint64_t>(formatted.size()));
+		},
+		mapped_image,
+		"_vsnprintf_s"
 	);
 }

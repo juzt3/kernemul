@@ -259,6 +259,13 @@ struct _KLDR_DATA_TABLE_ENTRY
     ULONG TimeDateStamp;                                                    //0x9c
 };
 
+//0x10 bytes (sizeof)
+struct _KSPIN_LOCK_QUEUE
+{
+    struct _KSPIN_LOCK_QUEUE* volatile Next;                                //0x0
+    ULONGLONG* volatile Lock;                                               //0x8
+};
+
 //0x178 bytes (sizeof)
 struct _KPCR
 {

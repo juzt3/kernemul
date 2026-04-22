@@ -78,17 +78,31 @@ static emulator_object_t<_KPRCB> set_up_kprcb(const std::shared_ptr<emulator_t>&
 	return emulator_object_t<_KPRCB>::allocate(emulator, contents);
 }
 
+static emulator_object_t<_KSPIN_LOCK_QUEUE> set_up_spin_lock_queue(const std::shared_ptr<emulator_t>& emulator)
+{
+	const auto lock_object = emulator_object_t<ULONGLONG>::allocate(emulator, 0);
+
+	_KSPIN_LOCK_QUEUE contents;
+
+	contents.Next = nullptr;
+	contents.Lock = reinterpret_cast<ULONGLONG*>(lock_object.address());
+
+	return emulator_object_t<_KSPIN_LOCK_QUEUE>::allocate(emulator, contents);
+}
+
 static emulator_object_t<_KPCR> set_up_kpcr(const std::shared_ptr<emulator_t>& emulator,
                                             const std::shared_ptr<thread_t>& thread)
 {
 	const auto kprcb = set_up_kprcb(emulator, thread);
 
 	auto kpcr = emulator_object_t<_KPCR>::allocate(emulator);
+	auto lock_array = set_up_spin_lock_queue(emulator);
 
 	_KPCR contents = { };
 
 	contents.Self = reinterpret_cast<_KPCR*>(kpcr.address());
 	contents.CurrentPrcb = reinterpret_cast<_KPRCB*>(kprcb.address());
+	contents.LockArray = reinterpret_cast<_KSPIN_LOCK_QUEUE*>(lock_array.address());
 
 	kpcr.write(contents);
 
@@ -169,6 +183,7 @@ std::int32_t main()
 		kernel::map_kernel_image(emulator, "HAL.dll", false);
 		kernel::map_kernel_image(emulator, "CI.dll", false);
 		kernel::map_kernel_image(emulator, "kd.dll", false);
+		kernel::map_kernel_image(emulator, "win32k.sys", false);
 		kernel::map_kernel_image(emulator, "cng.sys", false, L"\\SystemRoot\\System32\\drivers\\");
 		kernel::map_kernel_image(emulator, "FLTMGR.SYS", false, L"\\SystemRoot\\System32\\drivers\\");
 

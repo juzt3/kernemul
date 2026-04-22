@@ -202,6 +202,7 @@
     <ClCompile Include="src\impl\ntoskrnl\nt_memory.cpp" />
     <ClCompile Include="src\impl\ci\ci_sign.cpp" />
     <ClCompile Include="src\impl\cng\cng_bcrypt.cpp" />
+    <ClCompile Include="src\impl\fltmgr\flt_misc.cpp" />
     <ClCompile Include="src\impl\ntoskrnl\nt_crashdump.cpp" />
     <ClCompile Include="src\impl\ntoskrnl\nt_misc.cpp" />
     <ClCompile Include="src\impl\ntoskrnl\nt_object.cpp" />
@@ -294,6 +295,8 @@
     <ClInclude Include="src\impl\ci\ci_sign.hpp" />
     <ClInclude Include="src\impl\cng\cng_bcrypt.hpp" />
     <ClInclude Include="src\impl\cng\cng_helpers.hpp" />
+    <ClInclude Include="src\impl\fltmgr\flt_helpers.hpp" />
+    <ClInclude Include="src\impl\fltmgr\flt_misc.hpp" />
     <ClInclude Include="src\impl\impl.hpp" />
     <ClInclude Include="src\impl\ntoskrnl\nt_crashdump.hpp" />
     <ClInclude Include="src\impl\ntoskrnl\nt_debugger.hpp" />
