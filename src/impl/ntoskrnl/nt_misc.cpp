@@ -1784,4 +1784,31 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 		mapped_image,
 		"RtlCaptureContext"
 	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto pc_value = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto base_of_image_out = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+
+			emulator_t::address_type image_base = 0;
+
+			if (const auto image = kernel::find_module_from_rip(pc_value))
+			{
+				image_base = image->base_address();
+			}
+
+			if (base_of_image_out)
+			{
+				static_cast<void>(emulator->write_virtual_memory(base_of_image_out, &image_base, sizeof(image_base)));
+			}
+
+			THREAD_LOG("RtlPcToFileHeader called (pc=0x{:X}, base_of_image=0x{:X}) -> 0x{:X}",
+				pc_value, base_of_image_out, image_base);
+
+			write_return_value(emulator, image_base);
+		},
+		mapped_image,
+		"RtlPcToFileHeader"
+	);
 }

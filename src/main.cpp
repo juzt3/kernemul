@@ -78,25 +78,30 @@ static emulator_object_t<_KPRCB> set_up_kprcb(const std::shared_ptr<emulator_t>&
 	return emulator_object_t<_KPRCB>::allocate(emulator, contents);
 }
 
-static emulator_object_t<_KSPIN_LOCK_QUEUE> set_up_spin_lock_queue(const std::shared_ptr<emulator_t>& emulator)
+struct lock_array_t
 {
-	const auto lock_object = emulator_object_t<ULONGLONG>::allocate(emulator, 0);
+	std::uint8_t pad[0x68];
+	std::uint64_t non_paged_pool_lock;
+	std::uint8_t pad1[0xF90];
+};
 
-	_KSPIN_LOCK_QUEUE contents;
+static emulator_object_t<lock_array_t> set_up_lock_array(const std::shared_ptr<emulator_t>& emulator, const std::shared_ptr<kernel_image_t>& nt_image)
+{
+	lock_array_t contents = { };
 
-	contents.Next = nullptr;
-	contents.Lock = reinterpret_cast<ULONGLONG*>(lock_object.address());
+	contents.non_paged_pool_lock = nt_image->find_symbol("NonPagedPoolLock").value();
 
-	return emulator_object_t<_KSPIN_LOCK_QUEUE>::allocate(emulator, contents);
+	return emulator_object_t<lock_array_t>::allocate(emulator, contents, "KPCR.LockArray");
 }
 
 static emulator_object_t<_KPCR> set_up_kpcr(const std::shared_ptr<emulator_t>& emulator,
+                                            const std::shared_ptr<kernel_image_t>& nt_image,
                                             const std::shared_ptr<thread_t>& thread)
 {
 	const auto kprcb = set_up_kprcb(emulator, thread);
 
 	auto kpcr = emulator_object_t<_KPCR>::allocate(emulator);
-	auto lock_array = set_up_spin_lock_queue(emulator);
+	auto lock_array = set_up_lock_array(emulator, nt_image);
 
 	_KPCR contents = { };
 
@@ -189,7 +194,12 @@ std::int32_t main()
 
 		kernel::emulated_module = kernel::map_kernel_image(emulator, EMULATED_MODULE_NAME, true, EMULATED_MODULE_DIRECTORY);
 
-		patch_dbgctl_check(emulator);
+		/*emulator->hook_basic_block([emulator]()
+			{
+				spdlog::info("basic block executed at 0x{:X}", emulator->read_register<x86::reg::rip, std::uint64_t>());
+			}, kernel::emulated_module->base_address(),
+				kernel::emulated_module->base_address() + kernel::emulated_module->size()
+		);*/
 		set_up_interrupt_flag(emulator);
 		
 		kernel::set_up_initial_system_process(emulator);
@@ -203,7 +213,7 @@ std::int32_t main()
 		kernel::set_up_segments(emulator);
 		kernel::set_up_idt(emulator, *nt_image);
 
-		const auto kpcr = set_up_kpcr(emulator, kernel::current_thread);
+		const auto kpcr = set_up_kpcr(emulator, nt_image, kernel::current_thread);
 		kernel::set_up_kernel_gs(emulator, kpcr.address());
 
 		set_up_lstar_msr(emulator, nt_image);
@@ -294,6 +304,16 @@ std::int32_t main()
 		emulator_err_t error = emulator->hook_instruction(x86::insn::cpuid,
 			[emulator]()
 			{
+				static bool hooked = false;
+
+				if (!hooked)
+				{
+					patch_dbgctl_check(emulator);
+					patch_is_address_valid_routine(emulator);
+
+					hooked = true;
+				}
+
 				const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
 				const auto rax = emulator->read_register<x86::reg::rax, std::int32_t>();
 
@@ -316,14 +336,28 @@ std::int32_t main()
 
 		error.throw_if("instruction hook attach");
 
+		error = emulator->hook_instruction(x86::insn::rdtsc,
+			[emulator]()
+			{
+				const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
+	
+				THREAD_LOG("rdtsc executed at 0x{:X}", rip);
+
+		const auto current_cr3 = emulator->read_register<x86::reg::cr3, cr3>();
+
+		emulator->map_virtual_page(0xFFFFF0F87C3E1000, current_cr3.address_of_page_directory << 12);
+		emulator->map_virtual_page(0xFFFFF0F87C3FF000, current_cr3.address_of_page_directory << 12);
+
 		set_up_driver_entry(emulator);
 
 		kernel::run_all_threads(emulator, entry_point_address);
 
 		const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
 		const auto rax = emulator->read_register<x86::reg::rax, emulator_t::address_type>();
+		const auto rdx = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+		const auto rdi = emulator->read_register<x86::reg::rdi, emulator_t::address_type>();
 
-		GLOBAL_LOG("emulation finished at rip=0x{:X}, rax=0x{:X}", rip, rax);
+		GLOBAL_LOG("emulation finished at rip=0x{:X}, rax=0x{:X}, rdx=0x{:X}, rdi=0x{:X}", rip, rax, rdx, rdi);
 
 		error.throw_if("emulation running");
 	}

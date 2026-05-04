@@ -170,7 +170,7 @@ static void monitor_data_sections(const std::shared_ptr<emulator_t>& emulator,
 		const std::string section_name = section.to_str();
 
 		const emulator_err_t error = emulator->hook_memory(
-			[emulator, mapped_image, section_name](const emulator_t::address_type accessed_address, const protection_t)
+			[emulator, mapped_image, section_name](const emulator_t::address_type accessed_address, const protection_t access)
 			{
 				const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
 
@@ -182,13 +182,15 @@ static void monitor_data_sections(const std::shared_ptr<emulator_t>& emulator,
 
 					if (offset == 0)
 					{
-						THREAD_LOG("instruction at 0x{:X} accessed {}!{}", rip, mapped_image->name(), symbol->first);
+						THREAD_LOG("instruction at 0x{:X} accessed {}!{} (type={})", rip, mapped_image->name(),
+						           symbol->first, static_cast<std::uint32_t>(access));
 
 						is_symbol = true;
 					}
 					else if (offset < emulator_t::page_size)
 					{
-						THREAD_LOG("instruction at 0x{:X} accessed {}!{}+0x{:X}", rip, mapped_image->name(), symbol->first, offset);
+						THREAD_LOG("instruction at 0x{:X} accessed {}!{}+0x{:X} (type={})", rip, mapped_image->name(),
+						           symbol->first, offset, static_cast<std::uint32_t>(access));
 
 						is_symbol = true;
 					}
@@ -198,7 +200,10 @@ static void monitor_data_sections(const std::shared_ptr<emulator_t>& emulator,
 				{
 					const auto offset = accessed_address - mapped_image->base_address();
 
-					THREAD_LOG("instruction at 0x{:X} accessed {}+0x{:X} (section name='{}', accessed address=0x{:X})", rip, mapped_image->name(), offset, section_name, accessed_address);
+					THREAD_LOG(
+						"instruction at 0x{:X} accessed {}+0x{:X} (section name='{}', accessed address=0x{:X}, type={})",
+						rip, mapped_image->name(), offset, section_name, accessed_address,
+						static_cast<std::uint32_t>(access));
 				}
 
 				return false;

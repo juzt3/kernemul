@@ -24,6 +24,31 @@ constexpr std::uint32_t rtl_registry_absolute        = 0;
 constexpr std::uint32_t rtl_registry_services        = 1;
 constexpr std::uint32_t rtl_registry_control         = 2;
 constexpr std::uint32_t rtl_registry_devicemap       = 4;
+constexpr std::uint32_t rtl_registry_handle          = 0x40000000;
+
+constexpr std::uint32_t rtl_query_registry_subkey    = 0x01;
+constexpr std::uint32_t rtl_query_registry_topkey    = 0x02;
+constexpr std::uint32_t rtl_query_registry_required  = 0x04;
+constexpr std::uint32_t rtl_query_registry_novalue   = 0x08;
+constexpr std::uint32_t rtl_query_registry_noexpand  = 0x10;
+constexpr std::uint32_t rtl_query_registry_direct    = 0x20;
+constexpr std::uint32_t rtl_query_registry_delete    = 0x40;
+
+constexpr std::uint32_t status_object_type_mismatch  = 0xC0000024;
+
+struct guest_rtl_query_registry_table
+{
+	std::uint64_t query_routine;
+	std::uint32_t flags;
+	std::uint32_t pad0;
+	std::uint64_t name;
+	std::uint64_t entry_context;
+	std::uint32_t default_type;
+	std::uint32_t pad1;
+	std::uint64_t default_data;
+	std::uint32_t default_length;
+	std::uint32_t pad2;
+};
 
 static std::wstring read_guest_unicode_string(const emulator_t& emulator, const emulator_t::address_type address)
 {
@@ -809,5 +834,233 @@ void redirect_ntoskrnl_registry_functions(const std::shared_ptr<emulator_t>& emu
 		},
 		mapped_image,
 		"CmRegisterCallbackEx"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto relative_to = emulator->read_register<x86::reg::rcx, std::uint32_t>();
+			const auto path_address = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+			const auto table_address = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
+			const auto context = emulator->read_register<x86::reg::r9, emulator_t::address_type>();
+
+			std::string base_path;
+
+			if (relative_to & rtl_registry_handle)
+			{
+				const auto handle = path_address;
+				const auto key_obj = kernel::object_manager->get_object_from_handle<registry_key_object_t>(handle);
+
+				if (!key_obj)
+				{
+					THREAD_WARN_LOG("RtlQueryRegistryValues: invalid handle 0x{:X}", handle);
+					write_nt_status(emulator, status_object_name_not_found);
+					return;
+				}
+
+				base_path = key_obj->path;
+			}
+			else
+			{
+				base_path = resolve_rtl_registry_path(emulator, relative_to, path_address);
+			}
+
+			THREAD_LOG("RtlQueryRegistryValues called (relative_to=0x{:X}, path='{}')", relative_to, base_path);
+
+			auto current_path = base_path;
+			auto entry_address = table_address;
+
+			while (true)
+			{
+				guest_rtl_query_registry_table entry{};
+				static_cast<void>(emulator->read_virtual_memory(entry_address, &entry, sizeof(entry)));
+
+				if (entry.query_routine == 0 && entry.name == 0)
+				{
+					break;
+				}
+
+				entry_address += sizeof(entry);
+
+				if (entry.flags & rtl_query_registry_topkey)
+				{
+					current_path = base_path;
+				}
+
+				if (entry.flags & rtl_query_registry_subkey)
+				{
+					if (entry.name)
+					{
+						const auto subkey_name = util::narrow_wstring(kernel::read_guest_wstring(*emulator, entry.name));
+						current_path = base_path + "/" + registry_t::normalize_path(util::widen_string(subkey_name));
+					}
+
+					continue;
+				}
+
+				if (entry.flags & rtl_query_registry_novalue)
+				{
+					continue;
+				}
+
+				auto key = kernel::registry->open_key(current_path);
+
+				if (!key)
+				{
+					if (entry.flags & rtl_query_registry_required)
+					{
+						THREAD_WARN_LOG("RtlQueryRegistryValues: required key not found (path='{}')", current_path);
+						write_nt_status(emulator, status_object_name_not_found);
+						return;
+					}
+
+					continue;
+				}
+
+				std::string value_name;
+
+				if (entry.name)
+				{
+					value_name = util::narrow_wstring(kernel::read_guest_wstring(*emulator, entry.name));
+				}
+
+				const auto* value = key->query_value(value_name);
+
+				const void* data_ptr = nullptr;
+				std::uint32_t data_size = 0;
+				std::uint32_t data_type = 0;
+
+				std::vector<std::uint8_t> default_data_buf;
+
+				if (value)
+				{
+					data_ptr = value->data.data();
+					data_size = static_cast<std::uint32_t>(value->data.size());
+					data_type = static_cast<std::uint32_t>(value->type);
+				}
+				else if (static_cast<registry_type>(entry.default_type & 0xFF) != registry_type::none
+					&& entry.default_data && entry.default_length > 0)
+				{
+					default_data_buf.resize(entry.default_length);
+					static_cast<void>(emulator->read_virtual_memory(
+						entry.default_data, default_data_buf.data(), entry.default_length));
+
+					data_ptr = default_data_buf.data();
+					data_size = entry.default_length;
+					data_type = entry.default_type & 0xFF;
+				}
+				else if (entry.flags & rtl_query_registry_required)
+				{
+					THREAD_WARN_LOG("RtlQueryRegistryValues: required value '{}' not found in '{}'",
+						value_name, current_path);
+					write_nt_status(emulator, status_object_name_not_found);
+					return;
+				}
+				else
+				{
+					continue;
+				}
+
+				if (entry.flags & rtl_query_registry_direct)
+				{
+					if (!entry.entry_context)
+					{
+						write_nt_status(emulator, status_invalid_parameter);
+						return;
+					}
+
+					const bool is_string = data_type == static_cast<std::uint32_t>(registry_type::sz)
+						|| data_type == static_cast<std::uint32_t>(registry_type::expand_sz)
+						|| data_type == static_cast<std::uint32_t>(registry_type::multi_sz);
+
+					if (is_string)
+					{
+						UNICODE_STRING ustr{};
+						static_cast<void>(emulator->read_virtual_memory(
+							entry.entry_context, &ustr, sizeof(ustr)));
+
+						const auto buffer_address = reinterpret_cast<emulator_t::address_type>(ustr.Buffer);
+
+						if (buffer_address && ustr.MaximumLength >= data_size)
+						{
+							static_cast<void>(emulator->write_virtual_memory(buffer_address, data_ptr, data_size));
+
+							ustr.Length = static_cast<USHORT>(data_size > 2 ? data_size - 2 : 0);
+							static_cast<void>(emulator->write_virtual_memory(
+								entry.entry_context, &ustr, sizeof(ustr)));
+						}
+						else if (!buffer_address)
+						{
+							const auto alloc = emulator->heap_allocate(data_size, prot_read_write);
+							const auto alloc_address = alloc.value_or(0);
+
+							if (alloc_address)
+							{
+								static_cast<void>(emulator->write_virtual_memory(alloc_address, data_ptr, data_size));
+
+								ustr.Length = static_cast<USHORT>(data_size > 2 ? data_size - 2 : 0);
+								ustr.MaximumLength = static_cast<USHORT>(data_size);
+								ustr.Buffer = reinterpret_cast<PWSTR>(alloc_address);
+
+								static_cast<void>(emulator->write_virtual_memory(
+									entry.entry_context, &ustr, sizeof(ustr)));
+							}
+						}
+					}
+					else if (data_size <= sizeof(std::uint32_t))
+					{
+						static_cast<void>(emulator->write_virtual_memory(
+							entry.entry_context, data_ptr, data_size));
+					}
+					else
+					{
+						std::int32_t size_indicator = 0;
+						static_cast<void>(emulator->read_virtual_memory(
+							entry.entry_context, &size_indicator, sizeof(size_indicator)));
+
+						if (size_indicator < 0)
+						{
+							const auto buf_size = static_cast<std::uint32_t>(-size_indicator);
+
+							if (buf_size >= data_size)
+							{
+								static_cast<void>(emulator->write_virtual_memory(
+									entry.entry_context, data_ptr, data_size));
+							}
+						}
+						else
+						{
+							const auto buf_size = static_cast<std::uint32_t>(size_indicator);
+
+							if (buf_size >= data_size + 2 * sizeof(std::uint32_t))
+							{
+								static_cast<void>(emulator->write_virtual_memory(
+									entry.entry_context, &data_size, sizeof(std::uint32_t)));
+								static_cast<void>(emulator->write_virtual_memory(
+									entry.entry_context + sizeof(std::uint32_t), &data_type, sizeof(std::uint32_t)));
+								static_cast<void>(emulator->write_virtual_memory(
+									entry.entry_context + 2 * sizeof(std::uint32_t), data_ptr, data_size));
+							}
+						}
+					}
+
+					THREAD_LOG("RtlQueryRegistryValues: DIRECT read '{}' from '{}' (type={}, size={})",
+						value_name, current_path, data_type, data_size);
+				}
+				else
+				{
+					THREAD_WARN_LOG("RtlQueryRegistryValues: QueryRoutine mode not implemented for '{}'", value_name);
+				}
+
+				if (entry.flags & rtl_query_registry_delete)
+				{
+					key->delete_value(value_name);
+				}
+			}
+
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"RtlQueryRegistryValues"
 	);
 }
