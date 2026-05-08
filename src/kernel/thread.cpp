@@ -30,10 +30,10 @@ std::shared_ptr<thread_t> kernel::create_thread(const std::shared_ptr<emulator_t
 
 void kernel::switch_thread(const std::shared_ptr<emulator_t>& emulator, const bool delete_current, const bool force)
 {
-	GLOBAL_LOG("switch_thread called (delete_current={}, force={}, current_thread_id={}, pending_threads={})",
+	/*GLOBAL_LOG("switch_thread called (delete_current={}, force={}, current_thread_id={}, pending_threads={})",
 		delete_current, force,
 		current_thread ? current_thread->id() : 0,
-		pending_threads.size());
+		pending_threads.size());*/
 
 	if (pending_thread_switch ||
 		(!force && (pending_threads.empty() || (!delete_current && !current_thread->is_expired()))))

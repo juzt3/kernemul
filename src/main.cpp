@@ -343,6 +343,27 @@ std::int32_t main()
 	
 				THREAD_LOG("rdtsc executed at 0x{:X}", rip);
 
+				return false;
+			},
+			emulator_t::default_start_address,
+			emulator_t::default_end_address
+		).error_or({});
+
+		error.throw_if("instruction hook attach");
+
+		/*error = emulator->hook_basic_block(
+			[emulator]()
+			{
+				const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
+
+				THREAD_LOG("basic block executed at 0x{:X}", rip);
+			},
+			kernel::emulated_module->base_address(),
+			kernel::emulated_module->base_address() + kernel::emulated_module->size()
+		).error_or({});
+
+		error.throw_if("basic block hook attach");*/
+
 		const auto current_cr3 = emulator->read_register<x86::reg::cr3, cr3>();
 
 		emulator->map_virtual_page(0xFFFFF0F87C3E1000, current_cr3.address_of_page_directory << 12);

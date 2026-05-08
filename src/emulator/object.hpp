@@ -101,9 +101,9 @@ public:
 		return std::move(object);
 	}
 
-	static emulator_object_t view_at(const std::shared_ptr<emulator_t>& emulator, const address_type address, const std::string& name = { })
+	static emulator_object_t view_at(const std::shared_ptr<emulator_t>& emulator, const address_type address, const std::string& name = { }, const bool monitor = false)
 	{
-		return emulator_object_t{ emulator, address, name, false };
+		return emulator_object_t{ emulator, address, name, monitor };
 	}
 
 protected:

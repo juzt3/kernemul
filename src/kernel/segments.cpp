@@ -307,7 +307,7 @@ void kernel::set_up_idt(const std::shared_ptr<emulator_t>& emulator, const kerne
 		const std::uint32_t offset = i * sizeof(segment_descriptor_interrupt_gate_64);
 		const std::string name = std::format("IDT vector #{:X}", i);
 
-		auto entry_object = emulator_object_t<segment_descriptor_interrupt_gate_64>::view_at(emulator, *idt_base_address + offset, name);
+		auto entry_object = emulator_object_t<segment_descriptor_interrupt_gate_64>::view_at(emulator, *idt_base_address + offset, name, true);
 
 		segment_descriptor_interrupt_gate_64 contents = { };
 
