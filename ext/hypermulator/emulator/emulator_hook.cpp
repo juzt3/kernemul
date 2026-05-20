@@ -273,12 +273,14 @@ void hm::emulator_t::resolve_memory_access_address(guest_virtual_processor_t& pr
 
 	register_context.values[ZYDIS_REGISTER_RFLAGS] = processor.read_register<reg::rflags, std::uint64_t>();
 
-	register_context.values[ZYDIS_REGISTER_ES] = processor.read_register<reg::es, WHV_X64_SEGMENT_REGISTER>().Base;
-	register_context.values[ZYDIS_REGISTER_CS] = processor.read_register<reg::cs, WHV_X64_SEGMENT_REGISTER>().Base;
-	register_context.values[ZYDIS_REGISTER_SS] = processor.read_register<reg::ss, WHV_X64_SEGMENT_REGISTER>().Base;
-	register_context.values[ZYDIS_REGISTER_DS] = processor.read_register<reg::ds, WHV_X64_SEGMENT_REGISTER>().Base;
-	register_context.values[ZYDIS_REGISTER_FS] = processor.read_register<reg::fs, WHV_X64_SEGMENT_REGISTER>().Base;
-	register_context.values[ZYDIS_REGISTER_GS] = processor.read_register<reg::gs, WHV_X64_SEGMENT_REGISTER>().Base;
+	const std::array<std::pair<ZydisRegister, std::uint64_t>, 6> segment_bases = {
+		{ ZYDIS_REGISTER_ES, processor.read_register<reg::es, WHV_X64_SEGMENT_REGISTER>().Base },
+		{ ZYDIS_REGISTER_CS, processor.read_register<reg::cs, WHV_X64_SEGMENT_REGISTER>().Base },
+		{ ZYDIS_REGISTER_SS, processor.read_register<reg::ss, WHV_X64_SEGMENT_REGISTER>().Base },
+		{ ZYDIS_REGISTER_DS, processor.read_register<reg::ds, WHV_X64_SEGMENT_REGISTER>().Base },
+		{ ZYDIS_REGISTER_FS, processor.read_register<reg::fs, WHV_X64_SEGMENT_REGISTER>().Base },
+		{ ZYDIS_REGISTER_GS, processor.read_register<reg::gs, WHV_X64_SEGMENT_REGISTER>().Base },
+	};
 
 	for (const auto& operand : insn->visible_operands())
 	{
@@ -294,6 +296,15 @@ void hm::emulator_t::resolve_memory_access_address(guest_virtual_processor_t& pr
 		if (!ZYAN_SUCCESS(ZydisCalcAbsoluteAddressEx(&insn->raw(), &raw_operand, context.processor_state.rip, &register_context, &resolved_address)))
 		{
 			continue;
+		}
+
+		for (const auto& [seg_reg, seg_base] : segment_bases)
+		{
+			if (raw_operand.mem.segment == seg_reg)
+			{
+				resolved_address += seg_base;
+				break;
+			}
 		}
 
 		const auto translated = processor.translate_virtual_address(resolved_address);
