@@ -177,11 +177,7 @@ std::shared_ptr<hm::hook_t> hm::emulator_t::hook_basic_block(const hook_t::code_
 		}
 	}
 
-	constexpr hook_basic_block_t extra_data = {
-		.was_control_flow = false
-	};
-
-	return add_hook(callback, hook_type_t::basic_block, start_physical_address, end_physical_address, extra_data);
+	return add_hook(callback, hook_type_t::basic_block, start_physical_address, end_physical_address);
 }
 
 bool hm::emulator_t::handle_exception(guest_virtual_processor_t& processor, vmexit_context_t& context)
@@ -203,8 +199,6 @@ bool hm::emulator_t::handle_exception(guest_virtual_processor_t& processor, vmex
 void hm::emulator_t::resolve_memory_access_address(guest_virtual_processor_t& processor, vmexit_context_t& context)
 {
 	memory_vmexit_t& info = context.memory_access;
-
-	info.virtual_address_valid = false;
 
 	if (info.virtual_address_valid || !processor.uses_paging())
 	{
@@ -476,15 +470,13 @@ void hm::emulator_t::set_block_code_hook_step(const std::shared_ptr<hook_t>& hoo
 		});
 }
 
-void hm::emulator_t::handle_block_hook_overflow(const std::shared_ptr<hook_t>& hook, const address_type rip)
+void hm::emulator_t::handle_block_hook_overflow([[maybe_unused]] const std::shared_ptr<hook_t>& hook, const address_type rip)
 {
 	const size_type page_offset = rip % page_size;
 
 	if (max_instruction_length < page_offset)
 	{
-		hook_basic_block_t& extra_data = std::get<hook_basic_block_t>(hook->extra_data);
-
-		extra_data.was_control_flow = true;
+		block_hook_was_control_flow_ = true;
 	}
 }
 
@@ -501,20 +493,15 @@ void hm::emulator_t::invoke_block_code_hook_step_callback(const std::shared_ptr<
 		}
 		else
 		{
-			hook_basic_block_t& extra_data = std::get<hook_basic_block_t>(hook->extra_data);
-
-			if (extra_data.was_control_flow)
+			if (block_hook_was_control_flow_)
 			{
 				hook_callback();
 
-				extra_data.was_control_flow = false;
+				block_hook_was_control_flow_ = false;
 			}
-			else
+			else if (is_control_flow_instruction(mode_, instruction_bytes))
 			{
-				if (is_control_flow_instruction(mode_, instruction_bytes))
-				{
-					extra_data.was_control_flow = true;
-				}
+				block_hook_was_control_flow_ = true;
 			}
 		}
 	}
