@@ -348,21 +348,19 @@ bool hm::emulator_t::handle_memory_access(guest_virtual_processor_t& processor, 
 
 bool hm::emulator_t::handle_msr_access(guest_virtual_processor_t& processor, vmexit_context_t& context)
 {
-	spdlog::info("msr access write={}, msr_number={:X}, value={:X}", context.msr.is_write, context.msr.msr_number, (context.msr.rax << 32) | context.msr.rdx);
-	__debugbreak();
+	bool handled = false;
 
-	if (context.msr.is_write)
+	for (size_type i = 0; i < hooks_.size(); i++)
 	{
+		const auto hook = hooks_[i];
 
+		if (hook->type == hook_type_t::msr)
+		{
+			process_msr_hook(processor, context, hook);
+		}
 	}
-	else
-	{
 
-	}
-
-	context.advance_rip(processor);
-
-	return true;
+	return handled;
 }
 
 void hm::emulator_t::set_block_code_hook_step(const std::shared_ptr<hook_t>& hook)
@@ -594,8 +592,17 @@ bool hm::emulator_t::memory_process_block_code_hook(guest_virtual_processor_t& p
 	return false;
 }
 
+void hm::emulator_t::process_msr_hook(guest_virtual_processor_t& processor, const vmexit_context_t& context,
+                                      const std::shared_ptr<hook_t>& hook)
+{
+	const msr_vmexit_t& info = context.msr;
+	const auto& msr_callback = std::get<hook_t::msr_callback>(hook->callback);
+
+	msr_callback(info.msr_number, info.is_write);
+}
+
 void hm::emulator_t::set_memory_hook_step(guest_virtual_processor_t& processor, vmexit_context_t& context,
-	const std::shared_ptr<hook_t>& hook, bool& step_handled)
+                                          const std::shared_ptr<hook_t>& hook, bool& step_handled)
 {
 	const auto& hook_memory = std::get<hook_memory_t>(hook->extra_data);
 
@@ -802,10 +809,15 @@ std::shared_ptr<hm::hook_t> hm::emulator_t::hook_instruction(const hook_instruct
 	return { };
 }
 
+std::shared_ptr<hm::hook_t> hm::emulator_t::hook_msr(const hook_t::msr_callback& callback)
+{
+	return add_hook(callback, hook_type_t::msr, 0, 0);
+}
+
 std::shared_ptr<hm::hook_t> hm::emulator_t::hook_memory(const protection_type protection,
-	const hook_t::memory_access_callback& callback,
-	const address_type start_physical_address,
-	const address_type end_physical_address)
+                                                        const hook_t::memory_access_callback& callback,
+                                                        const address_type start_physical_address,
+                                                        const address_type end_physical_address)
 {
 	if (!configure_single_step())
 	{

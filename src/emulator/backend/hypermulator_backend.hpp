@@ -55,6 +55,8 @@ public:
 	std::expected<hook_type, emulator_err_t> hook_code(const emulator_hook_t::code_callback& callback, address_type start_address,
 	                                                   address_type end_address) override;
 
+	std::expected<hook_type, emulator_err_t> hook_msr(const emulator_hook_t::msr_callback& callback) override;
+
 	std::expected<hook_type, emulator_err_t> hook_invalid_memory(const emulator_hook_t::invalid_memory_callback& callback,
 	                                                             protection_type monitored_protection, address_type start_address, address_type end_address) override;
 

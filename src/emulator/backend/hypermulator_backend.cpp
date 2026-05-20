@@ -290,6 +290,14 @@ std::expected<emulator_t::hook_type, emulator_err_t> hypermulator_t::hook_code(
 	return add_native_hook(native_hooks, callback);
 }
 
+std::expected<emulator_t::hook_type, emulator_err_t> hypermulator_t::hook_msr(
+	const emulator_hook_t::msr_callback& callback)
+{
+	const auto native_hook = backend_->hook_msr(callback);
+
+	return add_native_hook(std::array{ native_hook }, callback);
+}
+
 std::expected<emulator_t::hook_type, emulator_err_t> hypermulator_t::hook_invalid_memory(
 	const emulator_hook_t::invalid_memory_callback& callback, const protection_type monitored_protection,
 	const address_type start_address, const address_type end_address)

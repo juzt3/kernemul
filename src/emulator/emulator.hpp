@@ -179,10 +179,11 @@ public:
 
 	using invalid_memory_callback = std::function<bool(address_type faulting_address, protection_t access)>;  // returns true = has handled invalid access properly (e.g. mapping address in)
 	using memory_access_callback = std::function<void(address_type faulting_address, protection_t access)>;
+	using msr_callback = std::function<void(std::uint32_t msr_number, bool write)>;
 	using code_callback = std::function<void()>;
 	using instruction_callback = std::function<bool()>; // returns true = instruction should be skipped
 
-	using callback_type = std::variant<invalid_memory_callback, memory_access_callback, code_callback, instruction_callback>;
+	using callback_type = std::variant<invalid_memory_callback, memory_access_callback, code_callback, instruction_callback, msr_callback>;
 
 	emulator_hook_t() = default;
 
@@ -315,6 +316,8 @@ public:
 
 	virtual std::expected<hook_type, emulator_err_t> hook_code(
 		const emulator_hook_t::code_callback& callback, address_type start_address, address_type end_address) = 0;
+
+	virtual std::expected<hook_type, emulator_err_t> hook_msr(const emulator_hook_t::msr_callback& callback) = 0;
 
 	virtual std::expected<hook_type, emulator_err_t> hook_invalid_memory(
 		const emulator_hook_t::invalid_memory_callback& callback, protection_type monitored_protection,

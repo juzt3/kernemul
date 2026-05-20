@@ -18,13 +18,17 @@
 
 static void set_up_user_shared_data(const std::shared_ptr<emulator_t>& emulator)
 {
-	_KUSER_SHARED_DATA contents = { };
+	/*_KUSER_SHARED_DATA contents = { };
 
 	contents.NtBuildNumber = 19045;
 	contents.NtMajorVersion = 10;
 	contents.NtMinorVersion = 0;
 
-	kernel::user_shared_data = emulator_object_t<_KUSER_SHARED_DATA>::allocate_at(emulator, contents, 0xFFFFF78000000000);
+	kernel::user_shared_data = emulator_object_t<_KUSER_SHARED_DATA>::allocate_at(emulator, contents, 0xFFFFF78000000000);*/
+
+	const auto contents = reinterpret_cast<const _KUSER_SHARED_DATA*>(0x7FFE0000);
+
+	emulator_object_t<_KUSER_SHARED_DATA>::allocate_at(emulator, *contents, 0xFFFFF78000000000);
 }
 
 static emulator_object_t<_DRIVER_OBJECT> set_up_driver_object(const std::shared_ptr<emulator_t>& emulator, const kernel_image_t& image)
@@ -69,7 +73,7 @@ static void set_up_stack(emulator_t& emulator)
 }
 
 static emulator_object_t<_KPRCB> set_up_kprcb(const std::shared_ptr<emulator_t>& emulator,
-                                              const std::shared_ptr<thread_t>& thread)
+	const std::shared_ptr<thread_t>& thread)
 {
 	_KPRCB contents;
 
@@ -95,8 +99,8 @@ static emulator_object_t<lock_array_t> set_up_lock_array(const std::shared_ptr<e
 }
 
 static emulator_object_t<_KPCR> set_up_kpcr(const std::shared_ptr<emulator_t>& emulator,
-                                            const std::shared_ptr<kernel_image_t>& nt_image,
-                                            const std::shared_ptr<thread_t>& thread)
+	const std::shared_ptr<kernel_image_t>& nt_image,
+	const std::shared_ptr<thread_t>& thread)
 {
 	const auto kprcb = set_up_kprcb(emulator, thread);
 
@@ -132,6 +136,70 @@ static void patch_dbgctl_check(const std::shared_ptr<emulator_t>& emulator)
 		const emulator_err_t error = emulator->write_virtual_memory(dbgctl_runtime_address, stub);
 
 		error.throw_if("write MSR stub memory");
+
+		/*const emulator_err_t error = emulator->hook_code(
+			[emulator, dbgctl_runtime_address]()
+			{
+				emulator->write_register<x86::reg::rdx>(0);
+				emulator->write_register<x86::reg::rax>(3);
+				emulator->write_register<x86::reg::rip>(dbgctl_runtime_address + 4);
+			},
+			dbgctl_runtime_address,
+			dbgctl_runtime_address + 1
+		).error_or({});
+
+		error.throw_if("place MSR hook stub");*/
+	}
+}
+
+static void patch_is_address_valid_routine(const std::shared_ptr<emulator_t>& emulator)
+{
+	const auto image_buffer = kernel::emulated_module->buffer();
+	const auto image = reinterpret_cast<const portable_executable::image_t*>(image_buffer.data());
+
+	if (const auto reference_signature = image->signature_scan("E8 ? ? ? ? 4C 8B F8"))//"48 8B CF E9 ? ? ? ? E8 ? ? ? ? 84 C0 0F 84 ? ? ? ? 83 FE"))
+	{
+		constexpr std::size_t call_signature_offset = 0;
+		constexpr std::size_t call_imm_offset = 1;
+		constexpr std::size_t call_size = 5;
+
+		const auto call_local_address = reference_signature + call_signature_offset;
+		const auto rip_local_address = call_local_address + call_size;
+
+		const auto routine_local_address = rip_local_address + *reinterpret_cast<const std::int32_t*>(call_local_address + call_imm_offset);
+
+		const std::int64_t routine_rva = routine_local_address - image_buffer.data();
+		const emulator_t::address_type routine_runtime_address = kernel::emulated_module->base_address() + routine_rva;
+
+		constexpr std::array<std::uint8_t, 3> stub = {
+			//0xB0, 0x01, // mov al, 1
+			0x30, 0xC0, // xor al, al
+			0xC3 // ret
+		};
+
+		const emulator_err_t error = emulator->write_virtual_memory(routine_runtime_address, stub);
+
+		error.throw_if("write 'is address valid' stub memory");
+
+		/*const emulator_err_t error = emulator->hook_code(
+			[emulator]()
+			{
+				emulator->write_register<x86::reg::rax>(0);
+
+				const auto rsp = emulator->read_register<x86::reg::rsp, std::uint64_t>();
+
+				std::uint64_t return_address = 0;
+
+				emulator->read_virtual_memory(rsp, &return_address, sizeof(return_address)).throw_if("read return address");
+
+				emulator->write_register<x86::reg::rsp>(rsp + 8);
+				emulator->write_register<x86::reg::rip>(return_address);
+			},
+			routine_runtime_address,
+			routine_runtime_address + 1
+		).error_or({});
+
+		error.throw_if("place 'is address valid' hook stub");*/
 	}
 }
 
@@ -200,8 +268,11 @@ std::int32_t main()
 			}, kernel::emulated_module->base_address(),
 				kernel::emulated_module->base_address() + kernel::emulated_module->size()
 		);*/
+
+		//patch_dbgctl_check(emulator);
+		//patch_is_address_valid_routine(emulator);
 		set_up_interrupt_flag(emulator);
-		
+
 		kernel::set_up_initial_system_process(emulator);
 
 		const auto current_thread_id = kernel::object_manager->allocate_id();
@@ -218,7 +289,7 @@ std::int32_t main()
 
 		set_up_lstar_msr(emulator, nt_image);
 
-	    const emulator_t::address_type base_address = kernel::emulated_module->base_address();
+		const emulator_t::address_type base_address = kernel::emulated_module->base_address();
 		const emulator_t::address_type entry_point_address = kernel::emulated_module->entry_point();
 
 		GLOBAL_LOG("mapped ntoskrnl at 0x{:X}", nt_image->base_address());
@@ -226,63 +297,63 @@ std::int32_t main()
 
 		const auto redirect_execute_handler = [emulator]
 		([[maybe_unused]] const emulator_t::address_type accessed_address, [[maybe_unused]] const protection_t protection) -> void
-		{
-			const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
-			const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
-
-			emulator_t::address_type return_address = 0;
-
-			const emulator_err_t read_error = emulator->read_virtual_memory(rsp, &return_address, sizeof(return_address));
-
-			read_error.throw_if("read from stack");
-
-			if (const auto redirected_function = kernel::find_redirected_function(rip))
 			{
-				THREAD_LOG("redirecting function (return address=0x{:X})", return_address);
+				const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
+				const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
 
-				bool skip_return = false;
+				emulator_t::address_type return_address = 0;
 
-				(*redirected_function)(skip_return);
+				const emulator_err_t read_error = emulator->read_virtual_memory(rsp, &return_address, sizeof(return_address));
 
-				if (!skip_return)
+				read_error.throw_if("read from stack");
+
+				if (const auto redirected_function = kernel::find_redirected_function(rip))
 				{
-					emulator->write_register<x86::reg::rsp>(rsp + 8);
-					emulator->write_register<x86::reg::rip>(return_address);
+					THREAD_LOG("redirecting function (return address=0x{:X})", return_address);
+
+					bool skip_return = false;
+
+					(*redirected_function)(skip_return);
+
+					if (!skip_return)
+					{
+						emulator->write_register<x86::reg::rsp>(rsp + 8);
+						emulator->write_register<x86::reg::rip>(return_address);
+					}
+
+					return;
 				}
 
-				return;
-			}
+				const auto module = kernel::find_module_from_rip(rip);
 
-			const auto module = kernel::find_module_from_rip(rip);
+				std::string symbol_name;
 
-			std::string symbol_name;
-
-			if (module)
-			{
-				if (const auto symbol = module->find_symbol_by_address(rip))
+				if (module)
 				{
-					if (symbol->second == rip)
+					if (const auto symbol = module->find_symbol_by_address(rip))
 					{
-						symbol_name = symbol->first;
+						if (symbol->second == rip)
+						{
+							symbol_name = symbol->first;
+						}
 					}
 				}
-			}
 
-			if (!symbol_name.empty())
-			{
-				const auto module_name = module ? module->name() : "unknown";
-				THREAD_ERR_LOG("unimplemented function '{}!{}' (address=0x{:X}, return address=0x{:X})", module_name, symbol_name, rip, return_address);
-			}
-			else
-			{
-				const auto module_name = module ? module->name() : "unknown";
-				THREAD_ERR_LOG("unimplemented function in '{}' (address=0x{:X}, return address=0x{:X})", module_name, rip, return_address);
-			}
+				if (!symbol_name.empty())
+				{
+					const auto module_name = module ? module->name() : "unknown";
+					THREAD_ERR_LOG("unimplemented function '{}!{}' (address=0x{:X}, return address=0x{:X})", module_name, symbol_name, rip, return_address);
+				}
+				else
+				{
+					const auto module_name = module ? module->name() : "unknown";
+					THREAD_ERR_LOG("unimplemented function in '{}' (address=0x{:X}, return address=0x{:X})", module_name, rip, return_address);
+				}
 
-			emulator->write_register<x86::reg::rip, emulator_t::address_type>(-1);
+				emulator->write_register<x86::reg::rip, emulator_t::address_type>(-1);
 
-			emulator->stop();
-		};
+				emulator->stop();
+			};
 
 		for (const auto& module : kernel::module_entries)
 		{
@@ -304,16 +375,6 @@ std::int32_t main()
 		emulator_err_t error = emulator->hook_instruction(x86::insn::cpuid,
 			[emulator]()
 			{
-				static bool hooked = false;
-
-				if (!hooked)
-				{
-					patch_dbgctl_check(emulator);
-					patch_is_address_valid_routine(emulator);
-
-					hooked = true;
-				}
-
 				const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
 				const auto rax = emulator->read_register<x86::reg::rax, std::int32_t>();
 
@@ -340,13 +401,26 @@ std::int32_t main()
 			[emulator]()
 			{
 				const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
-	
+
 				THREAD_LOG("rdtsc executed at 0x{:X}", rip);
 
 				return false;
 			},
 			emulator_t::default_start_address,
 			emulator_t::default_end_address
+		).error_or({});
+
+		error.throw_if("instruction hook attach");
+
+		error = emulator->hook_msr(
+			[emulator](const std::uint32_t msr_number, const bool write)
+			{
+				const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
+
+				kernel::handle_exception(emulator, rip, 0, 0);
+
+				THREAD_LOG("msr 0x{:X} accessed at 0x{:X} (write={})", msr_number, rip, write);
+			}
 		).error_or({});
 
 		error.throw_if("instruction hook attach");
