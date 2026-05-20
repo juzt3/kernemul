@@ -200,10 +200,131 @@ bool hm::emulator_t::handle_exception(guest_virtual_processor_t& processor, vmex
 	return true;
 }
 
+void hm::emulator_t::resolve_memory_access_address(guest_virtual_processor_t& processor, vmexit_context_t& context)
+{
+	memory_vmexit_t& info = context.memory_access;
+
+	if (info.virtual_address_valid || !processor.uses_paging())
+	{
+		return;
+	}
+
+	auto instruction_bytes = info.instruction_bytes;
+
+	if (const bool bytes_are_empty = std::ranges::all_of(instruction_bytes, [](std::uint8_t b) { return b == 0; }))
+	{
+		const auto physical_rip = context.processor_state.physical_rip(processor);
+
+		if (physical_rip)
+		{
+			partition_->read_physical_memory(*physical_rip, instruction_bytes);
+		}
+	}
+
+	const auto insn = hm::decode_instruction_full(mode_, instruction_bytes);
+
+	if (!insn)
+	{
+		return;
+	}
+
+	ZydisRegisterContext register_context = { };
+
+	const auto populate_gpr = [&](ZydisRegister r64, ZydisRegister r32, ZydisRegister r16,
+		ZydisRegister r8h, ZydisRegister r8l, std::uint64_t value)
+	{
+		register_context.values[r64] = value;
+		register_context.values[r32] = value & 0xFFFFFFFF;
+		register_context.values[r16] = value & 0xFFFF;
+
+		if (r8l != ZYDIS_REGISTER_NONE)
+		{
+			register_context.values[r8l] = value & 0xFF;
+		}
+
+		if (r8h != ZYDIS_REGISTER_NONE)
+		{
+			register_context.values[r8h] = (value >> 8) & 0xFF;
+		}
+	};
+
+	populate_gpr(ZYDIS_REGISTER_RAX, ZYDIS_REGISTER_EAX, ZYDIS_REGISTER_AX, ZYDIS_REGISTER_AH, ZYDIS_REGISTER_AL, processor.read_register<reg::rax, std::uint64_t>());
+	populate_gpr(ZYDIS_REGISTER_RCX, ZYDIS_REGISTER_ECX, ZYDIS_REGISTER_CX, ZYDIS_REGISTER_CH, ZYDIS_REGISTER_CL, processor.read_register<reg::rcx, std::uint64_t>());
+	populate_gpr(ZYDIS_REGISTER_RDX, ZYDIS_REGISTER_EDX, ZYDIS_REGISTER_DX, ZYDIS_REGISTER_DH, ZYDIS_REGISTER_DL, processor.read_register<reg::rdx, std::uint64_t>());
+	populate_gpr(ZYDIS_REGISTER_RBX, ZYDIS_REGISTER_EBX, ZYDIS_REGISTER_BX, ZYDIS_REGISTER_BH, ZYDIS_REGISTER_BL, processor.read_register<reg::rbx, std::uint64_t>());
+	populate_gpr(ZYDIS_REGISTER_RSP, ZYDIS_REGISTER_ESP, ZYDIS_REGISTER_SP, ZYDIS_REGISTER_NONE, ZYDIS_REGISTER_SPL, processor.read_register<reg::rsp, std::uint64_t>());
+	populate_gpr(ZYDIS_REGISTER_RBP, ZYDIS_REGISTER_EBP, ZYDIS_REGISTER_BP, ZYDIS_REGISTER_NONE, ZYDIS_REGISTER_BPL, processor.read_register<reg::rbp, std::uint64_t>());
+	populate_gpr(ZYDIS_REGISTER_RSI, ZYDIS_REGISTER_ESI, ZYDIS_REGISTER_SI, ZYDIS_REGISTER_NONE, ZYDIS_REGISTER_SIL, processor.read_register<reg::rsi, std::uint64_t>());
+	populate_gpr(ZYDIS_REGISTER_RDI, ZYDIS_REGISTER_EDI, ZYDIS_REGISTER_DI, ZYDIS_REGISTER_NONE, ZYDIS_REGISTER_DIL, processor.read_register<reg::rdi, std::uint64_t>());
+	populate_gpr(ZYDIS_REGISTER_R8, ZYDIS_REGISTER_R8D, ZYDIS_REGISTER_R8W, ZYDIS_REGISTER_NONE, ZYDIS_REGISTER_R8B, processor.read_register<reg::r8, std::uint64_t>());
+	populate_gpr(ZYDIS_REGISTER_R9, ZYDIS_REGISTER_R9D, ZYDIS_REGISTER_R9W, ZYDIS_REGISTER_NONE, ZYDIS_REGISTER_R9B, processor.read_register<reg::r9, std::uint64_t>());
+	populate_gpr(ZYDIS_REGISTER_R10, ZYDIS_REGISTER_R10D, ZYDIS_REGISTER_R10W, ZYDIS_REGISTER_NONE, ZYDIS_REGISTER_R10B, processor.read_register<reg::r10, std::uint64_t>());
+	populate_gpr(ZYDIS_REGISTER_R11, ZYDIS_REGISTER_R11D, ZYDIS_REGISTER_R11W, ZYDIS_REGISTER_NONE, ZYDIS_REGISTER_R11B, processor.read_register<reg::r11, std::uint64_t>());
+	populate_gpr(ZYDIS_REGISTER_R12, ZYDIS_REGISTER_R12D, ZYDIS_REGISTER_R12W, ZYDIS_REGISTER_NONE, ZYDIS_REGISTER_R12B, processor.read_register<reg::r12, std::uint64_t>());
+	populate_gpr(ZYDIS_REGISTER_R13, ZYDIS_REGISTER_R13D, ZYDIS_REGISTER_R13W, ZYDIS_REGISTER_NONE, ZYDIS_REGISTER_R13B, processor.read_register<reg::r13, std::uint64_t>());
+	populate_gpr(ZYDIS_REGISTER_R14, ZYDIS_REGISTER_R14D, ZYDIS_REGISTER_R14W, ZYDIS_REGISTER_NONE, ZYDIS_REGISTER_R14B, processor.read_register<reg::r14, std::uint64_t>());
+	populate_gpr(ZYDIS_REGISTER_R15, ZYDIS_REGISTER_R15D, ZYDIS_REGISTER_R15W, ZYDIS_REGISTER_NONE, ZYDIS_REGISTER_R15B, processor.read_register<reg::r15, std::uint64_t>());
+
+	register_context.values[ZYDIS_REGISTER_RIP] = context.processor_state.rip;
+	register_context.values[ZYDIS_REGISTER_EIP] = context.processor_state.rip & 0xFFFFFFFF;
+	register_context.values[ZYDIS_REGISTER_IP] = context.processor_state.rip & 0xFFFF;
+
+	register_context.values[ZYDIS_REGISTER_RFLAGS] = processor.read_register<reg::rflags, std::uint64_t>();
+
+	register_context.values[ZYDIS_REGISTER_ES] = processor.read_register<reg::es, WHV_X64_SEGMENT_REGISTER>().Base;
+	register_context.values[ZYDIS_REGISTER_CS] = processor.read_register<reg::cs, WHV_X64_SEGMENT_REGISTER>().Base;
+	register_context.values[ZYDIS_REGISTER_SS] = processor.read_register<reg::ss, WHV_X64_SEGMENT_REGISTER>().Base;
+	register_context.values[ZYDIS_REGISTER_DS] = processor.read_register<reg::ds, WHV_X64_SEGMENT_REGISTER>().Base;
+	register_context.values[ZYDIS_REGISTER_FS] = processor.read_register<reg::fs, WHV_X64_SEGMENT_REGISTER>().Base;
+	register_context.values[ZYDIS_REGISTER_GS] = processor.read_register<reg::gs, WHV_X64_SEGMENT_REGISTER>().Base;
+
+	address_type best_address = 0;
+	bool resolved = false;
+
+	for (const auto& operand : insn->visible_operands())
+	{
+		if (operand.type() != decoded_operand_t::op_type::mem)
+		{
+			continue;
+		}
+
+		const auto& raw_operand = static_cast<const ZydisDecodedOperand&>(operand);
+
+		ZyanU64 resolved_address = 0;
+
+		if (!ZYAN_SUCCESS(ZydisCalcAbsoluteAddressEx(&insn->raw(), &raw_operand, context.processor_state.rip, &register_context, &resolved_address)))
+		{
+			continue;
+		}
+
+		if (!resolved)
+		{
+			best_address = resolved_address;
+			resolved = true;
+		}
+
+		const auto translated = processor.translate_virtual_address(resolved_address);
+
+		if (translated && *translated == info.physical_address)
+		{
+			best_address = resolved_address;
+			break;
+		}
+	}
+
+	if (resolved)
+	{
+		info.virtual_address = best_address;
+		info.virtual_address_valid = true;
+	}
+}
+
 bool hm::emulator_t::handle_memory_access(guest_virtual_processor_t& processor, vmexit_context_t& context)
 {
 	bool handled = false;
 	bool step_handled = false;
+
+	resolve_memory_access_address(processor, context);
 
 	const auto valid_rip = context.processor_state.physical_rip(processor).has_value();
 

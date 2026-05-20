@@ -236,6 +236,11 @@ namespace hm
 			return { operands_.begin(), value_.operand_count_visible };
 		}
 
+		[[nodiscard]] const ZydisDecodedInstruction& raw() const noexcept
+		{
+			return value_;
+		}
+
 	protected:
 		ZydisDecodedInstruction value_ = { };
 		std::vector<decoded_operand_t> operands_;

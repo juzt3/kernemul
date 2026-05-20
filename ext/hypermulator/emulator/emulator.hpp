@@ -172,6 +172,7 @@ namespace hm
 
 		void set_memory_hook_step(guest_virtual_processor_t& processor, vmexit_context_t& context,
 		                              const std::shared_ptr<hook_t>& hook, bool& step_handled);
+		void resolve_memory_access_address(guest_virtual_processor_t& processor, vmexit_context_t& context);
 		bool memory_process_memory_hook(guest_virtual_processor_t& processor, vmexit_context_t& context,
 		                                const std::shared_ptr<hook_t>& hook, bool& step_handled);
 
