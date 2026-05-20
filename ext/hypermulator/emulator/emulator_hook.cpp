@@ -357,6 +357,8 @@ bool hm::emulator_t::handle_msr_access(guest_virtual_processor_t& processor, vme
 		if (hook->type == hook_type_t::msr)
 		{
 			process_msr_hook(processor, context, hook);
+
+			handled = true;
 		}
 	}
 
