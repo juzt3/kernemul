@@ -204,6 +204,8 @@ void hm::emulator_t::resolve_memory_access_address(guest_virtual_processor_t& pr
 {
 	memory_vmexit_t& info = context.memory_access;
 
+	info.virtual_address_valid = false;
+
 	if (info.virtual_address_valid || !processor.uses_paging())
 	{
 		return;
@@ -278,9 +280,6 @@ void hm::emulator_t::resolve_memory_access_address(guest_virtual_processor_t& pr
 	register_context.values[ZYDIS_REGISTER_FS] = processor.read_register<reg::fs, WHV_X64_SEGMENT_REGISTER>().Base;
 	register_context.values[ZYDIS_REGISTER_GS] = processor.read_register<reg::gs, WHV_X64_SEGMENT_REGISTER>().Base;
 
-	address_type best_address = 0;
-	bool resolved = false;
-
 	for (const auto& operand : insn->visible_operands())
 	{
 		if (operand.type() != decoded_operand_t::op_type::mem)
@@ -297,25 +296,15 @@ void hm::emulator_t::resolve_memory_access_address(guest_virtual_processor_t& pr
 			continue;
 		}
 
-		if (!resolved)
-		{
-			best_address = resolved_address;
-			resolved = true;
-		}
-
 		const auto translated = processor.translate_virtual_address(resolved_address);
 
 		if (translated && *translated == info.physical_address)
 		{
-			best_address = resolved_address;
-			break;
-		}
-	}
+			info.virtual_address = resolved_address;
+			info.virtual_address_valid = true;
 
-	if (resolved)
-	{
-		info.virtual_address = best_address;
-		info.virtual_address_valid = true;
+			return;
+		}
 	}
 }
 
