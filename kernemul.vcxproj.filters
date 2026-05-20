@@ -219,6 +219,12 @@
     <ClCompile Include="src\impl\cng\cng_bcrypt.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="src\impl\fltmgr\flt_misc.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="ext\hypermulator\arch\register.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="ext\portable_executable\data_directory.hpp">
@@ -489,6 +495,15 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\impl\ci\ci_sign.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\impl\fltmgr\flt_helpers.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\impl\fltmgr\flt_misc.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="ext\hypermulator\arch\register.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
