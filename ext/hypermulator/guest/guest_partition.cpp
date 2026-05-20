@@ -470,6 +470,11 @@ bool hm::guest_partition_t::run_vmexit_callbacks(guest_virtual_processor_t& virt
 	return callback_ran && callback_status;
 }
 
+bool hm::guest_partition_t::set_msr_bitmap(const WHV_PARTITION_PROPERTY& property)
+{
+	return this->set_partition_property(WHvPartitionPropertyCodeX64MsrExitBitmap, property);
+}
+
 bool hm::guest_partition_t::create_partition()
 {
 	return SUCCEEDED(WHvCreatePartition(&handle_));

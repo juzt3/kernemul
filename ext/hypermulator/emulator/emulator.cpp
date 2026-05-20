@@ -156,11 +156,30 @@ void hm::emulator_t::reset_guest_exit_state()
 		}
 	);
 
+	partition_->register_vmexit_callback(vmexit_reason_t::msr_access,
+		[this](guest_virtual_processor_t& processor, vmexit_context_t& context)
+		{
+			return this->handle_msr_access(processor, context);
+		}
+	);
+
 	partition_->set_cpuid_exiting(false);
 	partition_->set_rdtsc_exiting(false);
 
 	partition_->set_debug_exception_exiting(false);
 	partition_->set_page_fault_exception_exiting(true);
+	partition_->set_msr_access_exiting(true);
+
+	WHV_PARTITION_PROPERTY property = {};
+	property.X64MsrExitBitmap.UnhandledMsrs = true;
+	property.X64MsrExitBitmap.TscMsrWrite = true;
+	property.X64MsrExitBitmap.TscMsrRead = true;
+	property.X64MsrExitBitmap.ApicBaseMsrWrite = true;
+	property.X64MsrExitBitmap.MiscEnableMsrRead = true;
+	property.X64MsrExitBitmap.McUpdatePatchLevelMsrRead = true;
+
+	if (!partition_->set_msr_bitmap(property))
+		__debugbreak();
 }
 
 bool hm::emulator_t::map_physical_memory(const address_type physical_address, const size_type size,

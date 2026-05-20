@@ -122,6 +122,19 @@ namespace hm
 		std::array<std::uint8_t, max_instruction_length> instruction_bytes = { };
 	};
 
+	struct msr_vmexit_t
+	{
+		msr_vmexit_t() = default;
+
+		explicit msr_vmexit_t(const WHV_X64_MSR_ACCESS_CONTEXT& whv_context);
+
+		bool is_write;
+		std::uint32_t msr_number;
+
+		std::uint64_t rax;
+		std::uint64_t rdx;
+	};
+
 	struct vmexit_context_t
 	{
 		vmexit_context_t() = default;
@@ -139,6 +152,7 @@ namespace hm
 			cpuid_vmexit_t cpuid;
 			rdtsc_vmexit_t rdtsc;
 			exception_vmexit_t exception;
+			msr_vmexit_t msr;
 		};
 	};
 

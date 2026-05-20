@@ -126,8 +126,8 @@ bool hm::emulator_t::handle_page_fault(guest_virtual_processor_t& processor, con
 }
 
 std::shared_ptr<hm::hook_t> hm::emulator_t::hook_code(const hook_t::code_callback& callback,
-                                                      const address_type start_physical_address,
-                                                      const address_type end_physical_address)
+	const address_type start_physical_address,
+	const address_type end_physical_address)
 {
 	if (!configure_single_step())
 	{
@@ -149,8 +149,8 @@ std::shared_ptr<hm::hook_t> hm::emulator_t::hook_code(const hook_t::code_callbac
 }
 
 std::shared_ptr<hm::hook_t> hm::emulator_t::hook_basic_block(const hook_t::code_callback& callback,
-                                                             const address_type start_physical_address,
-                                                             const address_type end_physical_address)
+	const address_type start_physical_address,
+	const address_type end_physical_address)
 {
 	if (!configure_single_step())
 	{
@@ -234,21 +234,21 @@ void hm::emulator_t::resolve_memory_access_address(guest_virtual_processor_t& pr
 
 	const auto populate_gpr = [&](ZydisRegister r64, ZydisRegister r32, ZydisRegister r16,
 		ZydisRegister r8h, ZydisRegister r8l, std::uint64_t value)
-	{
-		register_context.values[r64] = value;
-		register_context.values[r32] = value & 0xFFFFFFFF;
-		register_context.values[r16] = value & 0xFFFF;
-
-		if (r8l != ZYDIS_REGISTER_NONE)
 		{
-			register_context.values[r8l] = value & 0xFF;
-		}
+			register_context.values[r64] = value;
+			register_context.values[r32] = value & 0xFFFFFFFF;
+			register_context.values[r16] = value & 0xFFFF;
 
-		if (r8h != ZYDIS_REGISTER_NONE)
-		{
-			register_context.values[r8h] = (value >> 8) & 0xFF;
-		}
-	};
+			if (r8l != ZYDIS_REGISTER_NONE)
+			{
+				register_context.values[r8l] = value & 0xFF;
+			}
+
+			if (r8h != ZYDIS_REGISTER_NONE)
+			{
+				register_context.values[r8h] = (value >> 8) & 0xFF;
+			}
+		};
 
 	populate_gpr(ZYDIS_REGISTER_RAX, ZYDIS_REGISTER_EAX, ZYDIS_REGISTER_AX, ZYDIS_REGISTER_AH, ZYDIS_REGISTER_AL, processor.read_register<reg::rax, std::uint64_t>());
 	populate_gpr(ZYDIS_REGISTER_RCX, ZYDIS_REGISTER_ECX, ZYDIS_REGISTER_CX, ZYDIS_REGISTER_CH, ZYDIS_REGISTER_CL, processor.read_register<reg::rcx, std::uint64_t>());
@@ -273,12 +273,14 @@ void hm::emulator_t::resolve_memory_access_address(guest_virtual_processor_t& pr
 
 	register_context.values[ZYDIS_REGISTER_RFLAGS] = processor.read_register<reg::rflags, std::uint64_t>();
 
-	register_context.values[ZYDIS_REGISTER_ES] = processor.read_register<reg::es, WHV_X64_SEGMENT_REGISTER>().Base;
-	register_context.values[ZYDIS_REGISTER_CS] = processor.read_register<reg::cs, WHV_X64_SEGMENT_REGISTER>().Base;
-	register_context.values[ZYDIS_REGISTER_SS] = processor.read_register<reg::ss, WHV_X64_SEGMENT_REGISTER>().Base;
-	register_context.values[ZYDIS_REGISTER_DS] = processor.read_register<reg::ds, WHV_X64_SEGMENT_REGISTER>().Base;
-	register_context.values[ZYDIS_REGISTER_FS] = processor.read_register<reg::fs, WHV_X64_SEGMENT_REGISTER>().Base;
-	register_context.values[ZYDIS_REGISTER_GS] = processor.read_register<reg::gs, WHV_X64_SEGMENT_REGISTER>().Base;
+	const std::pair<ZydisRegister, std::uint64_t> segment_bases[] = {
+		{ ZYDIS_REGISTER_ES, processor.read_register<reg::es, WHV_X64_SEGMENT_REGISTER>().Base },
+		{ ZYDIS_REGISTER_CS, processor.read_register<reg::cs, WHV_X64_SEGMENT_REGISTER>().Base },
+		{ ZYDIS_REGISTER_SS, processor.read_register<reg::ss, WHV_X64_SEGMENT_REGISTER>().Base },
+		{ ZYDIS_REGISTER_DS, processor.read_register<reg::ds, WHV_X64_SEGMENT_REGISTER>().Base },
+		{ ZYDIS_REGISTER_FS, processor.read_register<reg::fs, WHV_X64_SEGMENT_REGISTER>().Base },
+		{ ZYDIS_REGISTER_GS, processor.read_register<reg::gs, WHV_X64_SEGMENT_REGISTER>().Base },
+	};
 
 	for (const auto& operand : insn->visible_operands())
 	{
@@ -294,6 +296,15 @@ void hm::emulator_t::resolve_memory_access_address(guest_virtual_processor_t& pr
 		if (!ZYAN_SUCCESS(ZydisCalcAbsoluteAddressEx(&insn->raw(), &raw_operand, context.processor_state.rip, &register_context, &resolved_address)))
 		{
 			continue;
+		}
+
+		for (const auto& [seg_reg, seg_base] : segment_bases)
+		{
+			if (raw_operand.mem.segment == seg_reg)
+			{
+				resolved_address += seg_base;
+				break;
+			}
 		}
 
 		const auto translated = processor.translate_virtual_address(resolved_address);
@@ -341,10 +352,29 @@ bool hm::emulator_t::handle_memory_access(guest_virtual_processor_t& processor, 
 	return handled;
 }
 
+bool hm::emulator_t::handle_msr_access(guest_virtual_processor_t& processor, vmexit_context_t& context)
+{
+	spdlog::info("msr access write={}, msr_number={:X}, value={:X}", context.msr.is_write, context.msr.msr_number, (context.msr.rax << 32) | context.msr.rdx);
+	__debugbreak();
+
+	if (context.msr.is_write)
+	{
+
+	}
+	else
+	{
+
+	}
+
+	context.advance_rip(processor);
+
+	return true;
+}
+
 void hm::emulator_t::set_block_code_hook_step(const std::shared_ptr<hook_t>& hook)
 {
 	single_step_callbacks_.emplace_back([this, hook]
-		(guest_virtual_processor_t& step_processor, const vmexit_context_t& step_context) -> bool
+	(guest_virtual_processor_t& step_processor, const vmexit_context_t& step_context) -> bool
 		{
 			const auto rip = step_context.processor_state.physical_rip(step_processor);
 
@@ -441,7 +471,7 @@ void hm::emulator_t::set_block_code_hook_step(const std::shared_ptr<hook_t>& hoo
 			}
 
 			shadow_guest_interrupts(step_processor, true);
-		
+
 			return true;
 		});
 }
@@ -459,7 +489,7 @@ void hm::emulator_t::handle_block_hook_overflow(const std::shared_ptr<hook_t>& h
 }
 
 void hm::emulator_t::invoke_block_code_hook_step_callback(const std::shared_ptr<hook_t>& hook, const address_type rip,
-                                                          const std::span<const std::uint8_t> instruction_bytes)
+	const std::span<const std::uint8_t> instruction_bytes)
 {
 	if (hook->in_range(rip))
 	{
@@ -491,7 +521,7 @@ void hm::emulator_t::invoke_block_code_hook_step_callback(const std::shared_ptr<
 }
 
 bool hm::emulator_t::protect_block_code_hook_memory_range(const address_type start_address,
-                                                          const address_type end_address, const bool executable)
+	const address_type end_address, const bool executable)
 {
 	const address_type start_page_address = align_down(start_address, page_size);
 	const address_type end_page_address = align_up(end_address, page_size);
@@ -520,7 +550,7 @@ bool hm::emulator_t::protect_block_code_hook_memory_range(const address_type sta
 }
 
 bool hm::emulator_t::memory_process_block_code_hook(guest_virtual_processor_t& processor, vmexit_context_t& context,
-                                                    const std::shared_ptr<hook_t>& hook)
+	const std::shared_ptr<hook_t>& hook)
 {
 	const memory_vmexit_t& info = context.memory_access;
 	const auto rip = context.processor_state.physical_rip(processor);
@@ -578,7 +608,7 @@ bool hm::emulator_t::memory_process_block_code_hook(guest_virtual_processor_t& p
 }
 
 void hm::emulator_t::set_memory_hook_step(guest_virtual_processor_t& processor, vmexit_context_t& context,
-                                          const std::shared_ptr<hook_t>& hook, bool& step_handled)
+	const std::shared_ptr<hook_t>& hook, bool& step_handled)
 {
 	const auto& hook_memory = std::get<hook_memory_t>(hook->extra_data);
 
@@ -592,7 +622,7 @@ void hm::emulator_t::set_memory_hook_step(guest_virtual_processor_t& processor, 
 	set_trap_flag(processor, true);
 
 	single_step_callbacks_.emplace_back([this, hook_memory, page_address]
-		(guest_virtual_processor_t& step_processor, [[maybe_unused]] const vmexit_context_t& step_context) -> bool
+	(guest_virtual_processor_t& step_processor, [[maybe_unused]] const vmexit_context_t& step_context) -> bool
 		{
 			const protection_type reverted_protection = prot_all & ~hook_memory.protection;
 
@@ -608,7 +638,7 @@ void hm::emulator_t::set_memory_hook_step(guest_virtual_processor_t& processor, 
 }
 
 bool hm::emulator_t::memory_process_memory_hook(guest_virtual_processor_t& processor, vmexit_context_t& context,
-                                                const std::shared_ptr<hook_t>& hook, bool& step_handled)
+	const std::shared_ptr<hook_t>& hook, bool& step_handled)
 {
 	const memory_vmexit_t& info = context.memory_access;
 
@@ -656,8 +686,8 @@ bool hm::emulator_t::memory_process_memory_hook(guest_virtual_processor_t& proce
 }
 
 bool hm::emulator_t::raw_process_invalid_memory_hook(const std::shared_ptr<hook_t>& hook,
-                                                     const address_type accessed_address,
-                                                     const memory_vmexit_t::access access_type)
+	const address_type accessed_address,
+	const memory_vmexit_t::access access_type)
 {
 	const auto& hook_memory = std::get<hook_memory_t>(hook->extra_data);
 
@@ -772,9 +802,9 @@ bool hm::emulator_t::handle_rdtsc_instruction(guest_virtual_processor_t& process
 }
 
 std::shared_ptr<hm::hook_t> hm::emulator_t::hook_instruction(const hook_instruction_t instruction,
-                                                             const hook_t::instruction_callback& callback,
-                                                             const address_type start_address,
-                                                             const address_type end_address)
+	const hook_t::instruction_callback& callback,
+	const address_type start_address,
+	const address_type end_address)
 {
 	if ((instruction == hook_instruction_t::cpuid && partition_->set_cpuid_exiting(true)) ||
 		(instruction == hook_instruction_t::rdtsc && partition_->set_rdtsc_exiting(true)))
@@ -786,9 +816,9 @@ std::shared_ptr<hm::hook_t> hm::emulator_t::hook_instruction(const hook_instruct
 }
 
 std::shared_ptr<hm::hook_t> hm::emulator_t::hook_memory(const protection_type protection,
-                                                        const hook_t::memory_access_callback& callback,
-                                                        const address_type start_physical_address,
-                                                        const address_type end_physical_address)
+	const hook_t::memory_access_callback& callback,
+	const address_type start_physical_address,
+	const address_type end_physical_address)
 {
 	if (!configure_single_step())
 	{
@@ -823,9 +853,9 @@ std::shared_ptr<hm::hook_t> hm::emulator_t::hook_memory(const protection_type pr
 }
 
 std::shared_ptr<hm::hook_t> hm::emulator_t::hook_invalid_memory(const protection_type protection,
-                                                                const hook_t::invalid_memory_callback& callback,
-                                                                const address_type start_address,
-                                                                const address_type end_address)
+	const hook_t::invalid_memory_callback& callback,
+	const address_type start_address,
+	const address_type end_address)
 {
 	if (!partition_->set_page_fault_exception_exiting(true))
 	{

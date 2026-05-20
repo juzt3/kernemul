@@ -161,6 +161,7 @@ namespace hm
 
 		bool handle_exception(guest_virtual_processor_t& processor, vmexit_context_t& context);
 		bool handle_memory_access(guest_virtual_processor_t& processor, vmexit_context_t& context);
+		bool handle_msr_access(guest_virtual_processor_t& processor, vmexit_context_t& context);
 
 		void set_block_code_hook_step(const std::shared_ptr<hook_t>& hook);
 		void handle_block_hook_overflow(const std::shared_ptr<hook_t>& hook, address_type rip);

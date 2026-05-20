@@ -33,7 +33,8 @@ hm::memory_vmexit_t::memory_vmexit_t(const WHV_MEMORY_ACCESS_CONTEXT& whv_contex
 			physical_address(whv_context.Gpa),
 			virtual_address(whv_context.Gva)
 {
-	std::memcpy(instruction_bytes.data(), whv_context.InstructionBytes, instruction_bytes.size());
+	instruction_bytes.fill(0);
+	std::memcpy(instruction_bytes.data(), whv_context.InstructionBytes, whv_context.InstructionByteCount);
 }
 
 hm::cpuid_vmexit_t::cpuid_vmexit_t(const WHV_X64_CPUID_ACCESS_CONTEXT& whv_context)
@@ -60,7 +61,15 @@ hm::exception_vmexit_t::exception_vmexit_t(const WHV_VP_EXCEPTION_CONTEXT& whv_c
 			error_code(whv_context.ExceptionInfo.ErrorCodeValid ? whv_context.ErrorCode : std::optional<error_code_type>(std::nullopt)),
 			exception_parameter(whv_context.ExceptionParameter)
 {
-	std::memcpy(instruction_bytes.data(), whv_context.InstructionBytes, instruction_bytes.size());
+	instruction_bytes.fill(0);
+	std::memcpy(instruction_bytes.data(), whv_context.InstructionBytes, whv_context.InstructionByteCount);
+}
+
+hm::msr_vmexit_t::msr_vmexit_t(const WHV_X64_MSR_ACCESS_CONTEXT& whv_context)
+	: is_write(whv_context.AccessInfo.IsWrite), msr_number(whv_context.MsrNumber), 
+	rax(whv_context.Rax), rdx(whv_context.Rdx)
+{
+
 }
 
 hm::vmexit_context_t::vmexit_context_t(const WHV_RUN_VP_EXIT_CONTEXT& whv_context)
@@ -80,6 +89,9 @@ hm::vmexit_context_t::vmexit_context_t(const WHV_RUN_VP_EXIT_CONTEXT& whv_contex
 		break;
 	case vmexit_reason_t::exception:
 		exception = exception_vmexit_t{ whv_context.VpException };
+		break;
+	case vmexit_reason_t::msr_access:
+		msr = msr_vmexit_t{ whv_context.MsrAccess };
 		break;
 	default:
 		break;
