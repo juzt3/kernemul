@@ -27,7 +27,7 @@ namespace hm
 
 	struct hook_basic_block_t
 	{
-		bool was_control_flow;
+
 	};
 
 	enum class hook_type_t : std::uint8_t
@@ -206,5 +206,7 @@ namespace hm
 		std::vector<vmexit_callback_t::routine_type> single_step_callbacks_;
 
 		std::vector<std::shared_ptr<hook_t>> hooks_ = { };
+
+		bool block_hook_was_control_flow_ = false;
 	};
 }
