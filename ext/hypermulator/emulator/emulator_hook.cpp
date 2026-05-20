@@ -204,8 +204,6 @@ void hm::emulator_t::resolve_memory_access_address(guest_virtual_processor_t& pr
 {
 	memory_vmexit_t& info = context.memory_access;
 
-	info.virtual_address_valid = false;
-
 	if (info.virtual_address_valid || !processor.uses_paging())
 	{
 		return;
@@ -273,7 +271,7 @@ void hm::emulator_t::resolve_memory_access_address(guest_virtual_processor_t& pr
 
 	register_context.values[ZYDIS_REGISTER_RFLAGS] = processor.read_register<reg::rflags, std::uint64_t>();
 
-	const std::array<std::pair<ZydisRegister, std::uint64_t>, 6> segment_bases = {
+	const std::pair<ZydisRegister, std::uint64_t> segment_bases[] = {
 		{ ZYDIS_REGISTER_ES, processor.read_register<reg::es, WHV_X64_SEGMENT_REGISTER>().Base },
 		{ ZYDIS_REGISTER_CS, processor.read_register<reg::cs, WHV_X64_SEGMENT_REGISTER>().Base },
 		{ ZYDIS_REGISTER_SS, processor.read_register<reg::ss, WHV_X64_SEGMENT_REGISTER>().Base },
