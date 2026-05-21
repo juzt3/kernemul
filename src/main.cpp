@@ -259,6 +259,7 @@ std::int32_t main()
 		kernel::map_kernel_image(emulator, "win32k.sys", false);
 		kernel::map_kernel_image(emulator, "cng.sys", false, L"\\SystemRoot\\System32\\drivers\\");
 		kernel::map_kernel_image(emulator, "FLTMGR.SYS", false, L"\\SystemRoot\\System32\\drivers\\");
+		kernel::map_kernel_image(emulator, "tbs.sys", false, L"\\SystemRoot\\System32\\drivers\\");
 
 		kernel::emulated_module = kernel::map_kernel_image(emulator, EMULATED_MODULE_NAME, true, EMULATED_MODULE_DIRECTORY);
 
@@ -448,11 +449,11 @@ std::int32_t main()
 		kernel::run_all_threads(emulator, entry_point_address);
 
 		const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
-		const auto rax = emulator->read_register<x86::reg::rax, emulator_t::address_type>();
+		const auto rcx = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
 		const auto rdx = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
 		const auto rdi = emulator->read_register<x86::reg::rdi, emulator_t::address_type>();
 
-		GLOBAL_LOG("emulation finished at rip=0x{:X}, rax=0x{:X}, rdx=0x{:X}, rdi=0x{:X}", rip, rax, rdx, rdi);
+		GLOBAL_LOG("emulation finished at rip=0x{:X}, rcx=0x{:X}, rdx=0x{:X}, rdi=0x{:X}", rip, rcx, rdx, rdi);
 
 		error.throw_if("emulation running");
 	}
