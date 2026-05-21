@@ -1049,6 +1049,39 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 	redirect_function(
 		[emulator]
 		{
+			const auto mutex_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto level = emulator->read_register<x86::reg::rdx, std::uint32_t>();
+
+			std::uint8_t zero[0x38] = {};
+			emulator_err_t error = emulator->write_virtual_memory(mutex_address, &zero, sizeof(zero));
+			error.throw_if("KeInitializeMutex: zero struct");
+
+			constexpr std::uint8_t mutant_type = 2;
+			error = emulator->write_virtual_memory(mutex_address + 0x00, &mutant_type, sizeof(mutant_type));
+			error.throw_if("KeInitializeMutex: write Type");
+
+			constexpr std::int32_t signal_state = 1;
+			error = emulator->write_virtual_memory(mutex_address + 0x04, &signal_state, sizeof(signal_state));
+			error.throw_if("KeInitializeMutex: write SignalState");
+
+			const auto wait_list_head = mutex_address + 0x08;
+			const std::uint64_t wait_list_pointers[2] = { wait_list_head, wait_list_head };
+			error = emulator->write_virtual_memory(mutex_address + 0x08, &wait_list_pointers, sizeof(wait_list_pointers));
+			error.throw_if("KeInitializeMutex: write WaitListHead");
+
+			constexpr std::uint8_t apc_disable = 1;
+			error = emulator->write_virtual_memory(mutex_address + 0x31, &apc_disable, sizeof(apc_disable));
+			error.throw_if("KeInitializeMutex: write ApcDisable");
+
+			THREAD_LOG("KeInitializeMutex called (mutex=0x{:X}, level={})", mutex_address, level);
+		},
+		mapped_image,
+		"KeInitializeMutex"
+	);
+
+	redirect_function(
+		[emulator]
+		{
 			const emulator_t::address_type thread_handle_out = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
 			const std::uint32_t desired_access = emulator->read_register<x86::reg::rdx, std::uint32_t>();
 			const emulator_t::address_type object_attributes = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
