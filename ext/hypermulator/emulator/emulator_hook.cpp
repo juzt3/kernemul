@@ -112,8 +112,10 @@ bool hm::emulator_t::handle_page_fault(guest_virtual_processor_t& processor, con
 
 	bool handled = false;
 
-	for (const auto& hook : hooks_)
+	for (std::size_t i = 0; i < hooks_.size(); i++)
 	{
+		const auto& hook = hooks_[i];
+
 		if (hook->type != hook_type_t::invalid_memory)
 		{
 			continue;
@@ -703,8 +705,10 @@ bool hm::emulator_t::handle_cpuid_instruction(guest_virtual_processor_t& process
 
 	bool should_skip = false;
 
-	for (const auto& hook : hooks_)
+	for (std::size_t i = 0; i < hooks_.size(); i++)
 	{
+		const auto& hook = hooks_[i];
+
 		if (hook->type != hook_type_t::instruction)
 		{
 			continue;
@@ -749,8 +753,10 @@ bool hm::emulator_t::handle_rdtsc_instruction(guest_virtual_processor_t& process
 
 	bool should_skip = false;
 
-	for (const auto& hook : hooks_)
+	for (std::size_t i = 0; i < hooks_.size(); i++)
 	{
+		const auto& hook = hooks_[i];
+
 		if (hook->type != hook_type_t::instruction)
 		{
 			continue;

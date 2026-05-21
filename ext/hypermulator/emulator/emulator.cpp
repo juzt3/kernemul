@@ -74,8 +74,10 @@ bool hm::emulator_t::run_at(const address_type start_address, const address_type
 	{
 		single_step_callbacks_.clear();
 
-		for (const auto& hook : hooks_)
+		for (std::size_t i = 0; i < hooks_.size(); i++)
 		{
+			const auto& hook = hooks_[i];
+
 			if (hook->type != hook_type_t::memory_access)
 			{
 				continue;
