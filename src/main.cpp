@@ -260,6 +260,8 @@ std::int32_t main()
 		kernel::map_kernel_image(emulator, "cng.sys", false, L"\\SystemRoot\\System32\\drivers\\");
 		kernel::map_kernel_image(emulator, "FLTMGR.SYS", false, L"\\SystemRoot\\System32\\drivers\\");
 		kernel::map_kernel_image(emulator, "tbs.sys", false, L"\\SystemRoot\\System32\\drivers\\");
+		kernel::map_kernel_image(emulator, "tdi.sys", false, L"\\SystemRoot\\System32\\drivers\\");
+		kernel::map_kernel_image(emulator, "WdfLdr.sys", false, L"\\SystemRoot\\System32\\drivers\\");
 
 		kernel::emulated_module = kernel::map_kernel_image(emulator, EMULATED_MODULE_NAME, true, EMULATED_MODULE_DIRECTORY);
 
