@@ -335,6 +335,110 @@ void redirect_ntoskrnl_memory_functions(const std::shared_ptr<emulator_t>& emula
 		[emulator]
 		{
 			const auto physical_address = emulator->read_register<x86::reg::rcx, std::uint64_t>();
+
+			const auto virtual_address = emulator->translate_physical_address(physical_address);
+
+			if (!virtual_address)
+			{
+				THREAD_WARN_LOG("MmGetVirtualForPhysical called with unmapped physical address 0x{:X}", physical_address);
+
+				write_return_value(emulator, 0);
+
+				return;
+			}
+
+			THREAD_LOG("MmGetVirtualForPhysical called (physical=0x{:X}) -> 0x{:X}", physical_address, *virtual_address);
+
+			write_return_value(emulator, *virtual_address);
+		},
+		mapped_image,
+		"MmGetVirtualForPhysical"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto target_address = emulator->read_register<x86::reg::rcx, std::uint64_t>();
+			const auto source_address = emulator->read_register<x86::reg::rdx, std::uint64_t>();
+			const auto number_of_bytes = emulator->read_register<x86::reg::r8, std::uint64_t>();
+			const auto flags = emulator->read_register<x86::reg::r9, std::uint32_t>();
+
+			const auto rsp = emulator->read_register<x86::reg::rsp, std::uint64_t>();
+			std::uint64_t bytes_transferred_address = 0;
+			static_cast<void>(emulator->read_virtual_memory(rsp + 0x28, &bytes_transferred_address, sizeof(bytes_transferred_address)));
+
+			constexpr std::uint32_t mm_copy_memory_physical = 0x1;
+			constexpr std::uint32_t mm_copy_memory_virtual = 0x2;
+
+			if (!number_of_bytes || (flags != mm_copy_memory_physical && flags != mm_copy_memory_virtual))
+			{
+				THREAD_WARN_LOG("MmCopyMemory called with invalid params (target=0x{:X}, source=0x{:X}, size=0x{:X}, flags=0x{:X})",
+					target_address, source_address, number_of_bytes, flags);
+
+				write_nt_status(emulator, 0xC000000D);
+
+				return;
+			}
+
+			std::uint64_t resolved_source = source_address;
+
+			if (flags == mm_copy_memory_physical)
+			{
+				const auto virtual_address = emulator->translate_physical_address(source_address);
+
+				if (!virtual_address)
+				{
+					THREAD_WARN_LOG("MmCopyMemory called with unmapped physical source 0x{:X}", source_address);
+
+					write_nt_status(emulator, 0x8000000D);
+
+					return;
+				}
+
+				resolved_source = *virtual_address;
+			}
+
+			std::vector<std::uint8_t> buffer(number_of_bytes);
+
+			const auto read_error = emulator->read_virtual_memory(resolved_source, buffer.data(), number_of_bytes);
+
+			if (read_error)
+			{
+				THREAD_WARN_LOG("MmCopyMemory failed to read source memory (source=0x{:X}, size=0x{:X})", resolved_source, number_of_bytes);
+
+				write_nt_status(emulator, 0x8000000D);
+
+				return;
+			}
+
+			const auto write_error = emulator->write_virtual_memory(target_address, buffer.data(), number_of_bytes);
+
+			if (write_error)
+			{
+				THREAD_WARN_LOG("MmCopyMemory failed to write target memory (target=0x{:X}, size=0x{:X})", target_address, number_of_bytes);
+
+				write_nt_status(emulator, 0x8000000D);
+
+				return;
+			}
+
+			if (bytes_transferred_address)
+			{
+				static_cast<void>(emulator->write_virtual_memory(bytes_transferred_address, &number_of_bytes, sizeof(number_of_bytes)));
+			}
+
+			THREAD_LOG("MmCopyMemory called (target=0x{:X}, source=0x{:X}, size=0x{:X}, flags=0x{:X}) -> success", target_address, source_address, number_of_bytes, flags);
+
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"MmCopyMemory"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto physical_address = emulator->read_register<x86::reg::rcx, std::uint64_t>();
 			const auto number_of_bytes = emulator->read_register<x86::reg::rdx, std::uint64_t>();
 			const auto cache_type = emulator->read_register<x86::reg::r8, std::uint32_t>() & 0xFF;
 

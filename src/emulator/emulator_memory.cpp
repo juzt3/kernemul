@@ -180,6 +180,22 @@ std::optional<emulator_t::address_type> emulator_t::translate_virtual_address(co
 	return mapping.physical_address + virtual_address.page_offset;
 }
 
+std::optional<emulator_t::address_type> emulator_t::translate_physical_address(const address_type physical_address) const
+{
+	const address_type aligned_physical = align_down(physical_address, page_size);
+	const address_type page_offset = physical_address - aligned_physical;
+
+	for (const auto& [virtual_page, mapping] : virtual_page_mappings_)
+	{
+		if (mapping.physical_address == aligned_physical)
+		{
+			return virtual_page + page_offset;
+		}
+	}
+
+	return { };
+}
+
 bool emulator_t::is_physical_address_valid(const address_type physical_address) const
 {
 	const address_type aligned_physical = align_down(physical_address, page_size);

@@ -289,6 +289,8 @@ public:
 
 	std::optional<address_type> translate_virtual_address(address_type address);
 
+	std::optional<address_type> translate_physical_address(address_type physical_address) const;
+
 	bool is_physical_address_valid(address_type physical_address) const;
 
 	[[nodiscard]] std::vector<physical_memory_range_t> physical_memory_ranges() const;
