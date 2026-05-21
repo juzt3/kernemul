@@ -61,8 +61,21 @@ static void block_pending_single_step_exception(hm::guest_virtual_processor_t& p
 	processor.write_register<hm::reg::pending_debug_exception>(debug_exception);
 }
 
+static void inject_guest_exception(hm::guest_virtual_processor_t& processor, const std::uint16_t vector)
+{
+	WHV_X64_PENDING_EXCEPTION_EVENT event = { };
+
+	event.EventPending = 1;
+	event.EventType = WHvX64PendingEventException;
+	event.Vector = vector;
+
+	processor.write_register<hm::reg::pending_event>(event);
+}
+
 void hm::emulator_t::single_step(guest_virtual_processor_t& processor, vmexit_context_t& context)
 {
+	const bool has_callbacks = !single_step_callbacks_.empty();
+
 	for (std::uint32_t i = 0; i < single_step_callbacks_.size(); i++)
 	{
 		const auto it = single_step_callbacks_.begin() + i;
@@ -80,6 +93,11 @@ void hm::emulator_t::single_step(guest_virtual_processor_t& processor, vmexit_co
 		context.exception.id == exception_id_t::debug_trap)
 	{
 		set_trap_flag(processor, !single_step_callbacks_.empty());
+
+		if (!has_callbacks)
+		{
+			inject_guest_exception(processor, 1);
+		}
 	}
 }
 
