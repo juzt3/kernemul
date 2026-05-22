@@ -1564,7 +1564,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 		"qsort"
 	);
 
-	const auto wait_for_single_handler = [emulator](const std::string_view caller_name)
+	const auto wait_for_single_handler = [emulator](const std::string_view caller_name, bool& skip_return)
 	{
 		const auto object_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
 		const auto wait_reason = emulator->read_register<x86::reg::rdx, std::uint32_t>();
@@ -1594,6 +1594,28 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 
 		if (signal_state > 0)
 		{
+			std::uint8_t object_type = 0;
+			static_cast<void>(emulator->read_virtual_memory(
+				object_address + offsetof(_KEVENT, Header.Type), &object_type, sizeof(object_type)));
+
+			constexpr std::uint8_t synchronization_event = 1;
+			constexpr std::uint8_t semaphore_object = 5;
+
+			if (object_type == synchronization_event)
+			{
+				const std::int32_t unsignaled = 0;
+				static_cast<void>(emulator->write_virtual_memory(
+					object_address + offsetof(_KEVENT, Header.SignalState), &unsignaled, sizeof(unsignaled)));
+				THREAD_LOG("{} - synchronization event auto-reset (object=0x{:X})", caller_name, object_address);
+			}
+			else if (object_type == semaphore_object)
+			{
+				const std::int32_t new_state = signal_state - 1;
+				static_cast<void>(emulator->write_virtual_memory(
+					object_address + offsetof(_KEVENT, Header.SignalState), &new_state, sizeof(new_state)));
+				THREAD_LOG("{} - semaphore decremented (object=0x{:X}, new_state={})", caller_name, object_address, new_state);
+			}
+
 			write_nt_status(emulator, 0);
 			return;
 		}
@@ -1605,17 +1627,51 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 			return;
 		}
 
-		write_nt_status(emulator, 0);
+		constexpr std::uint32_t status_timeout = 0x102;
+		constexpr std::int64_t check_interval_100ns = 1000000; // 100ms in 100ns units
+
+		if (has_timeout)
+		{
+			const auto remaining_100ns = std::abs(timeout_value);
+
+			if (remaining_100ns <= check_interval_100ns)
+			{
+				const auto sleep_ms = std::chrono::milliseconds(std::max<std::int64_t>(1, remaining_100ns / 10000));
+				THREAD_LOG("{} - object not signaled, final sleep {}ms then timeout", caller_name, sleep_ms.count());
+				kernel::current_thread->sleep_for(sleep_ms);
+				write_nt_status(emulator, status_timeout);
+				kernel::switch_thread(emulator, false, true);
+			}
+			else
+			{
+				THREAD_LOG("{} - object not signaled, sleeping 100ms and re-checking ({}ms remaining)",
+					caller_name, remaining_100ns / 10000);
+				kernel::current_thread->sleep_for(std::chrono::milliseconds(100));
+
+				const std::int64_t new_timeout = -(remaining_100ns - check_interval_100ns);
+				static_cast<void>(emulator->write_virtual_memory(timeout_ptr, &new_timeout, sizeof(new_timeout)));
+
+				skip_return = true;
+				kernel::switch_thread(emulator, false, true);
+			}
+		}
+		else
+		{
+			THREAD_LOG("{} - object not signaled, sleeping and re-checking (infinite wait)", caller_name);
+			kernel::current_thread->sleep_for(std::chrono::milliseconds(100));
+			skip_return = true;
+			kernel::switch_thread(emulator, false, true);
+		}
 	};
 
 	redirect_function(
-		[wait_for_single_handler] { wait_for_single_handler("KeWaitForSingleObject"); },
+		[wait_for_single_handler](bool& skip_return) { wait_for_single_handler("KeWaitForSingleObject", skip_return); },
 		mapped_image,
 		"KeWaitForSingleObject"
 	);
 
 	redirect_function(
-		[emulator, wait_for_single_handler]
+		[emulator, wait_for_single_handler](bool& skip_return)
 		{
 			const auto count = emulator->read_register<x86::reg::rcx, std::uint32_t>();
 			const auto objects_ptr = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
@@ -1659,7 +1715,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 				const auto timeout_on_stack_address = rsp + 0x28;
 				static_cast<void>(emulator->write_virtual_memory(timeout_on_stack_address, &timeout_ptr, sizeof(timeout_ptr)));
 
-				wait_for_single_handler("KeWaitForMultipleObjects(1)");
+				wait_for_single_handler("KeWaitForMultipleObjects(1)", skip_return);
 				return;
 			}
 
@@ -1669,6 +1725,8 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 			error.throw_if("KeWaitForMultipleObjects: read object array");
 
 			constexpr std::uint32_t wait_all = 1;
+			constexpr std::uint32_t status_timeout = 0x102;
+			constexpr std::int64_t check_interval_100ns = 1000000;
 
 			if (wait_type == wait_all)
 			{
@@ -1690,18 +1748,74 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 
 				if (all_signaled)
 				{
+					constexpr std::uint8_t synchronization_event = 1;
+					constexpr std::uint8_t semaphore_object = 5;
+
+					for (std::uint32_t i = 0; i < count; ++i)
+					{
+						std::uint8_t object_type = 0;
+						static_cast<void>(emulator->read_virtual_memory(
+							object_addresses[i] + offsetof(_KEVENT, Header.Type), &object_type, sizeof(object_type)));
+
+						if (object_type == synchronization_event)
+						{
+							const std::int32_t unsignaled = 0;
+							static_cast<void>(emulator->write_virtual_memory(
+								object_addresses[i] + offsetof(_KEVENT, Header.SignalState), &unsignaled, sizeof(unsignaled)));
+						}
+						else if (object_type == semaphore_object)
+						{
+							std::int32_t state = 0;
+							static_cast<void>(emulator->read_virtual_memory(
+								object_addresses[i] + offsetof(_KEVENT, Header.SignalState), &state, sizeof(state)));
+							const std::int32_t new_state = state - 1;
+							static_cast<void>(emulator->write_virtual_memory(
+								object_addresses[i] + offsetof(_KEVENT, Header.SignalState), &new_state, sizeof(new_state)));
+						}
+					}
+
 					write_nt_status(emulator, 0);
 					return;
 				}
 
 				if (has_timeout && timeout_value == 0)
 				{
-					constexpr std::uint32_t status_timeout = 0x102;
 					write_nt_status(emulator, status_timeout);
 					return;
 				}
 
-				write_nt_status(emulator, 0);
+				if (has_timeout)
+				{
+					const auto remaining_100ns = std::abs(timeout_value);
+
+					if (remaining_100ns <= check_interval_100ns)
+					{
+						const auto sleep_ms = std::chrono::milliseconds(std::max<std::int64_t>(1, remaining_100ns / 10000));
+						THREAD_LOG("KeWaitForMultipleObjects(WaitAll) - not all signaled, final sleep {}ms then timeout", sleep_ms.count());
+						kernel::current_thread->sleep_for(sleep_ms);
+						write_nt_status(emulator, status_timeout);
+						kernel::switch_thread(emulator, false, true);
+					}
+					else
+					{
+						THREAD_LOG("KeWaitForMultipleObjects(WaitAll) - not all signaled, sleeping 100ms and re-checking ({}ms remaining)",
+							remaining_100ns / 10000);
+						kernel::current_thread->sleep_for(std::chrono::milliseconds(100));
+
+						const std::int64_t new_timeout = -(remaining_100ns - check_interval_100ns);
+						static_cast<void>(emulator->write_virtual_memory(timeout_ptr, &new_timeout, sizeof(new_timeout)));
+
+						skip_return = true;
+						kernel::switch_thread(emulator, false, true);
+					}
+				}
+				else
+				{
+					THREAD_LOG("KeWaitForMultipleObjects(WaitAll) - not all signaled, sleeping and re-checking (infinite wait)");
+					kernel::current_thread->sleep_for(std::chrono::milliseconds(100));
+					skip_return = true;
+					kernel::switch_thread(emulator, false, true);
+				}
 			}
 			else
 			{
@@ -1715,6 +1829,26 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 
 					if (signal_state > 0)
 					{
+						std::uint8_t object_type = 0;
+						static_cast<void>(emulator->read_virtual_memory(
+							object_addresses[i] + offsetof(_KEVENT, Header.Type), &object_type, sizeof(object_type)));
+
+						constexpr std::uint8_t synchronization_event = 1;
+						constexpr std::uint8_t semaphore_object = 5;
+
+						if (object_type == synchronization_event)
+						{
+							const std::int32_t unsignaled = 0;
+							static_cast<void>(emulator->write_virtual_memory(
+								object_addresses[i] + offsetof(_KEVENT, Header.SignalState), &unsignaled, sizeof(unsignaled)));
+						}
+						else if (object_type == semaphore_object)
+						{
+							const std::int32_t new_state = signal_state - 1;
+							static_cast<void>(emulator->write_virtual_memory(
+								object_addresses[i] + offsetof(_KEVENT, Header.SignalState), &new_state, sizeof(new_state)));
+						}
+
 						write_nt_status(emulator, static_cast<std::uint32_t>(i));
 						return;
 					}
@@ -1722,12 +1856,42 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 
 				if (has_timeout && timeout_value == 0)
 				{
-					constexpr std::uint32_t status_timeout = 0x102;
 					write_nt_status(emulator, status_timeout);
 					return;
 				}
 
-				write_nt_status(emulator, 0);
+				if (has_timeout)
+				{
+					const auto remaining_100ns = std::abs(timeout_value);
+
+					if (remaining_100ns <= check_interval_100ns)
+					{
+						const auto sleep_ms = std::chrono::milliseconds(std::max<std::int64_t>(1, remaining_100ns / 10000));
+						THREAD_LOG("KeWaitForMultipleObjects(WaitAny) - none signaled, final sleep {}ms then timeout", sleep_ms.count());
+						kernel::current_thread->sleep_for(sleep_ms);
+						write_nt_status(emulator, status_timeout);
+						kernel::switch_thread(emulator, false, true);
+					}
+					else
+					{
+						THREAD_LOG("KeWaitForMultipleObjects(WaitAny) - none signaled, sleeping 100ms and re-checking ({}ms remaining)",
+							remaining_100ns / 10000);
+						kernel::current_thread->sleep_for(std::chrono::milliseconds(100));
+
+						const std::int64_t new_timeout = -(remaining_100ns - check_interval_100ns);
+						static_cast<void>(emulator->write_virtual_memory(timeout_ptr, &new_timeout, sizeof(new_timeout)));
+
+						skip_return = true;
+						kernel::switch_thread(emulator, false, true);
+					}
+				}
+				else
+				{
+					THREAD_LOG("KeWaitForMultipleObjects(WaitAny) - none signaled, sleeping and re-checking (infinite wait)");
+					kernel::current_thread->sleep_for(std::chrono::milliseconds(100));
+					skip_return = true;
+					kernel::switch_thread(emulator, false, true);
+				}
 			}
 		},
 		mapped_image,
