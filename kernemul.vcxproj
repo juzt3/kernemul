@@ -204,6 +204,7 @@
     <ClCompile Include="src\impl\ci\ci_sign.cpp" />
     <ClCompile Include="src\impl\cng\cng_bcrypt.cpp" />
     <ClCompile Include="src\impl\fltmgr\flt_misc.cpp" />
+    <ClCompile Include="src\impl\tbs\tbs_misc.cpp" />
     <ClCompile Include="src\impl\ntoskrnl\nt_crashdump.cpp" />
     <ClCompile Include="src\impl\ntoskrnl\nt_misc.cpp" />
     <ClCompile Include="src\impl\ntoskrnl\nt_object.cpp" />
@@ -289,6 +290,8 @@
     <ClInclude Include="src\emulator\emulator.hpp" />
     <ClInclude Include="src\emulator\object.hpp" />
     <ClInclude Include="src\filesystem\filesystem.hpp" />
+    <ClInclude Include="src\impl\tbs\tbs_helpers.hpp" />
+    <ClInclude Include="src\impl\tbs\tbs_misc.hpp" />
     <ClInclude Include="src\registry\registry.hpp" />
     <ClInclude Include="src\image\mapped_image.hpp" />
     <ClInclude Include="src\image\pdb\pdb_file.hpp" />
