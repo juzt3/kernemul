@@ -1082,6 +1082,81 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 	redirect_function(
 		[emulator]
 		{
+			const auto mutex_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto wait = emulator->read_register<x86::reg::rdx, std::uint8_t>();
+
+			// read previous SignalState
+			std::int32_t previous_state = 0;
+			emulator_err_t error = emulator->read_virtual_memory(mutex_address + 0x04, &previous_state, sizeof(previous_state));
+			error.throw_if("KeReleaseMutex: read SignalState");
+
+			// increment SignalState
+			const std::int32_t new_state = previous_state + 1;
+			error = emulator->write_virtual_memory(mutex_address + 0x04, &new_state, sizeof(new_state));
+			error.throw_if("KeReleaseMutex: write SignalState");
+
+			// clear OwnerThread
+			constexpr std::uint64_t null_owner = 0;
+			error = emulator->write_virtual_memory(mutex_address + 0x28, &null_owner, sizeof(null_owner));
+			error.throw_if("KeReleaseMutex: write OwnerThread");
+
+			THREAD_LOG("KeReleaseMutex called (mutex=0x{:X}, wait={}) -> {}", mutex_address, wait, previous_state);
+
+			write_return_value(emulator, static_cast<std::uint64_t>(previous_state));
+		},
+		mapped_image,
+		"KeReleaseMutex"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto mutex_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+
+			// Count = 0 (acquired)
+			constexpr std::int32_t count = 0;
+			emulator_err_t error = emulator->write_virtual_memory(
+				mutex_address + offsetof(_FAST_MUTEX, Count), &count, sizeof(count));
+			error.throw_if("ExAcquireFastMutex: write Count");
+
+			// Owner = current thread
+			const auto thread_address = kernel::current_thread->address();
+			error = emulator->write_virtual_memory(
+				mutex_address + offsetof(_FAST_MUTEX, Owner), &thread_address, sizeof(thread_address));
+			error.throw_if("ExAcquireFastMutex: write Owner");
+
+			THREAD_LOG("ExAcquireFastMutex called (mutex=0x{:X})", mutex_address);
+		},
+		mapped_image,
+		"ExAcquireFastMutex"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto mutex_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+
+			// Count = 1 (released)
+			constexpr std::int32_t count = 1;
+			emulator_err_t error = emulator->write_virtual_memory(
+				mutex_address + offsetof(_FAST_MUTEX, Count), &count, sizeof(count));
+			error.throw_if("ExReleaseFastMutex: write Count");
+
+			// Owner = NULL
+			constexpr std::uint64_t null_owner = 0;
+			error = emulator->write_virtual_memory(
+				mutex_address + offsetof(_FAST_MUTEX, Owner), &null_owner, sizeof(null_owner));
+			error.throw_if("ExReleaseFastMutex: write Owner");
+
+			THREAD_LOG("ExReleaseFastMutex called (mutex=0x{:X})", mutex_address);
+		},
+		mapped_image,
+		"ExReleaseFastMutex"
+	);
+
+	redirect_function(
+		[emulator]
+		{
 			const emulator_t::address_type thread_handle_out = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
 			const std::uint32_t desired_access = emulator->read_register<x86::reg::rdx, std::uint32_t>();
 			const emulator_t::address_type object_attributes = emulator->read_register<x86::reg::r8, emulator_t::address_type>();

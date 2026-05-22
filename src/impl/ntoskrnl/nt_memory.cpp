@@ -301,6 +301,34 @@ void redirect_ntoskrnl_memory_functions(const std::shared_ptr<emulator_t>& emula
 	redirect_function(
 		[emulator]
 		{
+			const auto size = emulator->read_register<x86::reg::rcx, std::uint64_t>();
+			const auto lowest = emulator->read_register<x86::reg::rdx, std::uint64_t>();
+			const auto highest = emulator->read_register<x86::reg::r8, std::uint64_t>();
+			const auto boundary = emulator->read_register<x86::reg::r9, std::uint64_t>();
+
+			const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
+			std::uint32_t cache_type = 0;
+			static_cast<void>(emulator->read_virtual_memory(rsp + 0x28, &cache_type, sizeof(cache_type)));
+			std::uint32_t preferred_node = 0;
+			static_cast<void>(emulator->read_virtual_memory(rsp + 0x30, &preferred_node, sizeof(preferred_node)));
+
+			const auto allocation = emulator->heap_allocate(size, prot_read_write, true);
+
+			const emulator_err_t error = allocation.error_or({});
+			error.throw_if("contiguous node memory allocation");
+
+			THREAD_LOG("MmAllocateContiguousNodeMemory called (size=0x{:X}, lowest=0x{:X}, highest=0x{:X}, boundary=0x{:X}, cache_type={}, node={}) -> 0x{:X}",
+				size, lowest, highest, boundary, cache_type, preferred_node, *allocation);
+
+			write_return_value(emulator, *allocation);
+		},
+		mapped_image,
+		"MmAllocateContiguousNodeMemory"
+	);
+
+	redirect_function(
+		[emulator]
+		{
 			const auto virtual_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
 
 			if (virtual_address == 0xF0F87C3E1000)
