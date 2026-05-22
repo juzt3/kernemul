@@ -85,4 +85,15 @@ void redirect_ntoskrnl_debugger_functions(const std::shared_ptr<emulator_t>& emu
 		mapped_image,
 		"KdSystemDebugControl"
 	);
+
+	redirect_function(
+		[emulator]
+		{
+			THREAD_LOG("DbgSetDebugPrintCallback called, returning STATUS_SUCCESS");
+
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"DbgSetDebugPrintCallback"
+	);
 }

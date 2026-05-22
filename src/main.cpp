@@ -451,11 +451,12 @@ std::int32_t main()
 		kernel::run_all_threads(emulator, entry_point_address);
 
 		const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
+		const auto rax = emulator->read_register<x86::reg::rax, emulator_t::address_type>();
 		const auto rcx = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
 		const auto rdx = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
 		const auto rsi = emulator->read_register<x86::reg::rsi, emulator_t::address_type>();
 
-		GLOBAL_LOG("emulation finished at rip=0x{:X}, rcx=0x{:X}, rdx=0x{:X}, rdi=0x{:X}", rip, rcx, rdx, rsi);
+		GLOBAL_LOG("emulation finished at rip=0x{:X}, rax=0x{:X}, rcx=0x{:X}, rdx=0x{:X}, rdi=0x{:X}", rip, rax, rcx, rdx, rsi);
 
 		error.throw_if("emulation running");
 	}

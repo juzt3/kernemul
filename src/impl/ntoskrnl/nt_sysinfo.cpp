@@ -3,11 +3,20 @@
 
 // todo: remove this once all needed classes are implemented
 using nt_query_system_information_fn = NTSTATUS(NTAPI*)(ULONG, PVOID, ULONG, PULONG);
+using nt_query_system_information_ex_fn = NTSTATUS(NTAPI*)(ULONG, PVOID, ULONG, PVOID, ULONG, PULONG);
 
 static nt_query_system_information_fn get_host_nt_query_system_information()
 {
 	static const auto fn = reinterpret_cast<nt_query_system_information_fn>(
 		GetProcAddress(GetModuleHandleA("ntdll.dll"), "NtQuerySystemInformation"));
+
+	return fn;
+}
+
+static nt_query_system_information_ex_fn get_host_nt_query_system_information_ex()
+{
+	static const auto fn = reinterpret_cast<nt_query_system_information_ex_fn>(
+		GetProcAddress(GetModuleHandleA("ntdll.dll"), "NtQuerySystemInformationEx"));
 
 	return fn;
 }
@@ -154,6 +163,144 @@ static bool handle_system_module_information(const std::shared_ptr<emulator_t>& 
 	return true;
 }
 
+static void fixup_module_information_ex(const std::shared_ptr<emulator_t>& emulator,
+	std::vector<std::uint8_t>& host_buffer, const std::uint32_t host_return_length,
+	const emulator_t::address_type buffer_address, const std::uint32_t buffer_length,
+	const char* caller_name)
+{
+	if (host_return_length < sizeof(std::uint16_t))
+	{
+		return;
+	}
+
+	auto* entry = reinterpret_cast<rtl_process_module_information_ex*>(host_buffer.data());
+	std::uint16_t index = 0;
+
+	while (entry->next_entry_offset != 0)
+	{
+		const auto* file_name = reinterpret_cast<const char*>(
+			&entry->base_info.full_path_name[entry->base_info.offset_to_file_name]);
+
+		for (const auto& module : kernel::module_entries)
+		{
+			if (_stricmp(file_name, module->name().c_str()) == 0)
+			{
+				THREAD_LOG("  host module[{}]: '{}' base remapped 0x{:X} -> 0x{:X}",
+					index, file_name, entry->base_info.image_base, module->base_address());
+
+				entry->base_info.image_base = module->base_address();
+				entry->base_info.image_size = static_cast<std::uint32_t>(module->size());
+				break;
+			}
+		}
+
+		THREAD_LOG("  host module[{}]: base=0x{:X}, size=0x{:X}, name='{}'",
+			index,
+			entry->base_info.image_base,
+			entry->base_info.image_size,
+			reinterpret_cast<const char*>(entry->base_info.full_path_name));
+
+		entry = reinterpret_cast<rtl_process_module_information_ex*>(
+			reinterpret_cast<std::uint8_t*>(entry) + entry->next_entry_offset);
+
+		++index;
+	}
+
+	THREAD_LOG("  host module count: {}", index);
+
+	const auto write_size = std::min(host_return_length, buffer_length);
+
+	if (write_size && buffer_address)
+	{
+		emulator_err_t error = emulator->write_virtual_memory(
+			buffer_address, host_buffer.data(), write_size);
+
+		error.throw_if("write fixedup host query result to guest");
+	}
+
+	auto buf_addr = buffer_address;
+	auto buf_size = static_cast<emulator_t::address_type>(write_size);
+	std::string source(caller_name);
+
+	emulator->hook_memory(
+		[buf_addr, buf_size, source](emulator_t::address_type address, emulator_t::protection_type)
+		{
+			const auto offset_in_buffer = address - buf_addr;
+			const auto entry_index = offset_in_buffer / module_entry_size;
+			const auto offset_in_entry = offset_in_buffer % module_entry_size;
+
+			constexpr auto full_path_offset = offsetof(rtl_process_module_information_ex, base_info)
+				+ offsetof(rtl_process_module_information, full_path_name);
+			constexpr auto image_base_offset = offsetof(rtl_process_module_information_ex, base_info)
+				+ offsetof(rtl_process_module_information, image_base);
+
+			if (offset_in_entry >= full_path_offset && offset_in_entry < full_path_offset + 256)
+			{
+				THREAD_LOG("  [monitor:{}] guest reading full_path_name of module[{}] at 0x{:X}",
+					source, entry_index, address);
+			}
+			else if (offset_in_entry >= image_base_offset && offset_in_entry < image_base_offset + 8)
+			{
+				THREAD_LOG("  [monitor:{}] guest reading image_base of module[{}] at 0x{:X}",
+					source, entry_index, address);
+			}
+		},
+		prot_read,
+		buffer_address,
+		buffer_address + buf_size
+	);
+}
+
+static void fixup_module_information(const std::shared_ptr<emulator_t>& emulator,
+	std::vector<std::uint8_t>& host_buffer, const std::uint32_t host_return_length,
+	const emulator_t::address_type buffer_address, const std::uint32_t buffer_length)
+{
+	if (host_return_length < module_info_header_size)
+	{
+		return;
+	}
+
+	auto* header = reinterpret_cast<rtl_process_modules*>(host_buffer.data());
+	const auto count = header->number_of_modules;
+
+	for (std::uint32_t i = 0; i < count; ++i)
+	{
+		auto& entry = header->modules[i];
+
+		const auto* file_name = reinterpret_cast<const char*>(
+			&entry.full_path_name[entry.offset_to_file_name]);
+
+		for (const auto& module : kernel::module_entries)
+		{
+			if (_stricmp(file_name, module->name().c_str()) == 0)
+			{
+				THREAD_LOG("  host module[{}]: '{}' base remapped 0x{:X} -> 0x{:X}",
+					i, file_name, entry.image_base, module->base_address());
+
+				entry.image_base = module->base_address();
+				entry.image_size = static_cast<std::uint32_t>(module->size());
+				break;
+			}
+		}
+
+		THREAD_LOG("  host module[{}]: base=0x{:X}, size=0x{:X}, name='{}'",
+			i, entry.image_base, entry.image_size,
+			reinterpret_cast<const char*>(entry.full_path_name));
+	}
+
+	THREAD_LOG("  host module count (0xB): {}", count);
+
+	const auto write_size = std::min(host_return_length, buffer_length);
+
+	if (write_size && buffer_address)
+	{
+		emulator_err_t error = emulator->write_virtual_memory(
+			buffer_address, host_buffer.data(), write_size);
+
+		error.throw_if("write fixedup host 0xB result to guest");
+	}
+}
+
 static void handle_query_system_information(const std::shared_ptr<emulator_t>& emulator)
 {
 	const auto info_class = emulator->read_register<x86::reg::rcx, std::uint32_t>();
@@ -205,126 +352,16 @@ static void handle_query_system_information(const std::shared_ptr<emulator_t>& e
 		THREAD_LOG("NtQuerySystemInformation: host returned 0x{:X} (return_length=0x{:X})",
 			status, host_return_length);
 
-		if (info_class == system_module_information_ex && status == 0 && host_return_length >= sizeof(std::uint16_t))
+		if (info_class == system_module_information_ex && status == 0)
 		{
-			auto* entry = reinterpret_cast<rtl_process_module_information_ex*>(host_buffer.data());
-			std::uint16_t index = 0;
-
-			while (entry->next_entry_offset != 0)
-			{
-				const auto* file_name = reinterpret_cast<const char*>(
-					&entry->base_info.full_path_name[entry->base_info.offset_to_file_name]);
-
-				for (const auto& module : kernel::module_entries)
-				{
-					if (_stricmp(file_name, module->name().c_str()) == 0)
-					{
-						THREAD_LOG("  host module[{}]: '{}' base remapped 0x{:X} -> 0x{:X}",
-							index, file_name, entry->base_info.image_base, module->base_address());
-
-						entry->base_info.image_base = module->base_address();
-						entry->base_info.image_size = static_cast<std::uint32_t>(module->size());
-						break;
-					}
-				}
-
-				THREAD_LOG("  host module[{}]: base=0x{:X}, size=0x{:X}, name='{}'",
-					index,
-					entry->base_info.image_base,
-					entry->base_info.image_size,
-					reinterpret_cast<const char*>(entry->base_info.full_path_name));
-
-				entry = reinterpret_cast<rtl_process_module_information_ex*>(
-					reinterpret_cast<std::uint8_t*>(entry) + entry->next_entry_offset);
-
-				++index;
-			}
-
-			THREAD_LOG("  host module count: {}", index);
-
-			const auto write_size = std::min(static_cast<std::uint32_t>(host_return_length), buffer_length);
-
-			if (write_size && buffer_address)
-			{
-				emulator_err_t error = emulator->write_virtual_memory(
-					buffer_address, host_buffer.data(), write_size);
-
-				error.throw_if("write fixedup host query result to guest");
-			}
-
-			auto buf_addr = buffer_address;
-			auto buf_size = static_cast<emulator_t::address_type>(write_size);
-
-			emulator->hook_memory(
-				[buf_addr, buf_size](emulator_t::address_type address, emulator_t::protection_type)
-				{
-					const auto offset_in_buffer = address - buf_addr;
-					const auto entry_index = offset_in_buffer / module_entry_size;
-					const auto offset_in_entry = offset_in_buffer % module_entry_size;
-
-					constexpr auto full_path_offset = offsetof(rtl_process_module_information_ex, base_info)
-						+ offsetof(rtl_process_module_information, full_path_name);
-					constexpr auto image_base_offset = offsetof(rtl_process_module_information_ex, base_info)
-						+ offsetof(rtl_process_module_information, image_base);
-
-					if (offset_in_entry >= full_path_offset && offset_in_entry < full_path_offset + 256)
-					{
-						THREAD_LOG("  [monitor] guest reading full_path_name of module[{}] at 0x{:X}",
-							entry_index, address);
-					}
-					else if (offset_in_entry >= image_base_offset && offset_in_entry < image_base_offset + 8)
-					{
-						THREAD_LOG("  [monitor] guest reading image_base of module[{}] at 0x{:X}",
-							entry_index, address);
-					}
-				},
-				prot_read,
-				buffer_address,
-				buffer_address + buf_size
-			);
+			fixup_module_information_ex(emulator, host_buffer, host_return_length,
+				buffer_address, buffer_length, "NtQuerySystemInformation");
 		}
 
-		if (info_class == system_module_information && status == 0 && host_return_length >= module_info_header_size)
+		if (info_class == system_module_information && status == 0)
 		{
-			auto* header = reinterpret_cast<rtl_process_modules*>(host_buffer.data());
-			const auto count = header->number_of_modules;
-
-			for (std::uint32_t i = 0; i < count; ++i)
-			{
-				auto& entry = header->modules[i];
-
-				const auto* file_name = reinterpret_cast<const char*>(
-					&entry.full_path_name[entry.offset_to_file_name]);
-
-				for (const auto& module : kernel::module_entries)
-				{
-					if (_stricmp(file_name, module->name().c_str()) == 0)
-					{
-						THREAD_LOG("  host module[{}]: '{}' base remapped 0x{:X} -> 0x{:X}",
-							i, file_name, entry.image_base, module->base_address());
-
-						entry.image_base = module->base_address();
-						entry.image_size = static_cast<std::uint32_t>(module->size());
-						break;
-					}
-				}
-
-				THREAD_LOG("  host module[{}]: base=0x{:X}, size=0x{:X}, name='{}'",
-					i, entry.image_base, entry.image_size,
-					reinterpret_cast<const char*>(entry.full_path_name));
-			}
-
-			THREAD_LOG("  host module count (0xB): {}", count);
-
-			const auto write_size = std::min(static_cast<std::uint32_t>(host_return_length), buffer_length);
-
-			if (write_size && buffer_address)
-			{
-				emulator_err_t error = emulator->write_virtual_memory(
-					buffer_address, host_buffer.data(), write_size);
-
-				error.throw_if("write fixedup host 0xB result to guest");
-			}
+			fixup_module_information(emulator, host_buffer, host_return_length,
+				buffer_address, buffer_length);
 		}
 	}
 
@@ -346,6 +383,112 @@ static void handle_query_system_information(const std::shared_ptr<emulator_t>& e
 	write_nt_status(emulator, status);
 }
 
+static void handle_query_system_information_ex(const std::shared_ptr<emulator_t>& emulator)
+{
+	const auto info_class = emulator->read_register<x86::reg::rcx, std::uint32_t>();
+	const auto input_buffer_address = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+	const auto input_buffer_length = emulator->read_register<x86::reg::r8, std::uint32_t>();
+	const auto buffer_address = emulator->read_register<x86::reg::r9, emulator_t::address_type>();
+
+	const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
+
+	std::uint32_t buffer_length = 0;
+	emulator_t::address_type return_length_address = 0;
+	static_cast<void>(emulator->read_virtual_memory(rsp + 0x28, &buffer_length, sizeof(buffer_length)));
+	static_cast<void>(emulator->read_virtual_memory(rsp + 0x30, &return_length_address, sizeof(return_length_address)));
+
+	THREAD_LOG("NtQuerySystemInformationEx called (class=0x{:X}, input=0x{:X}, input_len=0x{:X}, "
+		"buffer=0x{:X}, length=0x{:X}, return_length=0x{:X})",
+		info_class, input_buffer_address, input_buffer_length,
+		buffer_address, buffer_length, return_length_address);
+
+	// todo: implement needed classes and remove host passthrough
+	const auto host_fn = get_host_nt_query_system_information_ex();
+
+	std::uint32_t status = status_not_implemented;
+
+	if (!host_fn)
+	{
+		THREAD_WARN_LOG("NtQuerySystemInformationEx: class 0x{:X}, host fallback unavailable", info_class);
+	}
+	else
+	{
+		THREAD_LOG("NtQuerySystemInformationEx: forwarding class 0x{:X} to host", info_class);
+
+		std::vector<std::uint8_t> input_buffer(input_buffer_length);
+
+		if (input_buffer_length && input_buffer_address)
+		{
+			emulator_err_t error = emulator->read_virtual_memory(
+				input_buffer_address, input_buffer.data(), input_buffer_length);
+
+			error.throw_if("read host query input buffer from guest");
+		}
+
+		std::vector<std::uint8_t> host_buffer(buffer_length);
+		ULONG host_return_length = 0;
+
+		status = static_cast<std::uint32_t>(host_fn(
+			info_class,
+			input_buffer_length ? input_buffer.data() : nullptr,
+			input_buffer_length,
+			host_buffer.data(),
+			buffer_length,
+			&host_return_length));
+
+		if (buffer_length && buffer_address)
+		{
+			if (const auto write_size = std::min(static_cast<std::uint32_t>(host_return_length), buffer_length))
+			{
+				emulator_err_t error = emulator->write_virtual_memory(
+					buffer_address, host_buffer.data(), write_size);
+
+				error.throw_if("write host query result to guest");
+			}
+		}
+
+		if (return_length_address)
+		{
+			emulator_err_t error = emulator->write_virtual_memory(
+				return_length_address, &host_return_length, sizeof(host_return_length));
+
+			error.throw_if("write host return length to guest");
+		}
+
+		THREAD_LOG("NtQuerySystemInformationEx: host returned 0x{:X} (return_length=0x{:X})",
+			status, host_return_length);
+
+		if (info_class == system_module_information_ex && status == 0)
+		{
+			fixup_module_information_ex(emulator, host_buffer, host_return_length,
+				buffer_address, buffer_length, "NtQuerySystemInformationEx");
+		}
+
+		if (info_class == system_module_information && status == 0)
+		{
+			fixup_module_information(emulator, host_buffer, host_return_length,
+				buffer_address, buffer_length);
+		}
+	}
+
+	if (status == status_info_length_mismatch && return_length_address)
+	{
+		std::uint32_t returned_length = 0;
+
+		emulator_err_t error = emulator->read_virtual_memory(return_length_address, &returned_length, sizeof(returned_length));
+
+		error.throw_if("read return length for logging");
+
+		THREAD_LOG("NtQuerySystemInformationEx returning 0x{:X} (required_size=0x{:X})", status, returned_length);
+	}
+	else
+	{
+		THREAD_LOG("NtQuerySystemInformationEx returning 0x{:X}", status);
+	}
+
+	write_nt_status(emulator, status);
+}
+
 void redirect_ntoskrnl_sysinfo_functions(const std::shared_ptr<emulator_t>& emulator,
 	const kernel_image_t& mapped_image)
 {
@@ -359,5 +502,17 @@ void redirect_ntoskrnl_sysinfo_functions(const std::shared_ptr<emulator_t>& emul
 		[emulator] { handle_query_system_information(emulator); },
 		mapped_image,
 		"ZwQuerySystemInformation"
+	);
+
+	redirect_function(
+		[emulator] { handle_query_system_information_ex(emulator); },
+		mapped_image,
+		"NtQuerySystemInformationEx"
+	);
+
+	redirect_function(
+		[emulator] { handle_query_system_information_ex(emulator); },
+		mapped_image,
+		"ZwQuerySystemInformationEx"
 	);
 }
