@@ -241,6 +241,7 @@ std::int32_t main()
 		kernel::filesystem->load_at("ntoskrnl.exe", "system32/ntoskrnl.exe");
 		kernel::filesystem->load_at("ntdll.dll", "system32/ntdll.dll");
 		kernel::filesystem->load_at("win32k.sys", "system32/win32k.sys");
+		kernel::filesystem->load_directory_at("cat_root", "system32/catroot/");
 
 		kernel::filesystem->create_at("physicaldrive0");
 		kernel::filesystem->create_at("physicaldrive1");

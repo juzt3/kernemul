@@ -409,3 +409,6 @@ FodyWeavers.xsd
 
 # JetBrains Rider
 *.sln.iml
+
+# Virtual filesystem folder
+vfs/

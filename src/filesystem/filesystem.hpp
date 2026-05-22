@@ -7,10 +7,16 @@
 class file_t
 {
 public:
+	struct directory_tag_t { };
+	static constexpr directory_tag_t directory_tag{ };
+
 	file_t() = default;
 
 	explicit file_t(std::vector<std::uint8_t> buffer)
 			:	buffer_(std::move(buffer)) { }
+
+	explicit file_t(directory_tag_t)
+			:	is_directory_(true) { }
 
 	[[nodiscard]] std::span<const std::uint8_t> read() const;
 
@@ -21,8 +27,11 @@ public:
 	[[nodiscard]] std::span<std::uint8_t> buffer();
 	[[nodiscard]] std::span<const std::uint8_t> buffer() const;
 
+	[[nodiscard]] bool is_directory() const noexcept;
+
 protected:
 	std::vector<std::uint8_t> buffer_;
+	bool is_directory_ = false;
 };
 
 class filesystem_t
@@ -33,12 +42,16 @@ public:
 	filesystem_t() = default;
 
 	[[nodiscard]] std::shared_ptr<file_t> open_at(const path_type& path);
+	[[nodiscard]] std::shared_ptr<file_t> open_directory_at(const path_type& path);
 	[[nodiscard]] std::shared_ptr<file_t> create_at(const path_type& path);
+	[[nodiscard]] std::shared_ptr<file_t> create_directory_at(const path_type& path);
 
 	bool load_at(const std::string& host_path, const path_type& virtual_path);
+	bool load_directory_at(const std::string& host_path, const path_type& virtual_path);
 
 	[[nodiscard]] bool delete_at(const path_type& path);
 	[[nodiscard]] bool exists(const path_type& path) const;
+	[[nodiscard]] bool directory_exists(const path_type& path) const;
 
 protected:
 	std::unordered_map<path_type, std::shared_ptr<file_t>> list_;

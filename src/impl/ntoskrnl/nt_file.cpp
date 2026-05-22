@@ -138,12 +138,23 @@ constexpr std::uint64_t file_opened = 1;
 constexpr std::uint64_t file_created = 2;
 constexpr std::uint64_t file_superseded = 0;
 
+constexpr std::uint32_t file_directory_file = 0x00000001;
+constexpr std::uint32_t file_non_directory_file = 0x00000040;
+
+constexpr std::uint32_t status_object_name_not_found = 0xC0000034;
+constexpr std::uint32_t status_object_name_collision = 0xC0000035;
+constexpr std::uint32_t status_invalid_parameter = 0xC000000D;
+constexpr std::uint32_t status_file_is_a_directory = 0xC00000BA;
+constexpr std::uint32_t status_not_a_directory = 0xC0000103;
+constexpr std::uint32_t status_unsuccessful = 0xC0000001;
+
 static void iop_create_file(const std::shared_ptr<emulator_t>& emulator,
 	const emulator_t::address_type handle_out_address,
 	const std::uint32_t desired_access,
 	const emulator_t::address_type object_attributes_address,
 	const emulator_t::address_type io_status_block_address,
 	const std::uint32_t create_disposition,
+	const std::uint32_t create_options,
 	const std::string_view caller_name)
 {
 	std::string normalized;
@@ -155,6 +166,9 @@ static void iop_create_file(const std::shared_ptr<emulator_t>& emulator,
 
 	const auto& filesystem = kernel::filesystem;
 
+	const bool want_directory = (create_options & file_directory_file) != 0;
+	const bool want_non_directory = (create_options & file_non_directory_file) != 0;
+
 	std::shared_ptr<file_t> file;
 	std::uint64_t information = 0;
 
@@ -164,12 +178,40 @@ static void iop_create_file(const std::shared_ptr<emulator_t>& emulator,
 	{
 		file = filesystem->open_at(normalized);
 
+		if (file && want_non_directory && file->is_directory())
+		{
+			THREAD_WARN_LOG("{}: '{}' is a directory but caller requested non-directory", caller_name, normalized);
+
+			write_io_status(emulator, io_status_block_address, static_cast<std::int32_t>(status_file_is_a_directory), 0);
+			write_nt_status(emulator, status_file_is_a_directory);
+
+			return;
+		}
+
+		if (file && want_directory && !file->is_directory())
+		{
+			THREAD_WARN_LOG("{}: '{}' is a file but caller requested directory", caller_name, normalized);
+
+			write_io_status(emulator, io_status_block_address, static_cast<std::int32_t>(status_not_a_directory), 0);
+			write_nt_status(emulator, status_not_a_directory);
+
+			return;
+		}
+
+		if (!file)
+		{
+			if (filesystem->directory_exists(normalized))
+			{
+				file = filesystem->open_directory_at(normalized);
+			}
+		}
+
 		if (!file)
 		{
 			THREAD_WARN_LOG("{}: file not found '{}'", caller_name, normalized);
 
-			write_io_status(emulator, io_status_block_address, static_cast<std::int32_t>(0xC0000034), 0);
-			write_nt_status(emulator, 0xC0000034);
+			write_io_status(emulator, io_status_block_address, static_cast<std::int32_t>(status_object_name_not_found), 0);
+			write_nt_status(emulator, status_object_name_not_found);
 
 			return;
 		}
@@ -184,13 +226,13 @@ static void iop_create_file(const std::shared_ptr<emulator_t>& emulator,
 		{
 			THREAD_WARN_LOG("{}: file already exists '{}'", caller_name, normalized);
 
-			write_io_status(emulator, io_status_block_address, static_cast<std::int32_t>(0xC0000035), 0);
-			write_nt_status(emulator, 0xC0000035);
+			write_io_status(emulator, io_status_block_address, static_cast<std::int32_t>(status_object_name_collision), 0);
+			write_nt_status(emulator, status_object_name_collision);
 
 			return;
 		}
 
-		file = filesystem->create_at(normalized);
+		file = want_directory ? filesystem->create_directory_at(normalized) : filesystem->create_at(normalized);
 		information = file_created;
 
 		break;
@@ -201,11 +243,36 @@ static void iop_create_file(const std::shared_ptr<emulator_t>& emulator,
 
 		if (file)
 		{
+			if (want_non_directory && file->is_directory())
+			{
+				THREAD_WARN_LOG("{}: '{}' is a directory but caller requested non-directory", caller_name, normalized);
+
+				write_io_status(emulator, io_status_block_address, static_cast<std::int32_t>(status_file_is_a_directory), 0);
+				write_nt_status(emulator, status_file_is_a_directory);
+
+				return;
+			}
+
+			if (want_directory && !file->is_directory())
+			{
+				THREAD_WARN_LOG("{}: '{}' is a file but caller requested directory", caller_name, normalized);
+
+				write_io_status(emulator, io_status_block_address, static_cast<std::int32_t>(status_not_a_directory), 0);
+				write_nt_status(emulator, status_not_a_directory);
+
+				return;
+			}
+
+			information = file_opened;
+		}
+		else if (filesystem->directory_exists(normalized))
+		{
+			file = filesystem->open_directory_at(normalized);
 			information = file_opened;
 		}
 		else
 		{
-			file = filesystem->create_at(normalized);
+			file = want_directory ? filesystem->create_directory_at(normalized) : filesystem->create_at(normalized);
 			information = file_created;
 		}
 
@@ -217,8 +284,8 @@ static void iop_create_file(const std::shared_ptr<emulator_t>& emulator,
 		{
 			THREAD_WARN_LOG("{}: file not found for overwrite '{}'", caller_name, normalized);
 
-			write_io_status(emulator, io_status_block_address, static_cast<std::int32_t>(0xC0000034), 0);
-			write_nt_status(emulator, 0xC0000034);
+			write_io_status(emulator, io_status_block_address, static_cast<std::int32_t>(status_object_name_not_found), 0);
+			write_nt_status(emulator, status_object_name_not_found);
 
 			return;
 		}
@@ -248,7 +315,7 @@ static void iop_create_file(const std::shared_ptr<emulator_t>& emulator,
 	{
 		THREAD_WARN_LOG("{}: invalid create disposition 0x{:X}", caller_name, create_disposition);
 
-		write_nt_status(emulator, 0xC000000D);
+		write_nt_status(emulator, status_invalid_parameter);
 
 		return;
 	}
@@ -302,7 +369,7 @@ void redirect_ntoskrnl_file_functions(const std::shared_ptr<emulator_t>& emulato
 			THREAD_LOG("NtOpenFile called (file_handle_out=0x{:X}, desired_access=0x{:X}, object_attributes=0x{:X}, io_status_block=0x{:X}, share_access=0x{:X}, open_options=0x{:X})",
 				rcx, rdx, r8, r9, share_access, open_options);
 
-			iop_create_file(emulator, rcx, rdx, r8, r9, file_open, "NtOpenFile");
+			iop_create_file(emulator, rcx, rdx, r8, r9, file_open, open_options, "NtOpenFile");
 		},
 		mapped_image,
 		"NtOpenFile"
@@ -348,7 +415,7 @@ void redirect_ntoskrnl_file_functions(const std::shared_ptr<emulator_t>& emulato
 		THREAD_LOG("{} called (file_handle_out=0x{:X}, desired_access=0x{:X}, object_attributes=0x{:X}, io_status_block=0x{:X}, allocation_size=0x{:X}, file_attributes=0x{:X}, share_access=0x{:X}, create_disposition=0x{:X}, create_options=0x{:X}, ea_buffer=0x{:X}, ea_length=0x{:X})",
 			caller_name, rcx, rdx, r8, r9, allocation_size, file_attributes, share_access, create_disposition, create_options, ea_buffer, ea_length);
 
-		iop_create_file(emulator, rcx, rdx, r8, r9, create_disposition, std::string(caller_name));
+		iop_create_file(emulator, rcx, rdx, r8, r9, create_disposition, create_options, std::string(caller_name));
 	};
 
 	redirect_function(
@@ -420,7 +487,7 @@ void redirect_ntoskrnl_file_functions(const std::shared_ptr<emulator_t>& emulato
 			THREAD_LOG("IoCreateFileEx called (file_handle_out=0x{:X}, desired_access=0x{:X}, object_attributes=0x{:X}, io_status_block=0x{:X}, allocation_size=0x{:X}, file_attributes=0x{:X}, share_access=0x{:X}, disposition=0x{:X}, create_options=0x{:X}, ea_buffer=0x{:X}, ea_length=0x{:X}, create_file_type=0x{:X}, internal_parameters=0x{:X}, options=0x{:X}, driver_context=0x{:X})",
 				rcx, rdx, r8, r9, allocation_size, file_attributes, share_access, disposition, create_options, ea_buffer, ea_length, create_file_type, internal_parameters, options, driver_context);
 
-			iop_create_file(emulator, rcx, rdx, r8, r9, disposition, "IoCreateFileEx");
+			iop_create_file(emulator, rcx, rdx, r8, r9, disposition, create_options, "IoCreateFileEx");
 		},
 		mapped_image,
 		"IoCreateFileEx"
@@ -693,7 +760,8 @@ void redirect_ntoskrnl_file_functions(const std::shared_ptr<emulator_t>& emulato
 			}
 
 			const auto host_object = kernel::object_manager->get_object_from_handle<file_object_t>(file_handle);
-			const std::int64_t file_size = (host_object && host_object->file) ? static_cast<std::int64_t>(host_object->file->size()) : 0;
+			const bool is_directory = host_object && host_object->file && host_object->file->is_directory();
+			const std::int64_t file_size = (host_object && host_object->file && !is_directory) ? static_cast<std::int64_t>(host_object->file->size()) : 0;
 
 			struct
 			{
@@ -708,6 +776,7 @@ void redirect_ntoskrnl_file_functions(const std::shared_ptr<emulator_t>& emulato
 			standard_info.allocation_size = (file_size + 0xFFF) & ~0xFFFll;
 			standard_info.end_of_file = file_size;
 			standard_info.number_of_links = 1;
+			standard_info.directory = is_directory ? 1 : 0;
 
 			error = emulator->write_virtual_memory(file_information, &standard_info, sizeof(standard_info));
 			error.throw_if(std::format("{}: write FileStandardInformation", caller_name));
