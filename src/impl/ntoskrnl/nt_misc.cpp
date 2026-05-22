@@ -1961,4 +1961,92 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 		mapped_image,
 		"HalAcpiGetTableEx"
 	);
+
+	// WMI
+	redirect_function(
+		[emulator]
+		{
+			const auto guid_address = emulator->read_register<x86::reg::rcx, std::uint64_t>();
+			const auto desired_access = emulator->read_register<x86::reg::rdx, std::uint32_t>();
+			const auto data_block_object_address = emulator->read_register<x86::reg::r8, std::uint64_t>();
+
+			struct guid_t
+			{
+				std::uint32_t data1;
+				std::uint16_t data2;
+				std::uint16_t data3;
+				std::uint8_t data4[8];
+			};
+
+			guid_t guid = {};
+			(void)emulator->read_virtual_memory(guid_address, &guid, sizeof(guid));
+
+			THREAD_LOG("IoWMIOpenBlock called (guid={{{:08X}-{:04X}-{:04X}-{:02X}{:02X}-{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}}}, access=0x{:X}, out=0x{:X}) -> STATUS_WMI_GUID_NOT_FOUND",
+				guid.data1, guid.data2, guid.data3,
+				guid.data4[0], guid.data4[1], guid.data4[2], guid.data4[3],
+				guid.data4[4], guid.data4[5], guid.data4[6], guid.data4[7],
+				desired_access, data_block_object_address);
+
+			constexpr std::uint32_t status_wmi_guid_not_found = 0xC0000295;
+			write_nt_status(emulator, status_wmi_guid_not_found);
+		},
+		mapped_image,
+		"IoWMIOpenBlock"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto bus_data_type = emulator->read_register<x86::reg::rcx, std::uint32_t>();
+			const auto bus_number = emulator->read_register<x86::reg::rdx, std::uint32_t>();
+			const auto slot_number = emulator->read_register<x86::reg::r8, std::uint32_t>();
+			const auto buffer_address = emulator->read_register<x86::reg::r9, std::uint64_t>();
+			const auto rsp = emulator->read_register<x86::reg::rsp, std::uint64_t>();
+
+			std::uint32_t offset = 0;
+			std::uint32_t length = 0;
+			(void)emulator->read_virtual_memory(rsp + 0x28, &offset, sizeof(offset));
+			(void)emulator->read_virtual_memory(rsp + 0x30, &length, sizeof(length));
+
+			THREAD_LOG("HalGetBusDataByOffset called (type={}, bus={}, slot={}, buffer=0x{:X}, offset={}, length={}) -> 0",
+				bus_data_type, bus_number, slot_number, buffer_address, offset, length);
+
+			write_return_value(emulator, 0);
+		},
+		mapped_image,
+		"HalGetBusDataByOffset"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto semaphore_address = emulator->read_register<x86::reg::rcx, std::uint64_t>();
+			const auto count = emulator->read_register<x86::reg::rdx, std::int32_t>();
+			const auto limit = emulator->read_register<x86::reg::r8, std::int32_t>();
+
+			// Header.Type = 5 (SemaphoreObject) at offset 0x00
+			const std::uint8_t type = 5;
+			(void)emulator->write_virtual_memory(semaphore_address + 0x00, &type, sizeof(type));
+
+			// Header.Size = 8 at offset 0x02
+			const std::uint8_t size = 8;
+			(void)emulator->write_virtual_memory(semaphore_address + 0x02, &size, sizeof(size));
+
+			// Header.SignalState = Count at offset 0x04
+			(void)emulator->write_virtual_memory(semaphore_address + 0x04, &count, sizeof(count));
+
+			// Header.WaitListHead (Flink at 0x08, Blink at 0x10) - point to self
+			const auto wait_list_head = semaphore_address + 0x08;
+			(void)emulator->write_virtual_memory(semaphore_address + 0x08, &wait_list_head, sizeof(wait_list_head));
+			(void)emulator->write_virtual_memory(semaphore_address + 0x10, &wait_list_head, sizeof(wait_list_head));
+
+			// Limit at offset 0x18
+			(void)emulator->write_virtual_memory(semaphore_address + 0x18, &limit, sizeof(limit));
+
+			THREAD_LOG("KeInitializeSemaphore called (semaphore=0x{:X}, count={}, limit={})",
+				semaphore_address, count, limit);
+		},
+		mapped_image,
+		"KeInitializeSemaphore"
+	);
 }

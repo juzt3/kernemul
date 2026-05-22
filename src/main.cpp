@@ -453,9 +453,9 @@ std::int32_t main()
 		const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
 		const auto rcx = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
 		const auto rdx = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
-		const auto rdi = emulator->read_register<x86::reg::rdi, emulator_t::address_type>();
+		const auto rsi = emulator->read_register<x86::reg::rsi, emulator_t::address_type>();
 
-		GLOBAL_LOG("emulation finished at rip=0x{:X}, rcx=0x{:X}, rdx=0x{:X}, rdi=0x{:X}", rip, rcx, rdx, rdi);
+		GLOBAL_LOG("emulation finished at rip=0x{:X}, rcx=0x{:X}, rdx=0x{:X}, rdi=0x{:X}", rip, rcx, rdx, rsi);
 
 		error.throw_if("emulation running");
 	}

@@ -1,7 +1,8 @@
 #include "nt_helpers.hpp"
+#include "../../kernel/exception.hpp"
 
 static emulator_object_t<_OBJECT_TYPE> create_object_type(const std::shared_ptr<emulator_t>& emulator,
-	const std::wstring_view name, const std::string& object_name)
+                                                          const std::wstring_view name, const std::string& object_name)
 {
 	auto object = emulator_object_t<_OBJECT_TYPE>::allocate(emulator, object_name);
 
@@ -270,6 +271,58 @@ void redirect_ntoskrnl_object_functions(const std::shared_ptr<emulator_t>& emula
 	redirect_function(
 		[emulator]
 		{
+			const auto handle_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto desired_access = emulator->read_register<x86::reg::rdx, std::uint32_t>();
+			const auto object_attributes_address = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
+
+			std::string directory_name;
+
+			if (object_attributes_address)
+			{
+				OBJECT_ATTRIBUTES object_attributes = {};
+				emulator_err_t error = emulator->read_virtual_memory(object_attributes_address, &object_attributes, sizeof(object_attributes));
+				error.throw_if("NtOpenDirectoryObject: read OBJECT_ATTRIBUTES");
+
+				const auto name_address = reinterpret_cast<emulator_t::address_type>(object_attributes.ObjectName);
+
+				if (name_address)
+				{
+					UNICODE_STRING unicode_string = {};
+					error = emulator->read_virtual_memory(name_address, &unicode_string, sizeof(unicode_string));
+					error.throw_if("NtOpenDirectoryObject: read UNICODE_STRING");
+
+					const auto buffer_address = reinterpret_cast<emulator_t::address_type>(unicode_string.Buffer);
+
+					if (buffer_address && unicode_string.Length)
+					{
+						directory_name = util::narrow_wstring(kernel::read_guest_wstring(*emulator, buffer_address));
+					}
+				}
+			}
+
+			constexpr std::size_t directory_body_size = 0x40;
+			std::array<std::uint8_t, directory_body_size> body{};
+			const auto body_address = kernel::object_manager->create_object(0, body.data(), body.size());
+			const auto handle_value = kernel::object_manager->create_handle(body_address, desired_access);
+
+			if (handle_address)
+			{
+				emulator_err_t error = emulator->write_virtual_memory(handle_address, &handle_value, sizeof(handle_value));
+				error.throw_if("NtOpenDirectoryObject: write handle");
+			}
+
+			THREAD_LOG("NtOpenDirectoryObject called (handle_address=0x{:X}, access=0x{:X}, name='{}') -> handle=0x{:X}",
+				handle_address, desired_access, directory_name, handle_value);
+
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"NtOpenDirectoryObject"
+	);
+
+	redirect_function(
+		[emulator]
+		{
 			const auto object = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
 
 			THREAD_LOG("ObfReferenceObject called (object=0x{:X})", object);
@@ -299,5 +352,43 @@ void redirect_ntoskrnl_object_functions(const std::shared_ptr<emulator_t>& emula
 		[dereference_handler] { dereference_handler("ObfDereferenceObjectWithTag"); },
 		mapped_image,
 		"ObfDereferenceObjectWithTag"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto object_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+
+			const char* type_symbol = nullptr;
+			const auto host_object = kernel::object_manager->get_object<object_t>(object_address);
+
+			if (host_object)
+			{
+				if (dynamic_cast<file_object_t*>(host_object.get()))
+					type_symbol = "IoFileObjectType";
+				else if (dynamic_cast<thread_object_t*>(host_object.get()))
+					type_symbol = "PsThreadType";
+			}
+
+			emulator_t::address_type type_object = 0;
+
+			if (type_symbol)
+			{
+				if (const auto ntoskrnl = kernel::find_module("ntoskrnl.exe"))
+				{
+					if (const auto symbol = ntoskrnl->find_symbol(type_symbol))
+					{
+						(void)emulator->read_virtual_memory(*symbol, &type_object, sizeof(type_object));
+					}
+				}
+			}
+
+			THREAD_LOG("ObGetObjectType called (object=0x{:X}, type={}) -> 0x{:X}",
+				object_address, type_symbol ? type_symbol : "unknown", type_object);
+
+			write_return_value(emulator, type_object);
+		},
+		mapped_image,
+		"ObGetObjectType"
 	);
 }
