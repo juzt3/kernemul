@@ -674,4 +674,75 @@ void redirect_ntoskrnl_string_functions(const std::shared_ptr<emulator_t>& emula
 		mapped_image,
 		"RtlAnsiStringToUnicodeString"
 	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto string1_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto string2_address = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+			const auto case_insensitive = emulator->read_register<x86::reg::r8, std::uint8_t>();
+
+			UNICODE_STRING str1_header = {};
+			emulator_err_t error = emulator->read_virtual_memory(string1_address, &str1_header, sizeof(str1_header));
+			error.throw_if("RtlCompareString: read String1");
+
+			UNICODE_STRING str2_header = {};
+			error = emulator->read_virtual_memory(string2_address, &str2_header, sizeof(str2_header));
+			error.throw_if("RtlCompareString: read String2");
+
+			const auto len1 = str1_header.Length;
+			const auto len2 = str2_header.Length;
+			const auto buf1_address = reinterpret_cast<emulator_t::address_type>(str1_header.Buffer);
+			const auto buf2_address = reinterpret_cast<emulator_t::address_type>(str2_header.Buffer);
+
+			const auto compare_length = std::min(len1, len2);
+
+			std::string buf1(len1, '\0');
+			std::string buf2(len2, '\0');
+
+			if (len1)
+			{
+				error = emulator->read_virtual_memory(buf1_address, buf1.data(), len1);
+				error.throw_if("RtlCompareString: read buffer1");
+			}
+
+			if (len2)
+			{
+				error = emulator->read_virtual_memory(buf2_address, buf2.data(), len2);
+				error.throw_if("RtlCompareString: read buffer2");
+			}
+
+			std::int32_t result = 0;
+
+			for (std::uint16_t i = 0; i < compare_length; i++)
+			{
+				auto c1 = static_cast<unsigned char>(buf1[i]);
+				auto c2 = static_cast<unsigned char>(buf2[i]);
+
+				if (case_insensitive)
+				{
+					if (c1 >= 'a' && c1 <= 'z') c1 -= 0x20;
+					if (c2 >= 'a' && c2 <= 'z') c2 -= 0x20;
+				}
+
+				if (c1 != c2)
+				{
+					result = static_cast<std::int32_t>(c1) - static_cast<std::int32_t>(c2);
+					break;
+				}
+			}
+
+			if (result == 0)
+			{
+				result = static_cast<std::int32_t>(len1) - static_cast<std::int32_t>(len2);
+			}
+
+			THREAD_LOG("RtlCompareString called (str1=0x{:X}, str2=0x{:X}, case_insensitive={}) -> {}",
+				string1_address, string2_address, case_insensitive, result);
+
+			write_return_value(emulator, static_cast<std::uint64_t>(static_cast<std::uint32_t>(result)));
+		},
+		mapped_image,
+		"RtlCompareString"
+	);
 }

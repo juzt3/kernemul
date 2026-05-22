@@ -580,6 +580,28 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 		[emulator]
 		{
 			const auto spin_lock = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+
+			THREAD_LOG("ExAcquireSpinLockExclusiveAtDpcLevel called (spin_lock=0x{:X})", spin_lock);
+		},
+		mapped_image,
+		"ExAcquireSpinLockExclusiveAtDpcLevel"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto spin_lock = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+
+			THREAD_LOG("ExReleaseSpinLockExclusiveFromDpcLevel called (spin_lock=0x{:X})", spin_lock);
+		},
+		mapped_image,
+		"ExReleaseSpinLockExclusiveFromDpcLevel"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto spin_lock = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
 			const auto new_irql = emulator->read_register<x86::reg::rdx, std::uint8_t>();
 
 			THREAD_LOG("KeReleaseSpinLock called (spin_lock=0x{:X}, new_irql={})", spin_lock, new_irql);
