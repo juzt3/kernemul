@@ -1211,10 +1211,9 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 
 			const emulator_t::address_type stack_top = *stack_allocation + thread_stack_size - 0x1000;
 
-			constexpr emulator_t::size_type shadow_space = 0x20;
 			const emulator_t::address_type sentinel = emulator_t::thread_return_address;
 
-			const emulator_t::address_type thread_rsp = (stack_top - shadow_space - sizeof(sentinel)) & ~0xFull;
+			const emulator_t::address_type thread_rsp = (stack_top & ~0xFull) - 8;
 
 			error = emulator->write_virtual_memory(thread_rsp, &sentinel, sizeof(sentinel));
 			error.throw_if("PsCreateSystemThread: write sentinel return address");
@@ -1962,6 +1961,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 		"HalAcpiGetTableEx"
 	);
 
+	// todo: properly implement
 	// WMI
 	redirect_function(
 		[emulator]
@@ -1994,6 +1994,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 		"IoWMIOpenBlock"
 	);
 
+	// todo: properly implement
 	redirect_function(
 		[emulator]
 		{
