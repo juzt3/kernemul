@@ -451,23 +451,17 @@ bool hm::guest_partition_t::register_vmexit_callback(const vmexit_reason_t reaso
 bool hm::guest_partition_t::run_vmexit_callbacks(guest_virtual_processor_t& virtual_processor,
                                                  vmexit_context_t& context) const
 {
-	bool callback_ran = false;
-
-	const bool callback_status = std::ranges::all_of(vmexit_callbacks_,
+	return std::ranges::any_of(vmexit_callbacks_,
 		[&](const vmexit_callback_t& callback) -> bool
 		{
 			if (callback.reason != context.reason)
 			{
-				return true;
+				return false;
 			}
-
-			callback_ran = true;
 
 			return callback.routine(virtual_processor, context);
 		}
 	);
-
-	return callback_ran && callback_status;
 }
 
 bool hm::guest_partition_t::set_msr_bitmap(const WHV_PARTITION_PROPERTY& property)

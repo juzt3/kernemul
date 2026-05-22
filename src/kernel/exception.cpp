@@ -530,8 +530,8 @@ static bool call_exception_handler(const std::shared_ptr<emulator_t>& emulator,
 	return false;
 }
 
-void kernel::handle_exception(const std::shared_ptr<emulator_t>& emulator, const emulator_t::address_type rip,
-	const std::uint32_t code, const emulator_t::address_type faulting_address)
+bool kernel::handle_exception(const std::shared_ptr<emulator_t>& emulator, const emulator_t::address_type rip,
+	const std::uint32_t code, const emulator_t::address_type faulting_address, const bool allow_no_handler)
 {
 	emulator_t::address_type current_rip = rip;
 
@@ -558,7 +558,7 @@ void kernel::handle_exception(const std::shared_ptr<emulator_t>& emulator, const
 				THREAD_LOG("exception handled at frame {}, continuing at 0x{:X}",
 					depth, emulator->read_register<x86::reg::rip, emulator_t::address_type>());
 
-				return;
+				return true;
 			}
 		}
 
@@ -568,7 +568,12 @@ void kernel::handle_exception(const std::shared_ptr<emulator_t>& emulator, const
 		current_rip = unwind->return_address;
 	}
 
-	spdlog::error("exception dispatch: unhandled exception code=0x{:X} at 0x{:X}", code, rip);
+	THREAD_ERR_LOG("exception dispatch: unhandled exception code=0x{:X} at 0x{:X}", code, rip);
 
-	emulator->stop();
+	if (!allow_no_handler)
+	{
+		emulator->stop();
+	}
+
+	return false;
 }

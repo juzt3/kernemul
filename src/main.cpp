@@ -400,6 +400,20 @@ std::int32_t main()
 
 		error.throw_if("instruction hook attach");
 
+		error = emulator->hook_invalid_memory(
+			[](const emulator_t::address_type faulting_address, const protection_t access) -> bool
+			{
+				THREAD_LOG("invalid memory accessed at 0x{:X} (access={})", faulting_address, static_cast<std::uint32_t>(access));
+
+				return false;
+			},
+			prot_all,
+			emulator_t::default_start_address,
+			emulator_t::default_end_address
+		).error_or({});
+
+		error.throw_if("monitor invalid memory");
+
 		error = emulator->hook_instruction(x86::insn::rdtsc,
 			[emulator]()
 			{

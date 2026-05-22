@@ -275,8 +275,19 @@ void kernel::set_up_idt(const std::shared_ptr<emulator_t>& emulator, const kerne
 					handle_exception(emulator, frame.rip, status_integer_divide_by_zero, frame.rip);
 					break;
 				case 1:
-					handle_exception(emulator, frame.rip, status_single_step, frame.rip);
+				{
+					const bool handled = handle_exception(emulator, frame.rip, status_single_step, frame.rip, true);
+
+					if (!handled)
+					{
+						// todo: restore ss and cs
+						emulator->write_register<x86::reg::rip>(frame.rip);
+						emulator->write_register<x86::reg::rsp>(frame.rsp);
+						emulator->write_register<x86::reg::rflags>(frame.rflags);
+					}
+
 					break;
+				}
 				case 3:
 					handle_exception(emulator, frame.rip, status_breakpoint, frame.rip);
 					break;
