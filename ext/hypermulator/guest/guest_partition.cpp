@@ -453,7 +453,7 @@ bool hm::guest_partition_t::run_vmexit_callbacks(guest_virtual_processor_t& virt
 {
 	bool callback_ran = false;
 
-	const bool callback_status = std::ranges::any_of(vmexit_callbacks_,
+	const bool callback_status = std::ranges::all_of(vmexit_callbacks_,
 		[&](const vmexit_callback_t& callback) -> bool
 		{
 			if (callback.reason != context.reason)
