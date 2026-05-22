@@ -1919,4 +1919,24 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 		mapped_image,
 		"RtlPcToFileHeader"
 	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto init_flag = emulator->read_register<x86::reg::rcx, std::uint64_t>();
+			const auto signature = emulator->read_register<x86::reg::rdx, std::uint32_t>();
+			const auto oem_id = emulator->read_register<x86::reg::r8, std::uint64_t>();
+			const auto oem_table_id = emulator->read_register<x86::reg::r9, std::uint64_t>();
+
+			std::array<char, 5> sig_str = {};
+			std::memcpy(sig_str.data(), &signature, 4);
+
+			THREAD_LOG("HalAcpiGetTableEx called (init={}, signature='{}', oem_id=0x{:X}, oem_table_id=0x{:X}) -> NULL",
+				init_flag, sig_str.data(), oem_id, oem_table_id);
+
+			write_return_value(emulator, 0);
+		},
+		mapped_image,
+		"HalAcpiGetTableEx"
+	);
 }
