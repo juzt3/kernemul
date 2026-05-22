@@ -101,9 +101,14 @@ void hm::emulator_t::single_step(guest_virtual_processor_t& processor, vmexit_co
 	}
 }
 
-void hm::emulator_t::handle_page_fault(guest_virtual_processor_t& processor, const vmexit_context_t& context)
+bool hm::emulator_t::handle_page_fault(guest_virtual_processor_t& processor, const vmexit_context_t& context)
 {
 	const exception_vmexit_t& info = context.exception;
+
+	if (!info.error_code)
+	{
+		return false;
+	}
 
 	const page_fault_exception error_code = { .flags = *info.error_code };
 	const address_type accessed_address = info.exception_parameter;
@@ -137,10 +142,7 @@ void hm::emulator_t::handle_page_fault(guest_virtual_processor_t& processor, con
 		handled |= raw_process_invalid_memory_hook(hook, accessed_address, access);
 	}
 
-	if (!handled)
-	{
-		inject_guest_exception(processor, 14);
-	}
+	return handled;
 }
 
 std::shared_ptr<hm::hook_t> hm::emulator_t::hook_code(const hook_t::code_callback& callback,
@@ -208,7 +210,7 @@ bool hm::emulator_t::handle_exception(guest_virtual_processor_t& processor, vmex
 	}
 	else if (info.id == exception_id_t::page_fault)
 	{
-		handle_page_fault(processor, context);
+		return handle_page_fault(processor, context);
 	}
 
 	return true;

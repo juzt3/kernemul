@@ -160,7 +160,7 @@ namespace hm
 		void reset_guest_exit_state();
 
 		void single_step(guest_virtual_processor_t& processor, vmexit_context_t& context);
-		void handle_page_fault(guest_virtual_processor_t& processor, const vmexit_context_t& context);
+		bool handle_page_fault(guest_virtual_processor_t& processor, const vmexit_context_t& context);
 
 		bool handle_exception(guest_virtual_processor_t& processor, vmexit_context_t& context);
 		bool handle_memory_access(guest_virtual_processor_t& processor, vmexit_context_t& context);
