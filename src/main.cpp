@@ -354,7 +354,6 @@ std::int32_t main()
 					THREAD_ERR_LOG("unimplemented function in '{}' (address=0x{:X}, return address=0x{:X})", module_name, rip, return_address);
 				}
 
-				emulator->write_register<x86::reg::rip, emulator_t::address_type>(-1);
 
 				emulator->stop();
 			};
