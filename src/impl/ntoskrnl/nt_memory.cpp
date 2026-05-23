@@ -689,6 +689,106 @@ void redirect_ntoskrnl_memory_functions(const std::shared_ptr<emulator_t>& emula
 	redirect_function(
 		[emulator]
 		{
+			const auto section_handle_out = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto desired_access = emulator->read_register<x86::reg::rdx, std::uint32_t>();
+			const auto object_attributes = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
+			const auto max_size_ptr = emulator->read_register<x86::reg::r9, emulator_t::address_type>();
+
+			const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
+
+			std::uint32_t section_page_protection = 0;
+			emulator_err_t error = emulator->read_virtual_memory(rsp + 0x28, &section_page_protection, sizeof(section_page_protection));
+			error.throw_if("NtCreateSection: read SectionPageProtection");
+
+			std::uint32_t allocation_attributes = 0;
+			error = emulator->read_virtual_memory(rsp + 0x30, &allocation_attributes, sizeof(allocation_attributes));
+			error.throw_if("NtCreateSection: read AllocationAttributes");
+
+			emulator_t::address_type file_handle = 0;
+			error = emulator->read_virtual_memory(rsp + 0x38, &file_handle, sizeof(file_handle));
+			error.throw_if("NtCreateSection: read FileHandle");
+
+			std::int64_t max_size = 0;
+			if (max_size_ptr)
+			{
+				error = emulator->read_virtual_memory(max_size_ptr, &max_size, sizeof(max_size));
+				error.throw_if("NtCreateSection: read MaximumSize value");
+			}
+
+			std::shared_ptr<file_object_t> file_obj;
+			std::string file_path;
+
+			if (file_handle)
+			{
+				file_obj = kernel::object_manager->get_object_from_handle<file_object_t>(file_handle);
+			}
+
+			if (file_obj)
+			{
+				file_path = file_obj->path;
+			}
+
+			THREAD_LOG("NtCreateSection called (section_handle_out=0x{:X}, access=0x{:X}, oa=0x{:X}, max_size={}, protection=0x{:X}, alloc_attrs=0x{:X}, file_handle=0x{:X}, path='{}')",
+				section_handle_out, desired_access, object_attributes, max_size, section_page_protection, allocation_attributes, file_handle, file_path);
+
+			std::shared_ptr<file_t> backing_file;
+
+			if (file_obj && file_obj->file)
+			{
+				backing_file = file_obj->file;
+			}
+
+			if (backing_file && (allocation_attributes & sec_image))
+			{
+				auto mapped = map_pe_image(backing_file);
+
+				if (mapped)
+				{
+					THREAD_LOG("NtCreateSection: SEC_IMAGE detected, PE-mapped {} -> {} bytes", backing_file->size(), mapped->size());
+					backing_file = mapped;
+				}
+				else
+				{
+					THREAD_WARN_LOG("NtCreateSection: SEC_IMAGE set but PE mapping failed for '{}'", file_path);
+				}
+			}
+
+			auto host_object = std::make_shared<section_object_t>(backing_file);
+
+			constexpr std::size_t section_body_size = 0x40;
+			std::array<std::uint8_t, section_body_size> body{};
+
+			if (backing_file)
+			{
+				const std::int64_t file_size = static_cast<std::int64_t>(backing_file->size());
+				std::memcpy(body.data() + 0x30, &file_size, sizeof(file_size));
+			}
+			else if (max_size > 0)
+			{
+				std::memcpy(body.data() + 0x30, &max_size, sizeof(max_size));
+			}
+
+			const auto body_address = kernel::object_manager->create_object(0, body.data(), body.size(), host_object);
+			const auto section_handle = kernel::object_manager->create_handle(body_address, desired_access);
+
+			if (section_handle_out)
+			{
+				error = emulator->write_virtual_memory(section_handle_out, &section_handle, sizeof(section_handle));
+				error.throw_if("NtCreateSection: write handle");
+			}
+
+			THREAD_LOG("NtCreateSection: created section handle 0x{:X} at 0x{:X} (path='{}', size={})",
+				section_handle, body_address, file_path, backing_file ? backing_file->size() : 0);
+
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"NtCreateSection"
+	);
+
+	redirect_function(
+		[emulator]
+		{
 			const auto section_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
 			const auto mapped_base_out = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
 			const auto view_size_ptr = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
@@ -822,6 +922,117 @@ void redirect_ntoskrnl_memory_functions(const std::shared_ptr<emulator_t>& emula
 		},
 		mapped_image,
 		"MmMapViewInSystemSpace"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto section_handle = emulator->read_register<x86::reg::rcx, object_manager_t::handle_type>();
+			const auto process_handle = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+			const auto base_address_ptr = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
+			const auto zero_bits = emulator->read_register<x86::reg::r9, std::uint64_t>();
+
+			const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
+
+			std::uint64_t commit_size = 0;
+			emulator_err_t error = emulator->read_virtual_memory(rsp + 0x28, &commit_size, sizeof(commit_size));
+			error.throw_if("NtMapViewOfSection: read CommitSize");
+
+			emulator_t::address_type section_offset_ptr = 0;
+			error = emulator->read_virtual_memory(rsp + 0x30, &section_offset_ptr, sizeof(section_offset_ptr));
+			error.throw_if("NtMapViewOfSection: read SectionOffset ptr");
+
+			emulator_t::address_type view_size_ptr = 0;
+			error = emulator->read_virtual_memory(rsp + 0x38, &view_size_ptr, sizeof(view_size_ptr));
+			error.throw_if("NtMapViewOfSection: read ViewSize ptr");
+
+			std::uint32_t win32_protect = 0;
+			error = emulator->read_virtual_memory(rsp + 0x50, &win32_protect, sizeof(win32_protect));
+			error.throw_if("NtMapViewOfSection: read Win32Protect");
+
+			std::int64_t section_offset = 0;
+			if (section_offset_ptr)
+			{
+				error = emulator->read_virtual_memory(section_offset_ptr, &section_offset, sizeof(section_offset));
+				error.throw_if("NtMapViewOfSection: read SectionOffset value");
+			}
+
+			std::uint64_t view_size = 0;
+			if (view_size_ptr)
+			{
+				error = emulator->read_virtual_memory(view_size_ptr, &view_size, sizeof(view_size));
+				error.throw_if("NtMapViewOfSection: read ViewSize value");
+			}
+
+			THREAD_LOG("NtMapViewOfSection called (section_handle=0x{:X}, process_handle=0x{:X}, base_out=0x{:X}, zero_bits=0x{:X}, commit_size=0x{:X}, section_offset=0x{:X}, view_size=0x{:X}, protect=0x{:X})",
+				section_handle, process_handle, base_address_ptr, zero_bits, commit_size, section_offset, view_size, win32_protect);
+
+			const auto section = kernel::object_manager->get_object_from_handle<section_object_t>(section_handle);
+
+			if (!section)
+			{
+				THREAD_WARN_LOG("NtMapViewOfSection: invalid section handle 0x{:X}", section_handle);
+
+				write_nt_status(emulator, 0xC0000008);
+				return;
+			}
+
+			std::span<const std::uint8_t> data;
+
+			if (section->file)
+			{
+				data = section->file->read();
+			}
+
+			const std::uint64_t file_size = data.size();
+			const std::uint64_t offset = (section_offset > 0) ? static_cast<std::uint64_t>(section_offset) : 0;
+
+			if (view_size == 0)
+			{
+				view_size = (offset < file_size) ? (file_size - offset) : file_size;
+			}
+
+			if (view_size == 0)
+			{
+				view_size = 0x1000;
+			}
+
+			const auto mapping = emulator->heap_allocate(view_size, prot_read_write, true);
+			error = mapping.error_or({});
+			error.throw_if("NtMapViewOfSection: allocate mapping");
+
+			std::uint64_t copy_size = 0;
+
+			if (offset < file_size)
+			{
+				copy_size = std::min(view_size, file_size - offset);
+			}
+
+			if (copy_size > 0)
+			{
+				error = emulator->write_virtual_memory(*mapping, data.data() + offset, copy_size);
+				error.throw_if("NtMapViewOfSection: write file data");
+			}
+
+			if (base_address_ptr)
+			{
+				error = emulator->write_virtual_memory(base_address_ptr, &*mapping, sizeof(*mapping));
+				error.throw_if("NtMapViewOfSection: write BaseAddress");
+			}
+
+			if (view_size_ptr)
+			{
+				error = emulator->write_virtual_memory(view_size_ptr, &view_size, sizeof(view_size));
+				error.throw_if("NtMapViewOfSection: write ViewSize");
+			}
+
+			THREAD_LOG("NtMapViewOfSection: mapped 0x{:X} bytes at 0x{:X} (offset=0x{:X}, file_size=0x{:X})",
+				view_size, *mapping, offset, file_size);
+
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"NtMapViewOfSection"
 	);
 
 	redirect_function(

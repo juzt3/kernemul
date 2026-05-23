@@ -271,7 +271,9 @@ std::shared_ptr<kernel_image_t> kernel::map_kernel_image(const std::shared_ptr<e
 	const std::string_view name, const bool fix_imports,
 	const std::wstring_view directory)
 {
-	portable_executable::file_t pe_file(name);
+	const std::filesystem::path vfs_path = std::filesystem::path("vfs\\").append(name);
+
+	portable_executable::file_t pe_file(vfs_path);
 
 	if (!pe_file.load())
 	{

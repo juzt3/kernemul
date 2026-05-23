@@ -217,6 +217,18 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 		"KeReadStateMutant"
 	);
 
+	redirect_function(
+		[emulator]
+		{
+			const auto process = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto apc_state = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+
+			THREAD_LOG("KeStackAttachProcess called (process=0x{:X}, apc_state=0x{:X})", process, apc_state);
+		},
+		mapped_image,
+		"KeStackAttachProcess"
+	);
+
 	// todo: actually track callback registrations and fire them on relevant events
 	redirect_function(
 		[emulator]

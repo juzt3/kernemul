@@ -4,6 +4,7 @@
 
 #include <filesystem>
 #include <fstream>
+#include <map>
 
 std::span<const std::uint8_t> file_t::read() const
 {
@@ -134,13 +135,75 @@ bool filesystem_t::directory_exists(const path_type& path) const
 	return false;
 }
 
+std::vector<filesystem_t::directory_entry_t> filesystem_t::list_directory(const path_type& path) const
+{
+	std::string prefix = path;
+
+	if (!prefix.empty() && prefix.back() != '/')
+	{
+		prefix.push_back('/');
+	}
+
+	std::map<std::string, directory_entry_t> entries;
+
+	for (const auto& [key, value] : list_)
+	{
+		if (!key.starts_with(prefix))
+		{
+			continue;
+		}
+
+		const auto rest = key.substr(prefix.size());
+
+		if (rest.empty())
+		{
+			continue;
+		}
+
+		const auto slash = rest.find('/');
+
+		if (slash == std::string::npos)
+		{
+			const bool is_directory = value && value->is_directory();
+
+			auto& entry = entries[rest];
+			entry.name = rest;
+			entry.is_directory = entry.is_directory || is_directory;
+			entry.size = is_directory ? 0 : (value ? value->size() : 0);
+		}
+		else
+		{
+			const auto name = rest.substr(0, slash);
+
+			auto& entry = entries[name];
+			entry.name = name;
+			entry.is_directory = true;
+		}
+	}
+
+	std::vector<directory_entry_t> result;
+	result.reserve(entries.size());
+
+	for (auto& [name, entry] : entries)
+	{
+		result.push_back(std::move(entry));
+	}
+
+	return result;
+}
+
 bool filesystem_t::load_at(const std::string& host_path, const path_type& virtual_path)
 {
-	std::ifstream file(host_path, std::ios::binary | std::ios::ate);
+	std::filesystem::path vfs_path = std::filesystem::path("vfs\\").append(host_path);
+
+	if(host_path.substr(0, 3) == std::string("vfs"))
+		vfs_path = host_path;
+
+	std::ifstream file(vfs_path, std::ios::binary | std::ios::ate);
 
 	if (!file.is_open())
 	{
-		GLOBAL_WARN_LOG("filesystem: failed to open host file '{}'", host_path);
+		GLOBAL_WARN_LOG("filesystem: failed to open host file '{}'", vfs_path.string());
 		return false;
 	}
 
@@ -181,7 +244,9 @@ bool filesystem_t::load_directory_at(const std::string& host_path, const path_ty
 {
 	std::error_code ec;
 
-	const std::filesystem::path host_root(host_path);
+	const std::filesystem::path vfs_path = std::filesystem::path("vfs\\").append(host_path);
+
+	const std::filesystem::path host_root(vfs_path);
 
 	if (!std::filesystem::is_directory(host_root, ec))
 	{

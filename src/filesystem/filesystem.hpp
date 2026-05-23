@@ -3,6 +3,8 @@
 #include <memory>
 #include <string>
 #include <span>
+#include <vector>
+#include <cstdint>
 
 class file_t
 {
@@ -52,6 +54,15 @@ public:
 	[[nodiscard]] bool delete_at(const path_type& path);
 	[[nodiscard]] bool exists(const path_type& path) const;
 	[[nodiscard]] bool directory_exists(const path_type& path) const;
+
+	struct directory_entry_t
+	{
+		std::string name;
+		bool is_directory = false;
+		std::uint64_t size = 0;
+	};
+
+	[[nodiscard]] std::vector<directory_entry_t> list_directory(const path_type& path) const;
 
 protected:
 	std::unordered_map<path_type, std::shared_ptr<file_t>> list_;

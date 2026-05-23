@@ -678,6 +678,57 @@ void redirect_ntoskrnl_string_functions(const std::shared_ptr<emulator_t>& emula
 	redirect_function(
 		[emulator]
 		{
+			const auto unicode_string = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto max_bytes = emulator->read_register<x86::reg::rdx, std::uint32_t>();
+			const auto bytes_out = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
+			const auto multibyte_string = emulator->read_register<x86::reg::r9, emulator_t::address_type>();
+
+			const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
+
+			std::uint32_t source_bytes = 0;
+			emulator_err_t error = emulator->read_virtual_memory(rsp + 0x28, &source_bytes, sizeof(source_bytes));
+			error.throw_if("RtlMultiByteToUnicodeN: read BytesInMultiByteString");
+
+			const std::uint32_t max_chars = max_bytes / 2;
+			const std::uint32_t count = source_bytes < max_chars ? source_bytes : max_chars;
+
+			THREAD_LOG("RtlMultiByteToUnicodeN called (unicode=0x{:X}, max_bytes=0x{:X}, bytes_out=0x{:X}, multibyte=0x{:X}, source_bytes=0x{:X})",
+				unicode_string, max_bytes, bytes_out, multibyte_string, source_bytes);
+
+			if (count && unicode_string && multibyte_string)
+			{
+				std::string source(count, '\0');
+				error = emulator->read_virtual_memory(multibyte_string, source.data(), count);
+				error.throw_if("RtlMultiByteToUnicodeN: read source");
+
+				std::wstring wide;
+				wide.reserve(count);
+
+				for (const auto byte : source)
+				{
+					wide += static_cast<wchar_t>(static_cast<unsigned char>(byte));
+				}
+
+				error = emulator->write_virtual_memory(unicode_string, wide.data(), static_cast<std::size_t>(count) * sizeof(wchar_t));
+				error.throw_if("RtlMultiByteToUnicodeN: write unicode");
+			}
+
+			if (bytes_out)
+			{
+				const std::uint32_t written = count * 2;
+				error = emulator->write_virtual_memory(bytes_out, &written, sizeof(written));
+				error.throw_if("RtlMultiByteToUnicodeN: write BytesInUnicodeString");
+			}
+
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"RtlMultiByteToUnicodeN"
+	);
+
+	redirect_function(
+		[emulator]
+		{
 			const auto string1_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
 			const auto string2_address = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
 			const auto case_insensitive = emulator->read_register<x86::reg::r8, std::uint8_t>();

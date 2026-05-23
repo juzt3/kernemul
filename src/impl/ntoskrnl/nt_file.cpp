@@ -3,6 +3,22 @@
 
 constexpr std::size_t file_object_body_size = 0x1d8;
 
+struct file_directory_information_t
+{
+	std::uint32_t next_entry_offset;
+	std::uint32_t file_index;
+	std::int64_t creation_time;
+	std::int64_t last_access_time;
+	std::int64_t last_write_time;
+	std::int64_t change_time;
+	std::int64_t end_of_file;
+	std::int64_t allocation_size;
+	std::uint32_t file_attributes;
+	std::uint32_t file_name_length;
+};
+
+static_assert(sizeof(file_directory_information_t) == 0x40, "FILE_DIRECTORY_INFORMATION header must be 0x40 bytes");
+
 static std::string normalize_path(const std::wstring& guest_path)
 {
 	auto path = util::narrow_wstring(guest_path);
@@ -22,24 +38,24 @@ static std::string normalize_path(const std::wstring& guest_path)
 	constexpr std::string_view systemroot_prefix = "\\systemroot\\";
 
 	auto strip_prefix = [](std::string& s, const std::string_view prefix)
-	{
-		std::string lower_prefix(prefix);
-
-		for (auto& c : lower_prefix)
 		{
-			if (c == '\\')
+			std::string lower_prefix(prefix);
+
+			for (auto& c : lower_prefix)
 			{
-				c = '/';
+				if (c == '\\')
+				{
+					c = '/';
+				}
+
+				c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
 			}
 
-			c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-		}
-
-		if (s.starts_with(lower_prefix))
-		{
-			s = s.substr(lower_prefix.size());
-		}
-	};
+			if (s.starts_with(lower_prefix))
+			{
+				s = s.substr(lower_prefix.size());
+			}
+		};
 
 	strip_prefix(path, device_prefix);
 	strip_prefix(path, nt_prefix);
@@ -147,6 +163,9 @@ constexpr std::uint32_t status_invalid_parameter = 0xC000000D;
 constexpr std::uint32_t status_file_is_a_directory = 0xC00000BA;
 constexpr std::uint32_t status_not_a_directory = 0xC0000103;
 constexpr std::uint32_t status_unsuccessful = 0xC0000001;
+constexpr std::uint32_t status_no_more_files = 0x80000006;
+constexpr std::uint32_t status_no_such_file = 0xC000000F;
+constexpr std::uint32_t status_buffer_overflow = 0x80000005;
 
 static void iop_create_file(const std::shared_ptr<emulator_t>& emulator,
 	const emulator_t::address_type handle_out_address,
@@ -376,47 +395,47 @@ void redirect_ntoskrnl_file_functions(const std::shared_ptr<emulator_t>& emulato
 	);
 
 	const auto create_file_handler = [emulator](const std::string_view caller_name)
-	{
-		const auto rcx = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
-		const auto rdx = emulator->read_register<x86::reg::rdx, std::uint32_t>();
-		const auto r8 = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
-		const auto r9 = emulator->read_register<x86::reg::r9, emulator_t::address_type>();
+		{
+			const auto rcx = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto rdx = emulator->read_register<x86::reg::rdx, std::uint32_t>();
+			const auto r8 = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
+			const auto r9 = emulator->read_register<x86::reg::r9, emulator_t::address_type>();
 
-		const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
+			const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
 
-		std::uint64_t allocation_size = 0;
-		emulator_err_t error = emulator->read_virtual_memory(rsp + 0x28, &allocation_size, sizeof(allocation_size));
-		error.throw_if("read allocation size ptr");
+			std::uint64_t allocation_size = 0;
+			emulator_err_t error = emulator->read_virtual_memory(rsp + 0x28, &allocation_size, sizeof(allocation_size));
+			error.throw_if("read allocation size ptr");
 
-		std::uint32_t file_attributes = 0;
-		error = emulator->read_virtual_memory(rsp + 0x30, &file_attributes, sizeof(file_attributes));
-		error.throw_if("read file attributes");
+			std::uint32_t file_attributes = 0;
+			error = emulator->read_virtual_memory(rsp + 0x30, &file_attributes, sizeof(file_attributes));
+			error.throw_if("read file attributes");
 
-		std::uint32_t share_access = 0;
-		error = emulator->read_virtual_memory(rsp + 0x38, &share_access, sizeof(share_access));
-		error.throw_if("read share access");
+			std::uint32_t share_access = 0;
+			error = emulator->read_virtual_memory(rsp + 0x38, &share_access, sizeof(share_access));
+			error.throw_if("read share access");
 
-		std::uint32_t create_disposition = 0;
-		error = emulator->read_virtual_memory(rsp + 0x40, &create_disposition, sizeof(create_disposition));
-		error.throw_if("read create disposition");
+			std::uint32_t create_disposition = 0;
+			error = emulator->read_virtual_memory(rsp + 0x40, &create_disposition, sizeof(create_disposition));
+			error.throw_if("read create disposition");
 
-		std::uint32_t create_options = 0;
-		error = emulator->read_virtual_memory(rsp + 0x48, &create_options, sizeof(create_options));
-		error.throw_if("read create options");
+			std::uint32_t create_options = 0;
+			error = emulator->read_virtual_memory(rsp + 0x48, &create_options, sizeof(create_options));
+			error.throw_if("read create options");
 
-		std::uint64_t ea_buffer = 0;
-		error = emulator->read_virtual_memory(rsp + 0x50, &ea_buffer, sizeof(ea_buffer));
-		error.throw_if("read ea buffer");
+			std::uint64_t ea_buffer = 0;
+			error = emulator->read_virtual_memory(rsp + 0x50, &ea_buffer, sizeof(ea_buffer));
+			error.throw_if("read ea buffer");
 
-		std::uint32_t ea_length = 0;
-		error = emulator->read_virtual_memory(rsp + 0x58, &ea_length, sizeof(ea_length));
-		error.throw_if("read ea length");
+			std::uint32_t ea_length = 0;
+			error = emulator->read_virtual_memory(rsp + 0x58, &ea_length, sizeof(ea_length));
+			error.throw_if("read ea length");
 
-		THREAD_LOG("{} called (file_handle_out=0x{:X}, desired_access=0x{:X}, object_attributes=0x{:X}, io_status_block=0x{:X}, allocation_size=0x{:X}, file_attributes=0x{:X}, share_access=0x{:X}, create_disposition=0x{:X}, create_options=0x{:X}, ea_buffer=0x{:X}, ea_length=0x{:X})",
-			caller_name, rcx, rdx, r8, r9, allocation_size, file_attributes, share_access, create_disposition, create_options, ea_buffer, ea_length);
+			THREAD_LOG("{} called (file_handle_out=0x{:X}, desired_access=0x{:X}, object_attributes=0x{:X}, io_status_block=0x{:X}, allocation_size=0x{:X}, file_attributes=0x{:X}, share_access=0x{:X}, create_disposition=0x{:X}, create_options=0x{:X}, ea_buffer=0x{:X}, ea_length=0x{:X})",
+				caller_name, rcx, rdx, r8, r9, allocation_size, file_attributes, share_access, create_disposition, create_options, ea_buffer, ea_length);
 
-		iop_create_file(emulator, rcx, rdx, r8, r9, create_disposition, create_options, std::string(caller_name));
-	};
+			iop_create_file(emulator, rcx, rdx, r8, r9, create_disposition, create_options, std::string(caller_name));
+		};
 
 	redirect_function(
 		[create_file_handler] { create_file_handler("NtCreateFile"); },
@@ -494,95 +513,95 @@ void redirect_ntoskrnl_file_functions(const std::shared_ptr<emulator_t>& emulato
 	);
 
 	const auto write_file_handler = [emulator](const std::string_view caller_name)
-	{
-		const auto file_handle = emulator->read_register<x86::reg::rcx, object_manager_t::handle_type>();
-		const auto event = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
-		const auto apc_routine = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
-		const auto apc_context = emulator->read_register<x86::reg::r9, emulator_t::address_type>();
-
-		const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
-
-		emulator_t::address_type io_status_block = 0;
-		emulator_err_t error = emulator->read_virtual_memory(rsp + 0x28, &io_status_block, sizeof(io_status_block));
-		error.throw_if("read io status block ptr");
-
-		emulator_t::address_type buffer_address = 0;
-		error = emulator->read_virtual_memory(rsp + 0x30, &buffer_address, sizeof(buffer_address));
-		error.throw_if("read buffer ptr");
-
-		std::uint32_t length = 0;
-		error = emulator->read_virtual_memory(rsp + 0x38, &length, sizeof(length));
-		error.throw_if("read length");
-
-		emulator_t::address_type byte_offset_ptr = 0;
-		error = emulator->read_virtual_memory(rsp + 0x40, &byte_offset_ptr, sizeof(byte_offset_ptr));
-		error.throw_if("read byte offset ptr");
-
-		emulator_t::address_type key_ptr = 0;
-		error = emulator->read_virtual_memory(rsp + 0x48, &key_ptr, sizeof(key_ptr));
-		error.throw_if("read key ptr");
-
-		THREAD_LOG("{} called (handle=0x{:X}, event=0x{:X}, apc_routine=0x{:X}, apc_context=0x{:X}, io_status_block=0x{:X}, buffer=0x{:X}, length=0x{:X}, byte_offset_ptr=0x{:X}, key_ptr=0x{:X})",
-			caller_name, file_handle, event, apc_routine, apc_context, io_status_block, buffer_address, length, byte_offset_ptr, key_ptr);
-
-		const auto entry = kernel::object_manager->lookup_handle(file_handle);
-
-		if (!entry)
 		{
-			THREAD_WARN_LOG("{}: invalid handle 0x{:X}", caller_name, file_handle);
+			const auto file_handle = emulator->read_register<x86::reg::rcx, object_manager_t::handle_type>();
+			const auto event = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+			const auto apc_routine = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
+			const auto apc_context = emulator->read_register<x86::reg::r9, emulator_t::address_type>();
 
-			write_io_status(emulator, io_status_block, static_cast<std::int32_t>(0xC0000008), 0);
-			write_nt_status(emulator, 0xC0000008);
+			const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
 
-			return;
-		}
+			emulator_t::address_type io_status_block = 0;
+			emulator_err_t error = emulator->read_virtual_memory(rsp + 0x28, &io_status_block, sizeof(io_status_block));
+			error.throw_if("read io status block ptr");
 
-		if (!(entry->access & (object_manager_t::generic_write | object_manager_t::file_write_data | object_manager_t::file_append_data | object_manager_t::generic_all)))
-		{
-			THREAD_WARN_LOG("{}: handle 0x{:X} not writable", caller_name, file_handle);
+			emulator_t::address_type buffer_address = 0;
+			error = emulator->read_virtual_memory(rsp + 0x30, &buffer_address, sizeof(buffer_address));
+			error.throw_if("read buffer ptr");
 
-			write_io_status(emulator, io_status_block, static_cast<std::int32_t>(0xC0000022), 0);
-			write_nt_status(emulator, 0xC0000022);
+			std::uint32_t length = 0;
+			error = emulator->read_virtual_memory(rsp + 0x38, &length, sizeof(length));
+			error.throw_if("read length");
 
-			return;
-		}
+			emulator_t::address_type byte_offset_ptr = 0;
+			error = emulator->read_virtual_memory(rsp + 0x40, &byte_offset_ptr, sizeof(byte_offset_ptr));
+			error.throw_if("read byte offset ptr");
 
-		if (!buffer_address || !length)
-		{
-			THREAD_WARN_LOG("{}: null buffer or zero length", caller_name);
+			emulator_t::address_type key_ptr = 0;
+			error = emulator->read_virtual_memory(rsp + 0x48, &key_ptr, sizeof(key_ptr));
+			error.throw_if("read key ptr");
 
-			write_io_status(emulator, io_status_block, static_cast<std::int32_t>(0xC000000D), 0);
-			write_nt_status(emulator, 0xC000000D);
+			THREAD_LOG("{} called (handle=0x{:X}, event=0x{:X}, apc_routine=0x{:X}, apc_context=0x{:X}, io_status_block=0x{:X}, buffer=0x{:X}, length=0x{:X}, byte_offset_ptr=0x{:X}, key_ptr=0x{:X})",
+				caller_name, file_handle, event, apc_routine, apc_context, io_status_block, buffer_address, length, byte_offset_ptr, key_ptr);
 
-			return;
-		}
+			const auto entry = kernel::object_manager->lookup_handle(file_handle);
 
-		const auto host_object = kernel::object_manager->get_object_from_handle<file_object_t>(file_handle);
+			if (!entry)
+			{
+				THREAD_WARN_LOG("{}: invalid handle 0x{:X}", caller_name, file_handle);
 
-		if (!host_object || !host_object->file)
-		{
-			THREAD_ERR_LOG("{}: handle 0x{:X} has no backing file", caller_name, file_handle);
+				write_io_status(emulator, io_status_block, static_cast<std::int32_t>(0xC0000008), 0);
+				write_nt_status(emulator, 0xC0000008);
 
-			write_io_status(emulator, io_status_block, static_cast<std::int32_t>(0xC0000008), 0);
-			write_nt_status(emulator, 0xC0000008);
+				return;
+			}
 
-			return;
-		}
+			if (!(entry->access & (object_manager_t::generic_write | object_manager_t::file_write_data | object_manager_t::file_append_data | object_manager_t::generic_all)))
+			{
+				THREAD_WARN_LOG("{}: handle 0x{:X} not writable", caller_name, file_handle);
 
-		std::vector<std::uint8_t> buffer(length);
+				write_io_status(emulator, io_status_block, static_cast<std::int32_t>(0xC0000022), 0);
+				write_nt_status(emulator, 0xC0000022);
 
-		error = emulator->read_virtual_memory(buffer_address, buffer.data(), length);
-		error.throw_if("read write buffer from guest");
+				return;
+			}
 
-		const auto write_span = std::span<const std::uint8_t>(buffer.data(), buffer.size());
+			if (!buffer_address || !length)
+			{
+				THREAD_WARN_LOG("{}: null buffer or zero length", caller_name);
 
-		host_object->file->write(write_span);
+				write_io_status(emulator, io_status_block, static_cast<std::int32_t>(0xC000000D), 0);
+				write_nt_status(emulator, 0xC000000D);
 
-		THREAD_LOG("{}: wrote {} bytes to handle 0x{:X}", caller_name, length, file_handle);
+				return;
+			}
 
-		write_io_status(emulator, io_status_block, 0, length);
-		write_nt_success(emulator);
-	};
+			const auto host_object = kernel::object_manager->get_object_from_handle<file_object_t>(file_handle);
+
+			if (!host_object || !host_object->file)
+			{
+				THREAD_ERR_LOG("{}: handle 0x{:X} has no backing file", caller_name, file_handle);
+
+				write_io_status(emulator, io_status_block, static_cast<std::int32_t>(0xC0000008), 0);
+				write_nt_status(emulator, 0xC0000008);
+
+				return;
+			}
+
+			std::vector<std::uint8_t> buffer(length);
+
+			error = emulator->read_virtual_memory(buffer_address, buffer.data(), length);
+			error.throw_if("read write buffer from guest");
+
+			const auto write_span = std::span<const std::uint8_t>(buffer.data(), buffer.size());
+
+			host_object->file->write(write_span);
+
+			THREAD_LOG("{}: wrote {} bytes to handle 0x{:X}", caller_name, length, file_handle);
+
+			write_io_status(emulator, io_status_block, 0, length);
+			write_nt_success(emulator);
+		};
 
 	redirect_function(
 		[write_file_handler] { write_file_handler("NtWriteFile"); },
@@ -595,118 +614,118 @@ void redirect_ntoskrnl_file_functions(const std::shared_ptr<emulator_t>& emulato
 	);
 
 	const auto read_file_handler = [emulator](const std::string_view caller_name)
-	{
-		const auto file_handle = emulator->read_register<x86::reg::rcx, object_manager_t::handle_type>();
-		const auto event = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
-		const auto apc_routine = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
-		const auto apc_context = emulator->read_register<x86::reg::r9, emulator_t::address_type>();
-
-		const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
-
-		emulator_t::address_type io_status_block = 0;
-		emulator_err_t error = emulator->read_virtual_memory(rsp + 0x28, &io_status_block, sizeof(io_status_block));
-		error.throw_if("read io status block ptr");
-
-		emulator_t::address_type buffer_address = 0;
-		error = emulator->read_virtual_memory(rsp + 0x30, &buffer_address, sizeof(buffer_address));
-		error.throw_if("read buffer ptr");
-
-		std::uint32_t length = 0;
-		error = emulator->read_virtual_memory(rsp + 0x38, &length, sizeof(length));
-		error.throw_if("read length");
-
-		emulator_t::address_type byte_offset_ptr = 0;
-		error = emulator->read_virtual_memory(rsp + 0x40, &byte_offset_ptr, sizeof(byte_offset_ptr));
-		error.throw_if("read byte offset ptr");
-
-		emulator_t::address_type key_ptr = 0;
-		error = emulator->read_virtual_memory(rsp + 0x48, &key_ptr, sizeof(key_ptr));
-		error.throw_if("read key ptr");
-
-		THREAD_LOG("{} called (handle=0x{:X}, event=0x{:X}, apc_routine=0x{:X}, apc_context=0x{:X}, io_status_block=0x{:X}, buffer=0x{:X}, length=0x{:X}, byte_offset_ptr=0x{:X}, key_ptr=0x{:X})",
-			caller_name, file_handle, event, apc_routine, apc_context, io_status_block, buffer_address, length, byte_offset_ptr, key_ptr);
-
-		const auto entry = kernel::object_manager->lookup_handle(file_handle);
-
-		if (!entry)
 		{
-			THREAD_WARN_LOG("{}: invalid handle 0x{:X}", caller_name, file_handle);
+			const auto file_handle = emulator->read_register<x86::reg::rcx, object_manager_t::handle_type>();
+			const auto event = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+			const auto apc_routine = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
+			const auto apc_context = emulator->read_register<x86::reg::r9, emulator_t::address_type>();
 
-			write_io_status(emulator, io_status_block, static_cast<std::int32_t>(0xC0000008), 0);
-			write_nt_status(emulator, 0xC0000008);
+			const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
 
-			return;
-		}
+			emulator_t::address_type io_status_block = 0;
+			emulator_err_t error = emulator->read_virtual_memory(rsp + 0x28, &io_status_block, sizeof(io_status_block));
+			error.throw_if("read io status block ptr");
 
-		if (!(entry->access & (object_manager_t::generic_read | object_manager_t::file_read_data | object_manager_t::generic_all)))
-		{
-			THREAD_WARN_LOG("{}: handle 0x{:X} not readable", caller_name, file_handle);
+			emulator_t::address_type buffer_address = 0;
+			error = emulator->read_virtual_memory(rsp + 0x30, &buffer_address, sizeof(buffer_address));
+			error.throw_if("read buffer ptr");
 
-			write_io_status(emulator, io_status_block, static_cast<std::int32_t>(0xC0000022), 0);
-			write_nt_status(emulator, 0xC0000022);
+			std::uint32_t length = 0;
+			error = emulator->read_virtual_memory(rsp + 0x38, &length, sizeof(length));
+			error.throw_if("read length");
 
-			return;
-		}
+			emulator_t::address_type byte_offset_ptr = 0;
+			error = emulator->read_virtual_memory(rsp + 0x40, &byte_offset_ptr, sizeof(byte_offset_ptr));
+			error.throw_if("read byte offset ptr");
 
-		if (!buffer_address || !length)
-		{
-			THREAD_WARN_LOG("{}: null buffer or zero length", caller_name);
+			emulator_t::address_type key_ptr = 0;
+			error = emulator->read_virtual_memory(rsp + 0x48, &key_ptr, sizeof(key_ptr));
+			error.throw_if("read key ptr");
 
-			write_io_status(emulator, io_status_block, static_cast<std::int32_t>(0xC000000D), 0);
-			write_nt_status(emulator, 0xC000000D);
+			THREAD_LOG("{} called (handle=0x{:X}, event=0x{:X}, apc_routine=0x{:X}, apc_context=0x{:X}, io_status_block=0x{:X}, buffer=0x{:X}, length=0x{:X}, byte_offset_ptr=0x{:X}, key_ptr=0x{:X})",
+				caller_name, file_handle, event, apc_routine, apc_context, io_status_block, buffer_address, length, byte_offset_ptr, key_ptr);
 
-			return;
-		}
+			const auto entry = kernel::object_manager->lookup_handle(file_handle);
 
-		const auto host_object = kernel::object_manager->get_object_from_handle<file_object_t>(file_handle);
+			if (!entry)
+			{
+				THREAD_WARN_LOG("{}: invalid handle 0x{:X}", caller_name, file_handle);
 
-		if (!host_object || !host_object->file)
-		{
-			THREAD_ERR_LOG("{}: handle 0x{:X} has no backing file", caller_name, file_handle);
+				write_io_status(emulator, io_status_block, static_cast<std::int32_t>(0xC0000008), 0);
+				write_nt_status(emulator, 0xC0000008);
 
-			write_io_status(emulator, io_status_block, static_cast<std::int32_t>(0xC0000008), 0);
-			write_nt_status(emulator, 0xC0000008);
+				return;
+			}
 
-			return;
-		}
+			if (!(entry->access & (object_manager_t::generic_read | object_manager_t::file_read_data | object_manager_t::generic_all)))
+			{
+				THREAD_WARN_LOG("{}: handle 0x{:X} not readable", caller_name, file_handle);
 
-		const auto file_data = host_object->file->read();
-		const auto file_size = file_data.size();
+				write_io_status(emulator, io_status_block, static_cast<std::int32_t>(0xC0000022), 0);
+				write_nt_status(emulator, 0xC0000022);
 
-		std::uint64_t offset = 0;
+				return;
+			}
 
-		if (byte_offset_ptr)
-		{
-			std::int64_t byte_offset = 0;
-			error = emulator->read_virtual_memory(byte_offset_ptr, &byte_offset, sizeof(byte_offset));
-			error.throw_if("read byte offset");
+			if (!buffer_address || !length)
+			{
+				THREAD_WARN_LOG("{}: null buffer or zero length", caller_name);
 
-			offset = static_cast<std::uint64_t>(byte_offset);
-		}
+				write_io_status(emulator, io_status_block, static_cast<std::int32_t>(0xC000000D), 0);
+				write_nt_status(emulator, 0xC000000D);
 
-		if (offset >= file_size)
-		{
-			constexpr std::uint32_t status_end_of_file = 0xC0000011;
+				return;
+			}
 
-			THREAD_LOG("{}: read past end of file (offset=0x{:X}, file_size=0x{:X})", caller_name, offset, file_size);
+			const auto host_object = kernel::object_manager->get_object_from_handle<file_object_t>(file_handle);
 
-			write_io_status(emulator, io_status_block, static_cast<std::int32_t>(status_end_of_file), 0);
-			write_nt_status(emulator, status_end_of_file);
+			if (!host_object || !host_object->file)
+			{
+				THREAD_ERR_LOG("{}: handle 0x{:X} has no backing file", caller_name, file_handle);
 
-			return;
-		}
+				write_io_status(emulator, io_status_block, static_cast<std::int32_t>(0xC0000008), 0);
+				write_nt_status(emulator, 0xC0000008);
 
-		const auto available = file_size - offset;
-		const auto bytes_to_read = static_cast<std::uint32_t>(std::min(static_cast<std::uint64_t>(length), available));
+				return;
+			}
 
-		error = emulator->write_virtual_memory(buffer_address, file_data.data() + offset, bytes_to_read);
-		error.throw_if("write read buffer to guest");
+			const auto file_data = host_object->file->read();
+			const auto file_size = file_data.size();
 
-		THREAD_LOG("{}: read {} bytes from handle 0x{:X} at offset 0x{:X}", caller_name, bytes_to_read, file_handle, offset);
+			std::uint64_t offset = 0;
 
-		write_io_status(emulator, io_status_block, 0, bytes_to_read);
-		write_nt_success(emulator);
-	};
+			if (byte_offset_ptr)
+			{
+				std::int64_t byte_offset = 0;
+				error = emulator->read_virtual_memory(byte_offset_ptr, &byte_offset, sizeof(byte_offset));
+				error.throw_if("read byte offset");
+
+				offset = static_cast<std::uint64_t>(byte_offset);
+			}
+
+			if (offset >= file_size)
+			{
+				constexpr std::uint32_t status_end_of_file = 0xC0000011;
+
+				THREAD_LOG("{}: read past end of file (offset=0x{:X}, file_size=0x{:X})", caller_name, offset, file_size);
+
+				write_io_status(emulator, io_status_block, static_cast<std::int32_t>(status_end_of_file), 0);
+				write_nt_status(emulator, status_end_of_file);
+
+				return;
+			}
+
+			const auto available = file_size - offset;
+			const auto bytes_to_read = static_cast<std::uint32_t>(std::min(static_cast<std::uint64_t>(length), available));
+
+			error = emulator->write_virtual_memory(buffer_address, file_data.data() + offset, bytes_to_read);
+			error.throw_if("write read buffer to guest");
+
+			THREAD_LOG("{}: read {} bytes from handle 0x{:X} at offset 0x{:X}", caller_name, bytes_to_read, file_handle, offset);
+
+			write_io_status(emulator, io_status_block, 0, bytes_to_read);
+			write_nt_success(emulator);
+		};
 
 	redirect_function(
 		[read_file_handler] { read_file_handler("NtReadFile"); },
@@ -736,59 +755,59 @@ void redirect_ntoskrnl_file_functions(const std::shared_ptr<emulator_t>& emulato
 	constexpr std::size_t file_standard_information_size = 0x18;
 
 	const auto query_file_info_handler = [emulator](const std::string_view caller_name)
-	{
-		const object_manager_t::handle_type file_handle = emulator->read_register<x86::reg::rcx, object_manager_t::handle_type>();
-		const emulator_t::address_type io_status_block = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
-		const emulator_t::address_type file_information = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
-		const std::uint32_t length = emulator->read_register<x86::reg::r9, std::uint32_t>();
-
-		const emulator_t::address_type rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
-		std::uint32_t information_class = 0;
-		emulator_err_t error = emulator->read_virtual_memory(rsp + 0x28, &information_class, sizeof(information_class));
-		error.throw_if(std::format("{}: read FileInformationClass", caller_name));
-
-		THREAD_LOG("{} called (handle=0x{:X}, class={}, buffer=0x{:X}, length=0x{:X})",
-			caller_name, file_handle, information_class, file_information, length);
-
-		if (information_class == file_standard_information_class)
 		{
-			if (length < file_standard_information_size)
+			const object_manager_t::handle_type file_handle = emulator->read_register<x86::reg::rcx, object_manager_t::handle_type>();
+			const emulator_t::address_type io_status_block = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+			const emulator_t::address_type file_information = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
+			const std::uint32_t length = emulator->read_register<x86::reg::r9, std::uint32_t>();
+
+			const emulator_t::address_type rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
+			std::uint32_t information_class = 0;
+			emulator_err_t error = emulator->read_virtual_memory(rsp + 0x28, &information_class, sizeof(information_class));
+			error.throw_if(std::format("{}: read FileInformationClass", caller_name));
+
+			THREAD_LOG("{} called (handle=0x{:X}, class={}, buffer=0x{:X}, length=0x{:X})",
+				caller_name, file_handle, information_class, file_information, length);
+
+			if (information_class == file_standard_information_class)
 			{
-				constexpr std::uint32_t status_buffer_too_small = 0xC0000023;
-				write_nt_status(emulator, status_buffer_too_small);
+				if (length < file_standard_information_size)
+				{
+					constexpr std::uint32_t status_buffer_too_small = 0xC0000023;
+					write_nt_status(emulator, status_buffer_too_small);
+					return;
+				}
+
+				const auto host_object = kernel::object_manager->get_object_from_handle<file_object_t>(file_handle);
+				const bool is_directory = host_object && host_object->file && host_object->file->is_directory();
+				const std::int64_t file_size = (host_object && host_object->file && !is_directory) ? static_cast<std::int64_t>(host_object->file->size()) : 0;
+
+				struct
+				{
+					std::int64_t allocation_size;
+					std::int64_t end_of_file;
+					std::uint32_t number_of_links;
+					std::uint8_t delete_pending;
+					std::uint8_t directory;
+					std::uint16_t padding;
+				} standard_info = { };
+
+				standard_info.allocation_size = (file_size + 0xFFF) & ~0xFFFll;
+				standard_info.end_of_file = file_size;
+				standard_info.number_of_links = 1;
+				standard_info.directory = is_directory ? 1 : 0;
+
+				error = emulator->write_virtual_memory(file_information, &standard_info, sizeof(standard_info));
+				error.throw_if(std::format("{}: write FileStandardInformation", caller_name));
+
+				write_io_status(emulator, io_status_block, 0, file_standard_information_size);
+				write_nt_success(emulator);
 				return;
 			}
 
-			const auto host_object = kernel::object_manager->get_object_from_handle<file_object_t>(file_handle);
-			const bool is_directory = host_object && host_object->file && host_object->file->is_directory();
-			const std::int64_t file_size = (host_object && host_object->file && !is_directory) ? static_cast<std::int64_t>(host_object->file->size()) : 0;
-
-			struct
-			{
-				std::int64_t allocation_size;
-				std::int64_t end_of_file;
-				std::uint32_t number_of_links;
-				std::uint8_t delete_pending;
-				std::uint8_t directory;
-				std::uint16_t padding;
-			} standard_info = { };
-
-			standard_info.allocation_size = (file_size + 0xFFF) & ~0xFFFll;
-			standard_info.end_of_file = file_size;
-			standard_info.number_of_links = 1;
-			standard_info.directory = is_directory ? 1 : 0;
-
-			error = emulator->write_virtual_memory(file_information, &standard_info, sizeof(standard_info));
-			error.throw_if(std::format("{}: write FileStandardInformation", caller_name));
-
-			write_io_status(emulator, io_status_block, 0, file_standard_information_size);
+			write_io_status(emulator, io_status_block, 0, 0);
 			write_nt_success(emulator);
-			return;
-		}
-
-		write_io_status(emulator, io_status_block, 0, 0);
-		write_nt_success(emulator);
-	};
+		};
 
 	redirect_function(
 		[query_file_info_handler] { query_file_info_handler("NtQueryInformationFile"); },
@@ -861,38 +880,38 @@ void redirect_ntoskrnl_file_functions(const std::shared_ptr<emulator_t>& emulato
 	);
 
 	const auto device_io_control_handler = [emulator](const std::string_view caller_name)
-	{
-		const auto file_handle = emulator->read_register<x86::reg::rcx, object_manager_t::handle_type>();
-		const auto event = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
-		const auto apc_routine = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
-		const auto apc_context = emulator->read_register<x86::reg::r9, emulator_t::address_type>();
+		{
+			const auto file_handle = emulator->read_register<x86::reg::rcx, object_manager_t::handle_type>();
+			const auto event = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+			const auto apc_routine = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
+			const auto apc_context = emulator->read_register<x86::reg::r9, emulator_t::address_type>();
 
-		const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
+			const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
 
-		emulator_t::address_type io_status_block = 0;
-		static_cast<void>(emulator->read_virtual_memory(rsp + 0x28, &io_status_block, sizeof(io_status_block)));
+			emulator_t::address_type io_status_block = 0;
+			static_cast<void>(emulator->read_virtual_memory(rsp + 0x28, &io_status_block, sizeof(io_status_block)));
 
-		std::uint32_t io_control_code = 0;
-		static_cast<void>(emulator->read_virtual_memory(rsp + 0x30, &io_control_code, sizeof(io_control_code)));
+			std::uint32_t io_control_code = 0;
+			static_cast<void>(emulator->read_virtual_memory(rsp + 0x30, &io_control_code, sizeof(io_control_code)));
 
-		emulator_t::address_type input_buffer = 0;
-		static_cast<void>(emulator->read_virtual_memory(rsp + 0x38, &input_buffer, sizeof(input_buffer)));
+			emulator_t::address_type input_buffer = 0;
+			static_cast<void>(emulator->read_virtual_memory(rsp + 0x38, &input_buffer, sizeof(input_buffer)));
 
-		std::uint32_t input_buffer_length = 0;
-		static_cast<void>(emulator->read_virtual_memory(rsp + 0x40, &input_buffer_length, sizeof(input_buffer_length)));
+			std::uint32_t input_buffer_length = 0;
+			static_cast<void>(emulator->read_virtual_memory(rsp + 0x40, &input_buffer_length, sizeof(input_buffer_length)));
 
-		emulator_t::address_type output_buffer = 0;
-		static_cast<void>(emulator->read_virtual_memory(rsp + 0x48, &output_buffer, sizeof(output_buffer)));
+			emulator_t::address_type output_buffer = 0;
+			static_cast<void>(emulator->read_virtual_memory(rsp + 0x48, &output_buffer, sizeof(output_buffer)));
 
-		std::uint32_t output_buffer_length = 0;
-		static_cast<void>(emulator->read_virtual_memory(rsp + 0x50, &output_buffer_length, sizeof(output_buffer_length)));
+			std::uint32_t output_buffer_length = 0;
+			static_cast<void>(emulator->read_virtual_memory(rsp + 0x50, &output_buffer_length, sizeof(output_buffer_length)));
 
-		THREAD_LOG("{} called (handle=0x{:X}, ioctl=0x{:X}, input=0x{:X}, input_len=0x{:X}, output=0x{:X}, output_len=0x{:X})",
-			caller_name, file_handle, io_control_code, input_buffer, input_buffer_length, output_buffer, output_buffer_length);
+			THREAD_LOG("{} called (handle=0x{:X}, ioctl=0x{:X}, input=0x{:X}, input_len=0x{:X}, output=0x{:X}, output_len=0x{:X})",
+				caller_name, file_handle, io_control_code, input_buffer, input_buffer_length, output_buffer, output_buffer_length);
 
-		write_io_status(emulator, io_status_block, 0, 0);
-		write_nt_success(emulator);
-	};
+			write_io_status(emulator, io_status_block, 0, 0);
+			write_nt_success(emulator);
+		};
 
 	redirect_function(
 		[device_io_control_handler] { device_io_control_handler("NtDeviceIoControlFile"); },
@@ -902,5 +921,174 @@ void redirect_ntoskrnl_file_functions(const std::shared_ptr<emulator_t>& emulato
 	redirect_function(
 		[device_io_control_handler] { device_io_control_handler("ZwDeviceIoControlFile"); },
 		mapped_image, "ZwDeviceIoControlFile"
+	);
+
+	const auto query_directory_file_handler = [emulator](const std::string_view caller_name)
+		{
+			const auto file_handle = emulator->read_register<x86::reg::rcx, object_manager_t::handle_type>();
+			const auto event = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+			const auto apc_routine = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
+			const auto apc_context = emulator->read_register<x86::reg::r9, emulator_t::address_type>();
+
+			const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
+
+			emulator_t::address_type io_status_block = 0;
+			emulator_err_t error = emulator->read_virtual_memory(rsp + 0x28, &io_status_block, sizeof(io_status_block));
+			error.throw_if("read io status block ptr");
+
+			emulator_t::address_type file_information = 0;
+			error = emulator->read_virtual_memory(rsp + 0x30, &file_information, sizeof(file_information));
+			error.throw_if("read file information ptr");
+
+			std::uint32_t length = 0;
+			error = emulator->read_virtual_memory(rsp + 0x38, &length, sizeof(length));
+			error.throw_if("read length");
+
+			std::uint32_t information_class = 0;
+			error = emulator->read_virtual_memory(rsp + 0x40, &information_class, sizeof(information_class));
+			error.throw_if("read file information class");
+
+			std::uint8_t return_single_entry = 0;
+			error = emulator->read_virtual_memory(rsp + 0x48, &return_single_entry, sizeof(return_single_entry));
+			error.throw_if("read return single entry");
+
+			emulator_t::address_type file_name_ptr = 0;
+			error = emulator->read_virtual_memory(rsp + 0x50, &file_name_ptr, sizeof(file_name_ptr));
+			error.throw_if("read file name ptr");
+
+			std::uint8_t restart_scan = 0;
+			error = emulator->read_virtual_memory(rsp + 0x58, &restart_scan, sizeof(restart_scan));
+			error.throw_if("read restart scan");
+
+			std::string search_pattern;
+
+			if (file_name_ptr)
+			{
+				const auto file_name = emulator_object_t<UNICODE_STRING>::view_at(emulator, file_name_ptr).read();
+				const auto buffer_address = reinterpret_cast<emulator_t::address_type>(file_name.Buffer);
+
+				if (buffer_address && file_name.Length)
+				{
+					search_pattern = util::narrow_wstring(kernel::read_guest_wstring(*emulator, buffer_address));
+				}
+			}
+
+			const auto host_object = kernel::object_manager->get_object_from_handle<file_object_t>(file_handle);
+			const std::string directory_path = host_object ? host_object->path : std::string{};
+
+			THREAD_LOG("{} called (handle=0x{:X}, event=0x{:X}, apc_routine=0x{:X}, apc_context=0x{:X}, io_status_block=0x{:X}, buffer=0x{:X}, length=0x{:X}, class={}, return_single_entry={}, file_name='{}', restart_scan={}, dir='{}')",
+				caller_name, file_handle, event, apc_routine, apc_context, io_status_block, file_information, length, information_class, return_single_entry, search_pattern, restart_scan, directory_path);
+
+			const auto directory_file = host_object ? host_object->file : nullptr;
+
+			if (!host_object || !directory_file || !directory_file->is_directory())
+			{
+				THREAD_WARN_LOG("{}: handle 0x{:X} is not a directory", caller_name, file_handle);
+
+				write_io_status(emulator, io_status_block, static_cast<std::int32_t>(status_invalid_parameter), 0);
+				write_nt_status(emulator, status_invalid_parameter);
+
+				return;
+			}
+
+			if (restart_scan)
+			{
+				host_object->directory_offset = 0;
+			}
+
+			const auto entries = kernel::filesystem->list_directory(host_object->path);
+			const std::size_t start = host_object->directory_offset;
+
+			if (start >= entries.size())
+			{
+				const std::uint32_t status = (start == 0) ? status_no_such_file : status_no_more_files;
+
+				write_io_status(emulator, io_status_block, static_cast<std::int32_t>(status), 0);
+				write_nt_status(emulator, status);
+
+				return;
+			}
+
+			constexpr std::uint32_t file_attribute_directory = 0x10;
+			constexpr std::uint32_t file_attribute_normal = 0x80;
+			constexpr std::size_t header_size = sizeof(file_directory_information_t);
+
+			std::uint64_t total_written = 0;
+			std::uint64_t last_entry_offset = 0;
+			std::size_t produced = 0;
+			std::size_t index = start;
+
+			for (; index < entries.size(); ++index)
+			{
+				const auto& dir_entry = entries[index];
+				const auto wide_name = util::widen_string(dir_entry.name);
+				const std::size_t name_bytes = wide_name.size() * sizeof(wchar_t);
+				const std::size_t entry_size = header_size + name_bytes;
+				const std::size_t aligned_size = (entry_size + 7) & ~static_cast<std::size_t>(7);
+
+				if (total_written + entry_size > length)
+				{
+					if (produced == 0)
+					{
+						write_io_status(emulator, io_status_block, static_cast<std::int32_t>(status_buffer_overflow), 0);
+						write_nt_status(emulator, status_buffer_overflow);
+
+						return;
+					}
+
+					break;
+				}
+
+				file_directory_information_t header = { };
+				header.next_entry_offset = static_cast<std::uint32_t>(aligned_size);
+				header.end_of_file = dir_entry.is_directory ? 0 : static_cast<std::int64_t>(dir_entry.size);
+				header.allocation_size = dir_entry.is_directory ? 0 : ((static_cast<std::int64_t>(dir_entry.size) + 0xFFF) & ~static_cast<std::int64_t>(0xFFF));
+				header.file_attributes = dir_entry.is_directory ? file_attribute_directory : file_attribute_normal;
+				header.file_name_length = static_cast<std::uint32_t>(name_bytes);
+
+				const auto entry_address = file_information + total_written;
+
+				error = emulator->write_virtual_memory(entry_address, &header, sizeof(header));
+				error.throw_if("write directory entry header");
+
+				if (name_bytes)
+				{
+					error = emulator->write_virtual_memory(entry_address + header_size, wide_name.data(), name_bytes);
+					error.throw_if("write directory entry name");
+				}
+
+				last_entry_offset = total_written;
+				total_written += aligned_size;
+				++produced;
+
+				if (return_single_entry)
+				{
+					++index;
+
+					break;
+				}
+			}
+
+			const std::uint32_t terminator = 0;
+			error = emulator->write_virtual_memory(file_information + last_entry_offset, &terminator, sizeof(terminator));
+			error.throw_if("terminate directory listing");
+
+			host_object->directory_offset = index;
+
+			THREAD_LOG("{}: returned {} entries ({} bytes) from '{}' (offset now {})",
+				caller_name, produced, total_written, host_object->path, host_object->directory_offset);
+
+			write_io_status(emulator, io_status_block, 0, total_written);
+			write_nt_success(emulator);
+		};
+
+	redirect_function(
+		[query_directory_file_handler] { query_directory_file_handler("NtQueryDirectoryFile"); },
+		mapped_image, "NtQueryDirectoryFile"
+	);
+
+	redirect_function(
+		[query_directory_file_handler] { query_directory_file_handler("ZwQueryDirectoryFile"); },
+		mapped_image, "ZwQueryDirectoryFile"
 	);
 }

@@ -19,6 +19,7 @@ struct file_object_t final : object_t
 {
 	std::shared_ptr<file_t> file;
 	std::string path;
+	std::size_t directory_offset = 0;
 
 	file_object_t(std::shared_ptr<file_t> file, std::string path)
 			:	file(std::move(file)),
