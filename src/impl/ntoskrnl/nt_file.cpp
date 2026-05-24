@@ -1091,4 +1091,65 @@ void redirect_ntoskrnl_file_functions(const std::shared_ptr<emulator_t>& emulato
 		[query_directory_file_handler] { query_directory_file_handler("ZwQueryDirectoryFile"); },
 		mapped_image, "ZwQueryDirectoryFile"
 	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto object_attributes_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto file_information = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+
+			std::string normalized;
+
+			if (!resolve_object_name(emulator, object_attributes_address, normalized, "NtQueryFullAttributesFile"))
+			{
+				return;
+			}
+
+			const auto& filesystem = kernel::filesystem;
+			const auto file = filesystem->open_at(normalized);
+
+			if (!file)
+			{
+				THREAD_LOG("NtQueryFullAttributesFile: file not found '{}'", normalized);
+
+				write_nt_status(emulator, status_object_name_not_found);
+				return;
+			}
+
+			const auto file_size = static_cast<std::int64_t>(file->read().size());
+
+			struct FILE_NETWORK_OPEN_INFORMATION
+			{
+				std::int64_t creation_time;
+				std::int64_t last_access_time;
+				std::int64_t last_write_time;
+				std::int64_t change_time;
+				std::int64_t allocation_size;
+				std::int64_t end_of_file;
+				std::uint32_t file_attributes;
+				std::uint32_t reserved;
+			};
+
+			constexpr std::int64_t default_time = 132800000000000000LL;
+
+			FILE_NETWORK_OPEN_INFORMATION info = { };
+			info.creation_time = default_time;
+			info.last_access_time = default_time;
+			info.last_write_time = default_time;
+			info.change_time = default_time;
+			info.allocation_size = (file_size + 0xFFF) & ~0xFFFLL;
+			info.end_of_file = file_size;
+			info.file_attributes = file->is_directory() ? 0x10 : 0x20;
+
+			emulator_err_t error = emulator->write_virtual_memory(file_information, &info, sizeof(info));
+			error.throw_if("NtQueryFullAttributesFile: write FILE_NETWORK_OPEN_INFORMATION");
+
+			THREAD_LOG("NtQueryFullAttributesFile: '{}' size=0x{:X} attrs=0x{:X}",
+				normalized, file_size, info.file_attributes);
+
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"NtQueryFullAttributesFile"
+	);
 }

@@ -150,7 +150,9 @@ void thread_t::load_state()
 	emulator_->write_register<x86::reg::r14>(state_.r14);
 	emulator_->write_register<x86::reg::r15>(state_.r15);
 	emulator_->write_register<x86::reg::rip>(state_.rip);
-	emulator_->write_register<x86::reg::rflags>(state_.rflags);
+	// clear TF - if the driver set trap flag before a context switch, absorb it
+	// to prevent spurious INT1 after resuming
+	emulator_->write_register<x86::reg::rflags>(state_.rflags & ~static_cast<std::uint64_t>(0x100));
 
 #define LOAD_XMM(n) emulator_->write_register<x86::reg::xmm##n>(state_.xmm##n)
 

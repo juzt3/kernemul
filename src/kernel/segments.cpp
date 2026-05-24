@@ -238,37 +238,6 @@ void kernel::set_up_idt(const std::shared_ptr<emulator_t>& emulator, const kerne
 				constexpr std::uint32_t status_illegal_instruction = 0xC000001D;
 				constexpr std::uint32_t status_access_violation = 0xC0000005;
 
-				std::array<std::uint8_t, 2> instruction_bytes = { };
-
-				error = emulator->read_virtual_memory(frame.rip, instruction_bytes);
-
-				if (!error)
-				{
-					if (instruction_bytes[0] == 0x0F && instruction_bytes[1] == 0x32) // rdmsr
-					{
-						const auto msr_id = emulator->read_register<x86::reg::rcx, std::uint32_t>();
-
-						if (msr_id == 0x1C9 || msr_id == 0x680)
-						{
-							THREAD_LOG("MSR read with id 0x{:X}", msr_id);
-
-							emulator->write_register<x86::reg::rax>(static_cast<std::uint64_t>(0));
-							emulator->write_register<x86::reg::rdx>(static_cast<std::uint64_t>(0));
-							emulator->write_register<x86::reg::rip>(frame.rip + 2);
-
-							return;
-						}
-
-						THREAD_WARN_LOG("invalid MSR read with id 0x{:X}", msr_id);
-					}
-					else if (instruction_bytes[0] == 0x0F && instruction_bytes[1] == 0x30) // wrmsr
-					{
-						const auto msr_id = emulator->read_register<x86::reg::rcx, std::uint32_t>();
-
-						THREAD_WARN_LOG("invalid MSR write with id 0x{:X}", msr_id);
-					}
-				}
-
 				switch (i)
 				{
 				case 0:
@@ -283,7 +252,7 @@ void kernel::set_up_idt(const std::shared_ptr<emulator_t>& emulator, const kerne
 						// todo: restore ss and cs
 						emulator->write_register<x86::reg::rip>(frame.rip);
 						emulator->write_register<x86::reg::rsp>(frame.rsp);
-						emulator->write_register<x86::reg::rflags>(frame.rflags);
+						emulator->write_register<x86::reg::rflags>(frame.rflags & ~static_cast<std::uint64_t>(0x100));
 					}
 
 					break;

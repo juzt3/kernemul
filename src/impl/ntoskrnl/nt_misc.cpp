@@ -229,6 +229,35 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 		"KeStackAttachProcess"
 	);
 
+	redirect_function(
+		[emulator]
+		{
+			const auto apc_state = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+
+			THREAD_LOG("KeUnstackDetachProcess called (apc_state=0x{:X})", apc_state);
+		},
+		mapped_image,
+		"KeUnstackDetachProcess"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			THREAD_LOG("KeEnterCriticalRegion called");
+		},
+		mapped_image,
+		"KeEnterCriticalRegion"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			THREAD_LOG("KeLeaveCriticalRegion called");
+		},
+		mapped_image,
+		"KeLeaveCriticalRegion"
+	);
+
 	// todo: actually track callback registrations and fire them on relevant events
 	redirect_function(
 		[emulator]
@@ -1191,6 +1220,169 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 	redirect_function(
 		[emulator]
 		{
+			const auto mutex_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+
+			// Count = 0 (acquired)
+			constexpr std::int32_t count = 0;
+			emulator_err_t error = emulator->write_virtual_memory(
+				mutex_address + offsetof(_FAST_MUTEX, Count), &count, sizeof(count));
+			error.throw_if("ExAcquireFastMutexUnsafe: write Count");
+
+			// Owner = current thread
+			const auto thread_address = kernel::current_thread->address();
+			error = emulator->write_virtual_memory(
+				mutex_address + offsetof(_FAST_MUTEX, Owner), &thread_address, sizeof(thread_address));
+			error.throw_if("ExAcquireFastMutexUnsafe: write Owner");
+
+			THREAD_LOG("ExAcquireFastMutexUnsafe called (mutex=0x{:X})", mutex_address);
+		},
+		mapped_image,
+		"ExAcquireFastMutexUnsafe"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto mutex_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+
+			// Count = 1 (released)
+			constexpr std::int32_t count = 1;
+			emulator_err_t error = emulator->write_virtual_memory(
+				mutex_address + offsetof(_FAST_MUTEX, Count), &count, sizeof(count));
+			error.throw_if("ExReleaseFastMutexUnsafe: write Count");
+
+			// Owner = NULL
+			constexpr std::uint64_t null_owner = 0;
+			error = emulator->write_virtual_memory(
+				mutex_address + offsetof(_FAST_MUTEX, Owner), &null_owner, sizeof(null_owner));
+			error.throw_if("ExReleaseFastMutexUnsafe: write Owner");
+
+			THREAD_LOG("ExReleaseFastMutexUnsafe called (mutex=0x{:X})", mutex_address);
+		},
+		mapped_image,
+		"ExReleaseFastMutexUnsafe"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto resource = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+
+			THREAD_LOG("ExInitializeResourceLite called (resource=0x{:X})", resource);
+
+			// zero the ERESOURCE structure (0x68 bytes)
+			std::array<std::uint8_t, 0x68> zeroed{};
+			static_cast<void>(emulator->write_virtual_memory(resource, zeroed.data(), zeroed.size()));
+
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"ExInitializeResourceLite"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto resource = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto wait = emulator->read_register<x86::reg::rdx, std::uint8_t>();
+
+			THREAD_LOG("ExAcquireResourceExclusiveLite called (resource=0x{:X}, wait={})", resource, wait);
+
+			write_return_value(emulator, static_cast<std::uint64_t>(1));
+		},
+		mapped_image,
+		"ExAcquireResourceExclusiveLite"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto resource = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto wait = emulator->read_register<x86::reg::rdx, std::uint8_t>();
+
+			THREAD_LOG("ExAcquireResourceSharedLite called (resource=0x{:X}, wait={})", resource, wait);
+
+			write_return_value(emulator, static_cast<std::uint64_t>(1));
+		},
+		mapped_image,
+		"ExAcquireResourceSharedLite"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto resource = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+
+			THREAD_LOG("ExReleaseResourceLite called (resource=0x{:X})", resource);
+		},
+		mapped_image,
+		"ExReleaseResourceLite"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto resource = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+
+			THREAD_LOG("ExDeleteResourceLite called (resource=0x{:X})", resource);
+
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"ExDeleteResourceLite"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto push_lock = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto flags = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+
+			THREAD_LOG("ExAcquirePushLockExclusiveEx called (push_lock=0x{:X}, flags=0x{:X})", push_lock, flags);
+		},
+		mapped_image,
+		"ExAcquirePushLockExclusiveEx"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto push_lock = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto flags = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+
+			THREAD_LOG("ExReleasePushLockExclusiveEx called (push_lock=0x{:X}, flags=0x{:X})", push_lock, flags);
+		},
+		mapped_image,
+		"ExReleasePushLockExclusiveEx"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto push_lock = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto flags = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+
+			THREAD_LOG("ExAcquirePushLockSharedEx called (push_lock=0x{:X}, flags=0x{:X})", push_lock, flags);
+		},
+		mapped_image,
+		"ExAcquirePushLockSharedEx"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto push_lock = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto flags = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+
+			THREAD_LOG("ExReleasePushLockSharedEx called (push_lock=0x{:X}, flags=0x{:X})", push_lock, flags);
+		},
+		mapped_image,
+		"ExReleasePushLockSharedEx"
+	);
+
+	redirect_function(
+		[emulator]
+		{
 			const emulator_t::address_type thread_handle_out = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
 			const std::uint32_t desired_access = emulator->read_register<x86::reg::rdx, std::uint32_t>();
 			const emulator_t::address_type object_attributes = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
@@ -1418,6 +1610,142 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 		},
 		mapped_image,
 		"IoRegisterShutdownNotification"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto event_category = emulator->read_register<x86::reg::rcx, std::uint32_t>();
+			const auto event_category_flags = emulator->read_register<x86::reg::rdx, std::uint32_t>();
+			const auto event_category_data = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
+			const auto driver_object = emulator->read_register<x86::reg::r9, emulator_t::address_type>();
+
+			const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
+
+			emulator_t::address_type callback_routine = 0;
+			emulator_err_t error = emulator->read_virtual_memory(rsp + 0x28, &callback_routine, sizeof(callback_routine));
+			error.throw_if("IoRegisterPlugPlayNotification: read CallbackRoutine");
+
+			emulator_t::address_type context = 0;
+			error = emulator->read_virtual_memory(rsp + 0x30, &context, sizeof(context));
+			error.throw_if("IoRegisterPlugPlayNotification: read Context");
+
+			emulator_t::address_type notification_entry_ptr = 0;
+			error = emulator->read_virtual_memory(rsp + 0x38, &notification_entry_ptr, sizeof(notification_entry_ptr));
+			error.throw_if("IoRegisterPlugPlayNotification: read NotificationEntry ptr");
+
+			THREAD_LOG("IoRegisterPlugPlayNotification called (category={}, flags=0x{:X}, data=0x{:X}, driver=0x{:X}, callback=0x{:X}, context=0x{:X}, entry_out=0x{:X})",
+				event_category, event_category_flags, event_category_data, driver_object, callback_routine, context, notification_entry_ptr);
+
+			if (notification_entry_ptr)
+			{
+				const auto dummy_entry = emulator->heap_allocate(0x10, prot_read_write, true);
+				error = dummy_entry.error_or({});
+				error.throw_if("IoRegisterPlugPlayNotification: allocate entry");
+
+				error = emulator->write_virtual_memory(notification_entry_ptr, &*dummy_entry, sizeof(*dummy_entry));
+				error.throw_if("IoRegisterPlugPlayNotification: write NotificationEntry");
+			}
+
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"IoRegisterPlugPlayNotification"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto notification_entry = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+
+			THREAD_LOG("IoUnregisterPlugPlayNotificationEx called (entry=0x{:X})", notification_entry);
+
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"IoUnregisterPlugPlayNotificationEx"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto info_class = emulator->read_register<x86::reg::rcx, std::uint32_t>();
+			const auto buffer = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+			const auto buffer_size = emulator->read_register<x86::reg::r8, std::uint32_t>();
+			const auto return_size = emulator->read_register<x86::reg::r9, emulator_t::address_type>();
+
+			THREAD_LOG("NtManageHotPatch called (info_class={}, buffer=0x{:X}, size={}, return_size_ptr=0x{:X})",
+				info_class, buffer, buffer_size, return_size);
+
+			constexpr std::uint32_t status_not_supported = 0xC00000BB;
+			write_nt_status(emulator, status_not_supported);
+		},
+		mapped_image,
+		"NtManageHotPatch"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto variable_name = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto vendor_guid = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+			const auto value = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
+			const auto value_length = emulator->read_register<x86::reg::r9, emulator_t::address_type>();
+
+			THREAD_LOG("NtQuerySystemEnvironmentValueEx called (name=0x{:X}, guid=0x{:X}, value=0x{:X}, length_ptr=0x{:X})",
+				variable_name, vendor_guid, value, value_length);
+
+			constexpr std::uint32_t status_not_implemented = 0xC0000002;
+			write_nt_status(emulator, status_not_implemented);
+		},
+		mapped_image,
+		"NtQuerySystemEnvironmentValueEx"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto value_name_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto type_ptr = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+			const auto data = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
+			const auto data_size = emulator->read_register<x86::reg::r9, std::uint32_t>();
+
+			const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
+
+			emulator_t::address_type return_length_ptr = 0;
+			emulator_err_t error = emulator->read_virtual_memory(rsp + 0x28, &return_length_ptr, sizeof(return_length_ptr));
+			error.throw_if("NtQueryLicenseValue: read ReturnLength ptr");
+
+			std::string name_str;
+
+			if (value_name_address)
+			{
+				auto us_object = emulator_object_t<UNICODE_STRING>::view_at(emulator, value_name_address);
+				const auto us = us_object.read();
+
+				const auto buffer_address = reinterpret_cast<emulator_t::address_type>(us.Buffer);
+
+				if (buffer_address && us.Length > 0)
+				{
+					const auto wide_name = kernel::read_guest_wstring(*emulator, buffer_address);
+					name_str = util::narrow_wstring(wide_name);
+				}
+			}
+
+			THREAD_LOG("NtQueryLicenseValue called (name='{}', type_ptr=0x{:X}, data=0x{:X}, data_size={}, return_length=0x{:X})",
+				name_str, type_ptr, data, data_size, return_length_ptr);
+
+			if (return_length_ptr)
+			{
+				std::uint32_t zero = 0;
+				static_cast<void>(emulator->write_virtual_memory(return_length_ptr, &zero, sizeof(zero)));
+			}
+
+			constexpr std::uint32_t status_object_name_not_found = 0xC0000034;
+			write_nt_status(emulator, status_object_name_not_found);
+		},
+		mapped_image,
+		"NtQueryLicenseValue"
 	);
 
 	// todo: actually create symbolic link in object namespace
@@ -2225,5 +2553,30 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 		},
 		mapped_image,
 		"KeInitializeSemaphore"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto semaphore_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto increment = emulator->read_register<x86::reg::rdx, std::int32_t>();
+			const auto adjustment = emulator->read_register<x86::reg::r8, std::int32_t>();
+			const auto wait = emulator->read_register<x86::reg::r9, std::uint8_t>();
+
+			// read previous signal state from dispatcher header (offset 0x4)
+			std::int32_t previous_state = 0;
+			static_cast<void>(emulator->read_virtual_memory(semaphore_address + 0x4, &previous_state, sizeof(previous_state)));
+
+			// update signal state
+			const std::int32_t new_state = previous_state + adjustment;
+			static_cast<void>(emulator->write_virtual_memory(semaphore_address + 0x4, &new_state, sizeof(new_state)));
+
+			THREAD_LOG("KeReleaseSemaphore called (semaphore=0x{:X}, increment={}, adjustment={}, wait={}) -> prev_state={}",
+				semaphore_address, increment, adjustment, wait, previous_state);
+
+			write_return_value(emulator, static_cast<std::uint64_t>(static_cast<std::uint32_t>(previous_state)));
+		},
+		mapped_image,
+		"KeReleaseSemaphore"
 	);
 }

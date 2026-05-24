@@ -211,4 +211,17 @@ void redirect_ntoskrnl_time_functions(const std::shared_ptr<emulator_t>& emulato
 		mapped_image,
 		"KeQueryPerformanceCounter"
 	);
+
+	redirect_function(
+		[emulator]
+		{
+			constexpr std::uint32_t time_increment = 156250;
+
+			THREAD_LOG("KeQueryTimeIncrement called -> {}", time_increment);
+
+			write_return_value(emulator, static_cast<std::uint64_t>(time_increment));
+		},
+		mapped_image,
+		"KeQueryTimeIncrement"
+	);
 }

@@ -329,6 +329,98 @@ void redirect_ntoskrnl_memory_functions(const std::shared_ptr<emulator_t>& emula
 	redirect_function(
 		[emulator]
 		{
+			const auto base_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+
+			THREAD_LOG("MmFreeContiguousMemory called (base_address=0x{:X})", base_address);
+
+			// todo: actually free the contiguous allocation from the heap
+		},
+		mapped_image,
+		"MmFreeContiguousMemory"
+	);
+
+	auto mm_map_io_space_handler = [emulator](const std::string_view caller_name)
+	{
+		const auto physical_address = emulator->read_register<x86::reg::rcx, std::uint64_t>();
+		const auto number_of_bytes = emulator->read_register<x86::reg::rdx, std::uint64_t>();
+		const auto protect_or_cache = emulator->read_register<x86::reg::r8, std::uint32_t>();
+
+		if (number_of_bytes == 0)
+		{
+			THREAD_WARN_LOG("{} called with zero size (phys=0x{:X})", caller_name, physical_address);
+			write_return_value(emulator, static_cast<std::uint64_t>(0));
+			return;
+		}
+
+		constexpr std::uint64_t page_size = 0x1000;
+		const auto aligned_phys = physical_address & ~(page_size - 1);
+		const auto page_offset = physical_address - aligned_phys;
+		const auto aligned_size = (number_of_bytes + page_offset + page_size - 1) & ~(page_size - 1);
+		const auto page_count = aligned_size / page_size;
+
+		// ensure the physical pages are backed in the emulator
+		for (std::uint64_t i = 0; i < page_count; ++i)
+		{
+			const auto phys_page = aligned_phys + i * page_size;
+
+			if (!emulator->is_physical_address_valid(phys_page))
+			{
+				static_cast<void>(emulator->map_physical_memory(phys_page, page_size, prot_read_write));
+			}
+		}
+
+		// allocate a virtual address range and map each page to the physical address
+		const auto virtual_base = emulator->heap_allocate(aligned_size, prot_read_write, true);
+		const emulator_err_t alloc_error = virtual_base.error_or({});
+		alloc_error.throw_if("MmMapIoSpace: allocate virtual range");
+
+		// remap each virtual page to the requested physical page
+		for (std::uint64_t i = 0; i < page_count; ++i)
+		{
+			const auto virt_page = *virtual_base + i * page_size;
+			const auto phys_page = aligned_phys + i * page_size;
+
+			const emulator_err_t error = emulator->map_virtual_page(virt_page, phys_page);
+			error.throw_if("MmMapIoSpace: map virtual page");
+		}
+
+		const auto result_address = *virtual_base + page_offset;
+
+		THREAD_LOG("{} called (phys=0x{:X}, size=0x{:X}, cache_type={}) -> 0x{:X}",
+			caller_name, physical_address, number_of_bytes, protect_or_cache, result_address);
+
+		write_return_value(emulator, result_address);
+	};
+
+	redirect_function(
+		[mm_map_io_space_handler] { mm_map_io_space_handler("MmMapIoSpaceEx"); },
+		mapped_image,
+		"MmMapIoSpaceEx"
+	);
+
+	redirect_function(
+		[mm_map_io_space_handler] { mm_map_io_space_handler("MmMapIoSpace"); },
+		mapped_image,
+		"MmMapIoSpace"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto base_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto number_of_bytes = emulator->read_register<x86::reg::rdx, std::uint64_t>();
+
+			THREAD_LOG("MmUnmapIoSpace called (base=0x{:X}, size=0x{:X})", base_address, number_of_bytes);
+
+			// todo: actually free the mapped IO space
+		},
+		mapped_image,
+		"MmUnmapIoSpace"
+	);
+
+	redirect_function(
+		[emulator]
+		{
 			const auto virtual_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
 
 			if (virtual_address == 0xF0F87C3E1000)
@@ -789,6 +881,64 @@ void redirect_ntoskrnl_memory_functions(const std::shared_ptr<emulator_t>& emula
 	redirect_function(
 		[emulator]
 		{
+			const auto section_handle_out = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto desired_access = emulator->read_register<x86::reg::rdx, std::uint32_t>();
+			const auto object_attributes_address = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
+
+			std::string section_name;
+
+			if (object_attributes_address)
+			{
+				auto oa_object = emulator_object_t<OBJECT_ATTRIBUTES>::view_at(emulator, object_attributes_address);
+				const auto oa = oa_object.read();
+
+				const auto object_name_address = reinterpret_cast<emulator_t::address_type>(oa.ObjectName);
+
+				if (object_name_address)
+				{
+					auto us_object = emulator_object_t<UNICODE_STRING>::view_at(emulator, object_name_address);
+					const auto us = us_object.read();
+
+					const auto buffer_address = reinterpret_cast<emulator_t::address_type>(us.Buffer);
+
+					if (buffer_address && us.Length > 0)
+					{
+						const auto wide_name = kernel::read_guest_wstring(*emulator, buffer_address);
+						section_name = util::narrow_wstring(wide_name);
+					}
+				}
+			}
+
+			THREAD_LOG("NtOpenSection called (handle_out=0x{:X}, access=0x{:X}, name='{}')",
+				section_handle_out, desired_access, section_name);
+
+			// create a dummy empty section object
+			auto host_object = std::make_shared<section_object_t>(nullptr);
+
+			constexpr std::size_t section_body_size = 0x40;
+			std::array<std::uint8_t, section_body_size> body{};
+
+			const auto body_address = kernel::object_manager->create_object(0, body.data(), body.size(), host_object);
+			const auto section_handle = kernel::object_manager->create_handle(body_address, desired_access);
+
+			if (section_handle_out)
+			{
+				emulator_err_t error = emulator->write_virtual_memory(section_handle_out, &section_handle, sizeof(section_handle));
+				error.throw_if("NtOpenSection: write handle");
+			}
+
+			THREAD_LOG("NtOpenSection: created section handle 0x{:X} at 0x{:X} (name='{}')",
+				section_handle, body_address, section_name);
+
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"NtOpenSection"
+	);
+
+	redirect_function(
+		[emulator]
+		{
 			const auto section_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
 			const auto mapped_base_out = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
 			const auto view_size_ptr = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
@@ -1033,6 +1183,23 @@ void redirect_ntoskrnl_memory_functions(const std::shared_ptr<emulator_t>& emula
 		},
 		mapped_image,
 		"NtMapViewOfSection"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto process_handle = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto base_address = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+
+			THREAD_LOG("NtUnmapViewOfSection called (process_handle=0x{:X}, base_address=0x{:X})",
+				process_handle, base_address);
+
+			// todo: actually free the guest memory mapping
+
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"NtUnmapViewOfSection"
 	);
 
 	redirect_function(

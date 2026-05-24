@@ -238,6 +238,18 @@ std::int32_t main()
 		module_reg_key->set_string("ImagePath",
 			std::wstring(EMULATED_MODULE_DIRECTORY) + util::widen_string(EMULATED_MODULE_NAME));
 
+		// system/currentcontrolset/control and subkeys
+		static_cast<void>(kernel::registry->create_key("system/currentcontrolset/control"));
+		kernel::registry->create_key("system/currentcontrolset/control/ci")->set_dword("Protected", 0);
+		static_cast<void>(kernel::registry->create_key("system/currentcontrolset/control/wmi/restrictions"));
+
+		// software version key
+		{
+			const auto winver_key = kernel::registry->create_key("software/microsoft/windows/currentversion");
+			winver_key->set_string("BuildLab", L"22621.ni_release.220506-1250");
+			winver_key->set_string("CurrentBuildNumber", L"22621");
+		}
+
 		kernel::filesystem->load_at("ntoskrnl.exe", "system32/ntoskrnl.exe");
 		kernel::filesystem->load_at("ntdll.dll", "system32/ntdll.dll");
 		kernel::filesystem->load_at("win32k.sys", "system32/win32k.sys");
@@ -325,6 +337,15 @@ std::int32_t main()
 						emulator->write_register<x86::reg::rip>(return_address);
 					}
 
+					// clear TF - if the driver set the trap flag before calling this function,
+					// on real hardware INT1 would fire inside the kernel function and be handled there.
+					// since we skip the real function body, we absorb the trap here.
+					const auto rflags = emulator->read_register<x86::reg::rflags, std::uint64_t>();
+					if (rflags & 0x100)
+					{
+						emulator->write_register<x86::reg::rflags>(rflags & ~static_cast<std::uint64_t>(0x100));
+					}
+
 					return;
 				}
 
@@ -401,9 +422,19 @@ std::int32_t main()
 		error.throw_if("instruction hook attach");
 
 		error = emulator->hook_invalid_memory(
-			[](const emulator_t::address_type faulting_address, const protection_t access) -> bool
+			[emulator](const emulator_t::address_type faulting_address, const protection_t access) -> bool
 			{
-				THREAD_LOG("invalid memory accessed at 0x{:X} (access={})", faulting_address, static_cast<std::uint32_t>(access));
+				const auto page_base = faulting_address & ~static_cast<emulator_t::address_type>(0xFFF);
+				const auto map_result = emulator->map_virtual_memory(page_base, 0x1000, prot_read_write);
+
+				if (!map_result)
+				{
+					THREAD_LOG("demand-paged 0x{:X} (access={})", page_base, static_cast<std::uint32_t>(access));
+					return true;
+				}
+
+				THREAD_LOG("invalid memory accessed at 0x{:X} (access={}) - could not demand-page",
+					faulting_address, static_cast<std::uint32_t>(access));
 
 				return false;
 			},

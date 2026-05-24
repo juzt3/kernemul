@@ -140,21 +140,8 @@ void redirect_ntoskrnl_crashdump_functions(const std::shared_ptr<emulator_t>& em
 			emulator_err_t error = emulator->write_virtual_memory(output_address, buf, dump_buffer_size);
 			error.throw_if("KeCapturePersistentThreadState: write output buffer");
 
-			emulator->hook_memory(
-				[output_address](const emulator_t::address_type accessed_address, const protection_t access)
-				{
-					const auto offset = accessed_address - output_address;
-					const auto access_type = (access == prot_write) ? "write" : "read";
-
-					THREAD_LOG("[dump-monitor] {} at offset 0x{:X} (address=0x{:X})",
-						access_type, offset, accessed_address);
-
-					return false;
-				},
-				prot_read_write,
-				output_address,
-				output_address + dump_buffer_size
-			);
+			THREAD_LOG("KeCapturePersistentThreadState: monitoring 0x{:X}-0x{:X} for dump writes",
+				output_address, output_address + dump_buffer_size);
 
 			THREAD_LOG("KeCapturePersistentThreadState: wrote 0x{:X} bytes to 0x{:X}", dump_buffer_size, output_address);
 

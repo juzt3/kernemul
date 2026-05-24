@@ -62,25 +62,25 @@ public:
 		return address_;
 	}
 
-	static emulator_object_t allocate_at(const std::shared_ptr<emulator_t>& emulator, const address_type address, const std::string& name = { })
+	static emulator_object_t allocate_at(const std::shared_ptr<emulator_t>& emulator, const address_type address, const std::string& name = { }, const bool monitor = false)
 	{
 		const auto error = emulator->map_virtual_memory(address, sizeof(T), prot_read_write);
 
 		error.throw_if("object allocation");
 
-		return emulator_object_t{ emulator, address, name, true };
+		return emulator_object_t{ emulator, address, name, monitor };
 	}
 
-	static emulator_object_t allocate_at(const std::shared_ptr<emulator_t>& emulator, const T& value, const address_type address, const std::string& name = { })
+	static emulator_object_t allocate_at(const std::shared_ptr<emulator_t>& emulator, const T& value, const address_type address, const std::string& name = { }, const bool monitor = false)
 	{
-		emulator_object_t object = allocate_at(emulator, address, name);
+		emulator_object_t object = allocate_at(emulator, address, name, monitor);
 
 		object.write(value);
 
 		return std::move(object);
 	}
 
-	static emulator_object_t allocate(const std::shared_ptr<emulator_t>& emulator, const std::string& name = { })
+	static emulator_object_t allocate(const std::shared_ptr<emulator_t>& emulator, const std::string& name = { }, const bool monitor = false)
 	{
 		const auto allocation = emulator->heap_allocate(sizeof(T), prot_read_write, true);
 
@@ -89,12 +89,12 @@ public:
 			throw std::runtime_error("unable to allocate object on heap");
 		}
 
-		return emulator_object_t{ emulator, *allocation, name, true };
+		return emulator_object_t{ emulator, *allocation, name, monitor };
 	}
 
-	static emulator_object_t allocate(const std::shared_ptr<emulator_t>& emulator, const T& value, const std::string& name = { })
+	static emulator_object_t allocate(const std::shared_ptr<emulator_t>& emulator, const T& value, const std::string& name = { }, const bool monitor = false)
 	{
-		emulator_object_t object = allocate(emulator, name);
+		emulator_object_t object = allocate(emulator, name, monitor);
 
 		object.write(value);
 

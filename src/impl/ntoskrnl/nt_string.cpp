@@ -595,6 +595,109 @@ void redirect_ntoskrnl_string_functions(const std::shared_ptr<emulator_t>& emula
 	redirect_function(
 		[emulator]
 		{
+			const auto utf8_dest = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto utf8_max_bytes = emulator->read_register<x86::reg::rdx, std::uint32_t>();
+			const auto utf8_actual_bytes_ptr = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
+			const auto unicode_src = emulator->read_register<x86::reg::r9, emulator_t::address_type>();
+
+			const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
+
+			std::uint32_t unicode_byte_count = 0;
+			emulator_err_t error = emulator->read_virtual_memory(rsp + 0x28, &unicode_byte_count, sizeof(unicode_byte_count));
+			error.throw_if("RtlUnicodeToUTF8N: read UnicodeStringByteCount");
+
+			const std::uint32_t wchar_count = unicode_byte_count / sizeof(wchar_t);
+
+			std::wstring source_str(wchar_count, L'\0');
+
+			if (wchar_count > 0)
+			{
+				error = emulator->read_virtual_memory(unicode_src, source_str.data(), unicode_byte_count);
+				error.throw_if("RtlUnicodeToUTF8N: read source unicode string");
+			}
+
+			// convert UTF-16 to UTF-8 using WideCharToMultiByte equivalent
+			std::string utf8_result;
+			utf8_result.reserve(wchar_count * 3);
+
+			for (std::size_t i = 0; i < wchar_count; ++i)
+			{
+				const std::uint32_t ch = source_str[i];
+
+				if (ch < 0x80)
+				{
+					utf8_result.push_back(static_cast<char>(ch));
+				}
+				else if (ch < 0x800)
+				{
+					utf8_result.push_back(static_cast<char>(0xC0 | (ch >> 6)));
+					utf8_result.push_back(static_cast<char>(0x80 | (ch & 0x3F)));
+				}
+				else if (ch >= 0xD800 && ch <= 0xDBFF && i + 1 < wchar_count)
+				{
+					const std::uint32_t low = source_str[i + 1];
+
+					if (low >= 0xDC00 && low <= 0xDFFF)
+					{
+						const std::uint32_t codepoint = 0x10000 + ((ch - 0xD800) << 10) + (low - 0xDC00);
+						utf8_result.push_back(static_cast<char>(0xF0 | (codepoint >> 18)));
+						utf8_result.push_back(static_cast<char>(0x80 | ((codepoint >> 12) & 0x3F)));
+						utf8_result.push_back(static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F)));
+						utf8_result.push_back(static_cast<char>(0x80 | (codepoint & 0x3F)));
+						++i;
+					}
+					else
+					{
+						utf8_result.push_back('?');
+					}
+				}
+				else
+				{
+					utf8_result.push_back(static_cast<char>(0xE0 | (ch >> 12)));
+					utf8_result.push_back(static_cast<char>(0x80 | ((ch >> 6) & 0x3F)));
+					utf8_result.push_back(static_cast<char>(0x80 | (ch & 0x3F)));
+				}
+			}
+
+			const auto actual_bytes = static_cast<std::uint32_t>(utf8_result.size());
+
+			if (utf8_actual_bytes_ptr)
+			{
+				error = emulator->write_virtual_memory(utf8_actual_bytes_ptr, &actual_bytes, sizeof(actual_bytes));
+				error.throw_if("RtlUnicodeToUTF8N: write actual byte count");
+			}
+
+			constexpr std::uint32_t status_buffer_too_small = 0xC0000023;
+
+			if (utf8_dest && utf8_max_bytes > 0)
+			{
+				const std::uint32_t copy_size = std::min(actual_bytes, utf8_max_bytes);
+
+				error = emulator->write_virtual_memory(utf8_dest, utf8_result.data(), copy_size);
+				error.throw_if("RtlUnicodeToUTF8N: write UTF-8 output");
+
+				if (actual_bytes > utf8_max_bytes)
+				{
+					THREAD_LOG("RtlUnicodeToUTF8N called (dest=0x{:X}, max={}, src=0x{:X}, src_bytes={}) -> STATUS_BUFFER_TOO_SMALL (need {})",
+						utf8_dest, utf8_max_bytes, unicode_src, unicode_byte_count, actual_bytes);
+
+					write_nt_status(emulator, status_buffer_too_small);
+					return;
+				}
+			}
+
+			THREAD_LOG("RtlUnicodeToUTF8N called (dest=0x{:X}, max={}, src=0x{:X}, src_bytes={}) -> {} bytes",
+				utf8_dest, utf8_max_bytes, unicode_src, unicode_byte_count, actual_bytes);
+
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"RtlUnicodeToUTF8N"
+	);
+
+	redirect_function(
+		[emulator]
+		{
 			const auto destination_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
 			const auto source_address = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
 			const auto allocate_destination = emulator->read_register<x86::reg::r8, std::uint8_t>();
@@ -788,12 +891,113 @@ void redirect_ntoskrnl_string_functions(const std::shared_ptr<emulator_t>& emula
 				result = static_cast<std::int32_t>(len1) - static_cast<std::int32_t>(len2);
 			}
 
-			THREAD_LOG("RtlCompareString called (str1=0x{:X}, str2=0x{:X}, case_insensitive={}) -> {}",
-				string1_address, string2_address, case_insensitive, result);
+			THREAD_LOG("RtlCompareString called (str1=0x{:X} '{}', str2=0x{:X} '{}', case_insensitive={}) -> {}",
+				string1_address, buf1, string2_address, buf2, case_insensitive, result);
 
 			write_return_value(emulator, static_cast<std::uint64_t>(static_cast<std::uint32_t>(result)));
 		},
 		mapped_image,
 		"RtlCompareString"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto ansi_code_page_ptr = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto oem_code_page_ptr = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+
+			constexpr std::uint16_t ansi_code_page = 1252;
+			constexpr std::uint16_t oem_code_page = 437;
+
+			if (ansi_code_page_ptr)
+			{
+				emulator_err_t error = emulator->write_virtual_memory(ansi_code_page_ptr, &ansi_code_page, sizeof(ansi_code_page));
+				error.throw_if("RtlGetDefaultCodePage: write AnsiCodePage");
+			}
+
+			if (oem_code_page_ptr)
+			{
+				emulator_err_t error = emulator->write_virtual_memory(oem_code_page_ptr, &oem_code_page, sizeof(oem_code_page));
+				error.throw_if("RtlGetDefaultCodePage: write OemCodePage");
+			}
+
+			THREAD_LOG("RtlGetDefaultCodePage called (ansi={}, oem={})", ansi_code_page, oem_code_page);
+		},
+		mapped_image,
+		"RtlGetDefaultCodePage"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto string1_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto string2_address = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+			const auto case_insensitive = emulator->read_register<x86::reg::r8, std::uint8_t>();
+
+			UNICODE_STRING str1_header = { };
+			UNICODE_STRING str2_header = { };
+
+			emulator_err_t error = emulator->read_virtual_memory(string1_address, &str1_header, sizeof(str1_header));
+			error.throw_if("RtlCompareUnicodeString: read String1");
+
+			error = emulator->read_virtual_memory(string2_address, &str2_header, sizeof(str2_header));
+			error.throw_if("RtlCompareUnicodeString: read String2");
+
+			const auto len1 = str1_header.Length / sizeof(wchar_t);
+			const auto len2 = str2_header.Length / sizeof(wchar_t);
+			const auto buf1_address = reinterpret_cast<emulator_t::address_type>(str1_header.Buffer);
+			const auto buf2_address = reinterpret_cast<emulator_t::address_type>(str2_header.Buffer);
+
+			std::wstring buf1(len1, L'\0');
+			std::wstring buf2(len2, L'\0');
+
+			if (len1)
+			{
+				error = emulator->read_virtual_memory(buf1_address, buf1.data(), str1_header.Length);
+				error.throw_if("RtlCompareUnicodeString: read buffer1");
+			}
+
+			if (len2)
+			{
+				error = emulator->read_virtual_memory(buf2_address, buf2.data(), str2_header.Length);
+				error.throw_if("RtlCompareUnicodeString: read buffer2");
+			}
+
+			const auto compare_length = std::min(len1, len2);
+			std::int32_t result = 0;
+
+			for (std::uint16_t i = 0; i < compare_length; i++)
+			{
+				auto c1 = static_cast<std::uint16_t>(buf1[i]);
+				auto c2 = static_cast<std::uint16_t>(buf2[i]);
+
+				if (case_insensitive)
+				{
+					if (c1 >= L'A' && c1 <= L'Z') c1 += 0x20;
+					if (c2 >= L'A' && c2 <= L'Z') c2 += 0x20;
+				}
+
+				if (c1 != c2)
+				{
+					result = static_cast<std::int32_t>(c1) - static_cast<std::int32_t>(c2);
+					break;
+				}
+			}
+
+			if (result == 0)
+			{
+				result = static_cast<std::int32_t>(len1) - static_cast<std::int32_t>(len2);
+			}
+
+			const std::string narrow1(buf1.begin(), buf1.end());
+			const std::string narrow2(buf2.begin(), buf2.end());
+
+			THREAD_LOG("RtlCompareUnicodeString called (str1=0x{:X} '{}', str2=0x{:X} '{}', case_insensitive={}) -> {}",
+				string1_address, narrow1, string2_address, narrow2, case_insensitive, result);
+
+			write_return_value(emulator, static_cast<std::uint64_t>(static_cast<std::uint32_t>(result)));
+		},
+		mapped_image,
+		"RtlCompareUnicodeString"
 	);
 }
