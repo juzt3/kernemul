@@ -246,8 +246,8 @@ std::int32_t main()
 		// software version key
 		{
 			const auto winver_key = kernel::registry->create_key("software/microsoft/windows/currentversion");
-			winver_key->set_string("BuildLab", L"22621.ni_release.220506-1250");
-			winver_key->set_string("CurrentBuildNumber", L"22621");
+			winver_key->set_string("BuildLab", L"19041.vb_release.191206-1406");
+			winver_key->set_string("CurrentBuildNumber", L"19045");
 		}
 
 		kernel::filesystem->load_at("ntoskrnl.exe", "system32/ntoskrnl.exe");
