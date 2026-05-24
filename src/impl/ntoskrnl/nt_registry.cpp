@@ -537,6 +537,43 @@ void redirect_ntoskrnl_registry_functions(const std::shared_ptr<emulator_t>& emu
 		mapped_image, "ZwSetValueKey"
 	);
 
+	// NtDeleteValueKey / ZwDeleteValueKey
+	const auto delete_value_key_handler = [emulator](const std::string_view caller_name)
+	{
+		const auto key_handle = emulator->read_register<x86::reg::rcx, std::uint64_t>();
+		const auto value_name_address = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+
+		auto value_name_wide = read_guest_unicode_string(*emulator, value_name_address);
+		const auto value_name_narrow = util::narrow_wstring(value_name_wide);
+
+		const auto key_object = kernel::object_manager->get_object_from_handle<registry_key_object_t>(key_handle);
+
+		if (!key_object || !key_object->key)
+		{
+			THREAD_WARN_LOG("{}: invalid handle 0x{:X}", caller_name, key_handle);
+			write_nt_status(emulator, status_invalid_parameter);
+			return;
+		}
+
+		const bool deleted = key_object->key->delete_value(value_name_narrow);
+
+		THREAD_LOG("{} called (handle=0x{:X}, value='{}', path='{}') -> {}",
+			caller_name, key_handle, value_name_narrow, key_object->path,
+			deleted ? "deleted" : "not found");
+
+		write_nt_success(emulator);
+	};
+
+	redirect_function(
+		[delete_value_key_handler] { delete_value_key_handler("NtDeleteValueKey"); },
+		mapped_image, "NtDeleteValueKey"
+	);
+
+	redirect_function(
+		[delete_value_key_handler] { delete_value_key_handler("ZwDeleteValueKey"); },
+		mapped_image, "ZwDeleteValueKey"
+	);
+
 	// NtEnumerateKey / ZwEnumerateKey
 	const auto enumerate_key_handler = [emulator](const std::string_view caller_name)
 	{
