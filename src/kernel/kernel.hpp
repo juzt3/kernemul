@@ -37,6 +37,9 @@ namespace kernel
 	inline std::shared_ptr<object_manager_t> object_manager;
 	inline std::unordered_map<emulator_t::address_type, function_implementation_t> redirected_functions;
 
+	inline emulator_t::address_type idt_handler_base = 0;
+	inline emulator_t::size_type idt_handler_size = 0;
+
 	[[nodiscard]] std::shared_ptr<kernel_image_t> find_module(std::string_view name);
 	[[nodiscard]] std::shared_ptr<kernel_image_t> find_module_from_rip(emulator_t::address_type rip);
 	[[nodiscard]] std::optional<function_implementation_t> find_redirected_function(emulator_t::address_type address);

@@ -4,6 +4,9 @@
 #include "../../kernel/exception.hpp"
 
 #include <numeric>
+#include <thread>
+#include <atomic>
+#include <chrono>
 
 static std::uint8_t get_guest_irql(const std::shared_ptr<emulator_t>& emulator)
 {
@@ -459,16 +462,30 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 			THREAD_LOG("KeIpiGenericCall: invoking guest BroadcastFunction at 0x{:X} with context=0x{:X}",
 				broadcast_function, context);
 
+			// use a timeout thread to prevent infinite loops in guest broadcast functions
+			// shared_ptr so the flag outlives the lambda if the timeout thread is still sleeping
+			auto completed = std::make_shared<std::atomic<bool>>(false);
+			std::thread timeout_thread([emulator, completed]
+			{
+				std::this_thread::sleep_for(std::chrono::seconds(2));
+				if (!completed->load())
+				{
+					static_cast<void>(emulator->stop());
+				}
+			});
+			timeout_thread.detach();
+
 			const auto run_result = emulator->run_at(broadcast_function, emulator_t::thread_return_address);
+			completed->store(true);
 
 			if (!run_result)
 			{
-				THREAD_ERR_LOG("KeIpiGenericCall: run guest callback: 'failed'");
+				THREAD_WARN_LOG("KeIpiGenericCall: guest callback did not complete (timeout or error)");
 			}
 
 			emulator->write_register<x86::reg::rsp>(saved_rsp);
 
-			const auto result = emulator->read_register<x86::reg::rax, std::uint64_t>();
+			const auto result = run_result ? emulator->read_register<x86::reg::rax, std::uint64_t>() : 0ULL;
 
 			THREAD_LOG("KeIpiGenericCall: guest callback returned 0x{:X}", result);
 
@@ -931,6 +948,20 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 	);
 
 	redirect_function(
+		[emulator]
+		{
+			const auto process = kernel::current_thread->process();
+			const auto process_id = process ? process->id() : 0;
+
+			THREAD_LOG("PsGetCurrentThreadProcessId called -> 0x{:X}", process_id);
+
+			write_return_value(emulator, process_id);
+		},
+		mapped_image,
+		"PsGetCurrentThreadProcessId"
+	);
+
+	redirect_function(
 		kernel::function_implementation_t([emulator](bool& skip_return)
 		{
 			const auto slist_head = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
@@ -1035,6 +1066,20 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 		},
 		mapped_image,
 		"PsGetProcessImageFileName"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto process_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+
+			THREAD_LOG("PsGetProcessWow64Process called (process=0x{:X}) -> 0x0", process_address);
+
+			// all emulated processes are native 64-bit
+			write_return_value(emulator, static_cast<emulator_t::address_type>(0));
+		},
+		mapped_image,
+		"PsGetProcessWow64Process"
 	);
 
 	const auto read_process_protection = [emulator]() -> _PS_PROTECTION
@@ -1383,6 +1428,18 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 	redirect_function(
 		[emulator]
 		{
+			const auto push_lock = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto flags = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+
+			THREAD_LOG("ExReleasePushLockEx called (push_lock=0x{:X}, flags=0x{:X})", push_lock, flags);
+		},
+		mapped_image,
+		"ExReleasePushLockEx"
+	);
+
+	redirect_function(
+		[emulator]
+		{
 			const emulator_t::address_type thread_handle_out = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
 			const std::uint32_t desired_access = emulator->read_register<x86::reg::rdx, std::uint32_t>();
 			const emulator_t::address_type object_attributes = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
@@ -1651,6 +1708,39 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 		},
 		mapped_image,
 		"IoRegisterPlugPlayNotification"
+	);
+
+	// IoGetDeviceInterfaces - return empty list (no matching interfaces)
+	redirect_function(
+		[emulator]
+		{
+			const auto interface_class_guid = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto physical_device_object = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+			const auto flags = emulator->read_register<x86::reg::r8, std::uint32_t>();
+			const auto symbolic_link_list_out = emulator->read_register<x86::reg::r9, emulator_t::address_type>();
+
+			THREAD_LOG("IoGetDeviceInterfaces called (guid=0x{:X}, pdo=0x{:X}, flags=0x{:X}, out=0x{:X})",
+				interface_class_guid, physical_device_object, flags, symbolic_link_list_out);
+
+			// allocate a double-null terminated empty wide string list
+			const auto alloc = emulator->heap_allocate(sizeof(wchar_t) * 2, prot_read_write, true);
+			emulator_err_t error = alloc.error_or({});
+			error.throw_if("IoGetDeviceInterfaces: allocate empty list");
+
+			constexpr wchar_t empty_list[2] = { L'\0', L'\0' };
+			error = emulator->write_virtual_memory(*alloc, &empty_list, sizeof(empty_list));
+			error.throw_if("IoGetDeviceInterfaces: write empty list");
+
+			if (symbolic_link_list_out)
+			{
+				error = emulator->write_virtual_memory(symbolic_link_list_out, &*alloc, sizeof(*alloc));
+				error.throw_if("IoGetDeviceInterfaces: write output pointer");
+			}
+
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"IoGetDeviceInterfaces"
 	);
 
 	redirect_function(
@@ -2578,5 +2668,223 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 		},
 		mapped_image,
 		"KeReleaseSemaphore"
+	);
+
+	const auto query_information_process = [emulator]
+	{
+		const auto process_handle = emulator->read_register<x86::reg::rcx, object_manager_t::handle_type>();
+		const auto info_class = emulator->read_register<x86::reg::rdx, std::uint32_t>();
+		const auto buffer_address = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
+		const auto buffer_length = emulator->read_register<x86::reg::r9, std::uint32_t>();
+
+		const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
+		emulator_t::address_type return_length_address = 0;
+		static_cast<void>(emulator->read_virtual_memory(rsp + 0x28, &return_length_address, sizeof(return_length_address)));
+
+		THREAD_LOG("NtQueryInformationProcess called (handle=0x{:X}, class=0x{:X}, buffer=0x{:X}, length=0x{:X}, return_length=0x{:X})",
+			process_handle, info_class, buffer_address, buffer_length, return_length_address);
+
+		constexpr std::uint32_t process_break_on_termination = 0x1D;
+		constexpr std::uint32_t process_debug_port = 0x07;
+		constexpr std::uint32_t process_basic_information = 0x00;
+		constexpr std::uint32_t process_image_file_name = 0x1B;
+
+		if (info_class == process_break_on_termination)
+		{
+			// return 0 - process is not critical
+			const std::uint32_t value = 0;
+			if (buffer_address && buffer_length >= sizeof(value))
+			{
+				emulator->write_virtual_memory(buffer_address, &value, sizeof(value))
+					.throw_if("NtQueryInformationProcess: write ProcessBreakOnTermination");
+			}
+			if (return_length_address)
+			{
+				const std::uint32_t ret_len = sizeof(value);
+				static_cast<void>(emulator->write_virtual_memory(return_length_address, &ret_len, sizeof(ret_len)));
+			}
+
+			THREAD_LOG("NtQueryInformationProcess: ProcessBreakOnTermination -> 0");
+			write_nt_success(emulator);
+		}
+		else if (info_class == process_debug_port)
+		{
+			// return 0 - no debugger attached
+			const std::uint64_t value = 0;
+			if (buffer_address && buffer_length >= sizeof(value))
+			{
+				emulator->write_virtual_memory(buffer_address, &value, sizeof(value))
+					.throw_if("NtQueryInformationProcess: write ProcessDebugPort");
+			}
+			if (return_length_address)
+			{
+				const std::uint32_t ret_len = sizeof(value);
+				static_cast<void>(emulator->write_virtual_memory(return_length_address, &ret_len, sizeof(ret_len)));
+			}
+
+			THREAD_LOG("NtQueryInformationProcess: ProcessDebugPort -> 0");
+			write_nt_success(emulator);
+		}
+		else if (info_class == process_basic_information)
+		{
+			// PROCESS_BASIC_INFORMATION structure
+			struct
+			{
+				std::int64_t exit_status;
+				std::uint64_t peb_base_address;
+				std::uint64_t affinity_mask;
+				std::int32_t base_priority;
+				std::uint32_t padding;
+				std::uint64_t unique_process_id;
+				std::uint64_t inherited_from_unique_process_id;
+			} basic_info = {};
+
+			basic_info.exit_status = 0x103; // STATUS_PENDING
+			basic_info.base_priority = 8;
+
+			// try to get the process ID from the handle
+			const auto entry = kernel::object_manager->lookup_handle(process_handle);
+			if (entry)
+			{
+				for (const auto& proc : kernel::process_entries)
+				{
+					if (proc->address() == entry->body_address)
+					{
+						basic_info.unique_process_id = proc->id();
+						break;
+					}
+				}
+			}
+
+			const auto write_size = std::min(static_cast<std::size_t>(buffer_length), sizeof(basic_info));
+			if (buffer_address && write_size)
+			{
+				emulator->write_virtual_memory(buffer_address, &basic_info, write_size)
+					.throw_if("NtQueryInformationProcess: write ProcessBasicInformation");
+			}
+			if (return_length_address)
+			{
+				const auto ret_len = static_cast<std::uint32_t>(sizeof(basic_info));
+				static_cast<void>(emulator->write_virtual_memory(return_length_address, &ret_len, sizeof(ret_len)));
+			}
+
+			THREAD_LOG("NtQueryInformationProcess: ProcessBasicInformation (pid={})", basic_info.unique_process_id);
+			write_nt_success(emulator);
+		}
+		else if (info_class == process_image_file_name)
+		{
+			// try to get image name from the process
+			std::string name;
+			const auto entry = kernel::object_manager->lookup_handle(process_handle);
+			if (entry)
+			{
+				for (const auto& proc : kernel::process_entries)
+				{
+					if (proc->address() == entry->body_address)
+					{
+						name = proc->name();
+						break;
+					}
+				}
+			}
+
+			// build a fake path
+			const std::wstring path = L"\\Device\\HarddiskVolume3\\Windows\\System32\\" +
+				std::wstring(name.begin(), name.end());
+
+			const auto name_bytes = static_cast<std::uint16_t>(path.size() * sizeof(wchar_t));
+
+			// UNICODE_STRING header + string data
+			const std::uint32_t required = sizeof(UNICODE_STRING) + name_bytes + sizeof(wchar_t);
+
+			if (return_length_address)
+			{
+				static_cast<void>(emulator->write_virtual_memory(return_length_address, &required, sizeof(required)));
+			}
+
+			if (buffer_length < required)
+			{
+				THREAD_LOG("NtQueryInformationProcess: ProcessImageFileName buffer too small (need 0x{:X}, have 0x{:X})",
+					required, buffer_length);
+				constexpr std::uint32_t status_info_length_mismatch = 0xC0000004;
+				write_nt_status(emulator, status_info_length_mismatch);
+			}
+			else if (buffer_address)
+			{
+				const auto string_data_address = buffer_address + sizeof(UNICODE_STRING);
+				UNICODE_STRING us = {};
+				us.Length = name_bytes;
+				us.MaximumLength = name_bytes + sizeof(wchar_t);
+				us.Buffer = reinterpret_cast<PWSTR>(string_data_address);
+
+				emulator->write_virtual_memory(buffer_address, &us, sizeof(us))
+					.throw_if("NtQueryInformationProcess: write UNICODE_STRING header");
+				emulator->write_virtual_memory(string_data_address, path.data(), name_bytes)
+					.throw_if("NtQueryInformationProcess: write image name");
+
+				THREAD_LOG("NtQueryInformationProcess: ProcessImageFileName -> '{}'", name);
+				write_nt_success(emulator);
+			}
+			else
+			{
+				write_nt_success(emulator);
+			}
+		}
+		else
+		{
+			THREAD_WARN_LOG("NtQueryInformationProcess: unhandled class 0x{:X}", info_class);
+			constexpr std::uint32_t status_invalid_info_class = 0xC0000003;
+			write_nt_status(emulator, status_invalid_info_class);
+		}
+	};
+
+	redirect_function(
+		[query_information_process] { query_information_process(); },
+		mapped_image,
+		"NtQueryInformationProcess"
+	);
+
+	redirect_function(
+		[query_information_process] { query_information_process(); },
+		mapped_image,
+		"ZwQueryInformationProcess"
+	);
+
+	const auto query_active_processor_count = [emulator]
+	{
+		const auto group_number = emulator->read_register<x86::reg::rcx, std::uint16_t>();
+
+		constexpr std::uint32_t count = 8;
+
+		THREAD_LOG("KeQueryActiveProcessorCountEx called (group=0x{:X}) -> {}", group_number, count);
+
+		write_return_value(emulator, count);
+	};
+
+	redirect_function(
+		[query_active_processor_count] { query_active_processor_count(); },
+		mapped_image,
+		"KeQueryActiveProcessorCountEx"
+	);
+
+	redirect_function(
+		[query_active_processor_count] { query_active_processor_count(); },
+		mapped_image,
+		"KeQueryActiveProcessorCount"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto callback_type = emulator->read_register<x86::reg::rcx, std::uint32_t>();
+			const auto callback_function = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+
+			THREAD_LOG("SeRegisterImageVerificationCallback called (type=0x{:X}, callback=0x{:X})",
+				callback_type, callback_function);
+
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"SeRegisterImageVerificationCallback"
 	);
 }

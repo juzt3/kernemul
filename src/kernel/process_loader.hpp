@@ -14,10 +14,12 @@ public:
 	using address_type = emulator_t::address_type;
 	using id_type = std::uint64_t;
 
-	explicit process_t(const id_type id, const address_type section_base_address, emulator_object_t<_EPROCESS> object)
+	explicit process_t(const id_type id, const address_type section_base_address,
+		emulator_object_t<_EPROCESS> object, std::string image_name = {})
 			:	id_(id),
 				section_base_address_(section_base_address),
-				object_(std::move(object)) { }
+				object_(std::move(object)),
+				image_name_(std::move(image_name)) { }
 
 	[[nodiscard]] id_type id() const
 	{
@@ -44,10 +46,16 @@ public:
 		return object_;
 	}
 
+	[[nodiscard]] const std::string& name() const
+	{
+		return image_name_;
+	}
+
 protected:
 	id_type id_;
 	address_type section_base_address_;
 	emulator_object_t<_EPROCESS> object_;
+	std::string image_name_;
 };
 
 namespace kernel

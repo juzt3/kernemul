@@ -221,6 +221,25 @@ static void set_up_interrupt_flag(const std::shared_ptr<emulator_t>& emulator)
 	emulator->write_register<x86::reg::rflags>(flags.flags);
 }
 
+std::string to_string(const std::wstring_view view)
+{
+	std::string str = { };
+
+	for (const auto c : view)
+	{
+		if (128 < static_cast<std::uint16_t>(c))
+		{
+			str.push_back('?');
+
+			continue;
+		}
+
+		str.push_back(static_cast<char>(c));
+	}
+
+	return str;
+}
+
 std::int32_t main()
 {
 	try
@@ -248,18 +267,54 @@ std::int32_t main()
 			const auto winver_key = kernel::registry->create_key("software/microsoft/windows/currentversion");
 			winver_key->set_string("BuildLab", L"19041.vb_release.191206-1406");
 			winver_key->set_string("CurrentBuildNumber", L"19045");
+			winver_key->set_string("ProgramFilesDir", L"C:\\Program Files");
+			winver_key->set_string("ProgramFilesDir (x86)", L"C:\\Program Files (x86)");
 		}
 
+		// system start options
+		kernel::registry->create_key("system/currentcontrolset/control")
+			->set_string("SystemStartOptions", L"NOEXECUTE=OPTIN");
+
+		// certificate store keys
+		static_cast<void>(kernel::registry->create_key("software/microsoft/systemcertificates/root/certificates"));
+		static_cast<void>(kernel::registry->create_key("software/microsoft/systemcertificates/authroot/certificates"));
+		static_cast<void>(kernel::registry->create_key("software/microsoft/systemcertificates/authroot/autoupdate"));
+		static_cast<void>(kernel::registry->create_key("software/microsoft/systemcertificates/ca/certificates"));
+		static_cast<void>(kernel::registry->create_key("software/microsoft/systemcertificates/flightroot/certificates"));
+
+		// hardware enumeration keys
+		static_cast<void>(kernel::registry->create_key("system/currentcontrolset/enum/pci"));
+		static_cast<void>(kernel::registry->create_key("system/currentcontrolset/enum/display"));
+
 		kernel::filesystem->load_at("ntoskrnl.exe", "system32/ntoskrnl.exe");
+		kernel::filesystem->load_at("ntoskrnl.exe", "system32/drivers/ntoskrnl.exe");
 		kernel::filesystem->load_at("ntdll.dll", "system32/ntdll.dll");
 		kernel::filesystem->load_at("win32k.sys", "system32/win32k.sys");
+		kernel::filesystem->load_at("win32u.dll", "system32/win32u.dll");
 		kernel::filesystem->load_directory_at("cat_root", "system32/catroot/");
 
-		kernel::filesystem->create_at("physicaldrive0");
-		kernel::filesystem->create_at("physicaldrive1");
-		kernel::filesystem->create_at("physicaldrive2");
-		kernel::filesystem->create_at("physicaldrive3");
-		kernel::filesystem->create_at("physicaldrive4");
+		// load the emulated driver file so it can find itself on disk
+		kernel::filesystem->load_at(EMULATED_MODULE_NAME,
+			to_string(EMULATED_MODULE_DIRECTORY) + EMULATED_MODULE_NAME);
+
+		static_cast<void>(kernel::filesystem->create_at("physicaldrive0"));
+		static_cast<void>(kernel::filesystem->create_at("physicaldrive1"));
+		static_cast<void>(kernel::filesystem->create_at("physicaldrive2"));
+		static_cast<void>(kernel::filesystem->create_at("physicaldrive3"));
+		static_cast<void>(kernel::filesystem->create_at("physicaldrive4"));
+
+		// create directories so NtCreateFile on \SystemRoot and prefetch succeeds
+		static_cast<void>(kernel::filesystem->create_directory_at("windows"));
+		static_cast<void>(kernel::filesystem->create_directory_at("prefetch"));
+
+
+		// machine guid file
+		{
+			const std::string guid_content = "12345678-1234-1234-1234-123456789ABC";
+			std::vector<std::uint8_t> guid_data(guid_content.begin(), guid_content.end());
+			auto guid_file = kernel::filesystem->create_at("system32/restore/machineguid.txt");
+			guid_file->write(guid_data);
+		}
 
 		set_up_stack(*emulator);
 		set_up_user_shared_data(emulator);
@@ -376,7 +431,7 @@ std::int32_t main()
 				}
 
 
-				emulator->stop();
+				static_cast<void>(emulator->stop());
 			};
 
 		for (const auto& module : kernel::module_entries)

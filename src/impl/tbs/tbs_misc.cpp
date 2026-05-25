@@ -43,4 +43,20 @@ void redirect_tbs_misc_functions(const std::shared_ptr<emulator_t>& emulator,
 		mapped_image,
 		"Tbsi_GetDeviceInfo"
 	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto context_params = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto context_handle_out = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+
+			THREAD_LOG("Tbsi_Context_Create called (params=0x{:X}, handle_out=0x{:X}) -> TBS_E_SERVICE_NOT_RUNNING",
+				context_params, context_handle_out);
+
+			constexpr std::uint32_t tbs_e_service_not_running = 0x80284008;
+			write_return_value(emulator, tbs_e_service_not_running);
+		},
+		mapped_image,
+		"Tbsi_Context_Create"
+	);
 }

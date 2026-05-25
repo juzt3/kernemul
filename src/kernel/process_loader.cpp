@@ -60,6 +60,58 @@ void kernel::set_up_initial_system_process(const std::shared_ptr<emulator_t>& em
 		const emulator_err_t error = emulator->write_virtual_memory(*symbol, &process_address, sizeof(process_address));
 		error.throw_if("write PsInitialSystemProcess");
 	}
+
+	static constexpr const char* fake_process_names[] = {
+		"Registry",
+		"smss.exe",
+		"csrss.exe",
+		"wininit.exe",
+		"csrss.exe",
+		"winlogon.exe",
+		"services.exe",
+		"lsass.exe",
+		"svchost.exe",
+		"svchost.exe",
+		"svchost.exe",
+		"svchost.exe",
+		"svchost.exe",
+		"svchost.exe",
+		"svchost.exe",
+		"svchost.exe",
+		"fontdrvhost.ex",
+		"fontdrvhost.ex",
+		"dwm.exe",
+		"svchost.exe",
+		"svchost.exe",
+		"svchost.exe",
+		"svchost.exe",
+		"svchost.exe",
+		"svchost.exe",
+		"svchost.exe",
+		"WmiPrvSE.exe",
+		"spoolsv.exe",
+		"MsMpEng.exe",
+		"NisSrv.exe",
+		"SearchIndexer.",
+		"explorer.exe",
+		"RuntimeBroker.",
+		"sihost.exe",
+		"taskhostw.exe",
+		"ctfmon.exe",
+		"conhost.exe",
+		"dllhost.exe",
+		"SearchHost.exe",
+		"StartMenuExper",
+	};
+
+	for (const auto* name : fake_process_names)
+	{
+		const auto pid = object_manager->allocate_id();
+		create_process(emulator, pid, name, 0);
+	}
+
+	GLOBAL_LOG("populated {} fake system processes ({} total)",
+		std::size(fake_process_names), process_entries.size());
 }
 
 std::shared_ptr<process_t> kernel::create_process(const std::shared_ptr<emulator_t>& emulator,
@@ -80,7 +132,7 @@ std::shared_ptr<process_t> kernel::create_process(const std::shared_ptr<emulator
 
 	auto object = emulator_object_t<_EPROCESS>::allocate(emulator, contents, object_name);
 
-	auto process = std::make_shared<process_t>(process_id, section_base_address, std::move(object));
+	auto process = std::make_shared<process_t>(process_id, section_base_address, std::move(object), std::string(image_name));
 
 	const auto self_links = get_active_process_links_address(*process);
 
@@ -100,6 +152,9 @@ std::shared_ptr<process_t> kernel::create_process(const std::shared_ptr<emulator
 		set_process_flink(emulator, *last, self_links);
 		set_process_blink(emulator, *first, self_links);
 	}
+
+	// register in object manager so ObOpenObjectByPointer can create handles
+	object_manager->register_object(process->address(), nullptr);
 
 	GLOBAL_LOG("created process (process id={}, section base=0x{:X}, object address=0x{:X})",
 		process_id, section_base_address, process->address());

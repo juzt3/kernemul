@@ -173,8 +173,11 @@ void kernel::set_up_idt(const std::shared_ptr<emulator_t>& emulator, const kerne
 	emulator_err_t error = idt_base_address.error_or({});
 	error.throw_if("map IDT");
 
-	const auto handler_base = nt_image.base_address() + 0x404630;
-	
+	const auto handler_base = nt_image.base_address();
+
+	idt_handler_base = handler_base;
+	idt_handler_size = handler_count * sizeof(segment_descriptor_interrupt_gate_64);
+
 	for (std::uint32_t i = 0; i < handler_count; i++)
 	{
 		const auto handler_address = handler_base + (i * sizeof(segment_descriptor_interrupt_gate_64));

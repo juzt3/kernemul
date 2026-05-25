@@ -205,6 +205,7 @@
     <ClCompile Include="src\impl\cng\cng_bcrypt.cpp" />
     <ClCompile Include="src\impl\fltmgr\flt_misc.cpp" />
     <ClCompile Include="src\impl\tbs\tbs_misc.cpp" />
+    <ClCompile Include="src\impl\tdi\tdi_misc.cpp" />
     <ClCompile Include="src\impl\ntoskrnl\nt_crashdump.cpp" />
     <ClCompile Include="src\impl\ntoskrnl\nt_misc.cpp" />
     <ClCompile Include="src\impl\ntoskrnl\nt_object.cpp" />

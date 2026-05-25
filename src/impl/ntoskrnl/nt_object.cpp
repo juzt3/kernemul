@@ -391,4 +391,45 @@ void redirect_ntoskrnl_object_functions(const std::shared_ptr<emulator_t>& emula
 		mapped_image,
 		"ObGetObjectType"
 	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto object_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto handle_attributes = emulator->read_register<x86::reg::rdx, std::uint32_t>();
+			const auto access_state = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
+			const auto desired_access = emulator->read_register<x86::reg::r9, std::uint32_t>();
+
+			const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
+
+			emulator_t::address_type object_type = 0;
+			std::uint32_t access_mode = 0;
+			emulator_t::address_type handle_out = 0;
+
+			static_cast<void>(emulator->read_virtual_memory(rsp + 0x28, &object_type, sizeof(object_type)));
+			static_cast<void>(emulator->read_virtual_memory(rsp + 0x30, &access_mode, sizeof(access_mode)));
+			static_cast<void>(emulator->read_virtual_memory(rsp + 0x38, &handle_out, sizeof(handle_out)));
+
+			THREAD_LOG("ObOpenObjectByPointer called (object=0x{:X}, attrs=0x{:X}, access=0x{:X}, "
+				"type=0x{:X}, mode={}, handle_out=0x{:X})",
+				object_address, handle_attributes, desired_access, object_type, access_mode, handle_out);
+
+			kernel::object_manager->reference_object(object_address);
+
+			const auto handle_value = kernel::object_manager->create_handle(object_address, desired_access);
+
+			if (handle_out)
+			{
+				emulator_err_t error = emulator->write_virtual_memory(handle_out, &handle_value, sizeof(handle_value));
+				error.throw_if("ObOpenObjectByPointer: write handle");
+			}
+
+			THREAD_LOG("ObOpenObjectByPointer: created handle 0x{:X} for object 0x{:X}",
+				handle_value, object_address);
+
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"ObOpenObjectByPointer"
+	);
 }

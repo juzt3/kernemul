@@ -61,6 +61,18 @@ static std::string normalize_path(const std::wstring& guest_path)
 	strip_prefix(path, nt_prefix);
 	strip_prefix(path, systemroot_prefix);
 
+	// handle bare /systemroot with no trailing slash
+	if (path == "/systemroot")
+	{
+		path = "windows";
+	}
+
+	// strip trailing slashes
+	while (!path.empty() && path.back() == '/')
+	{
+		path.pop_back();
+	}
+
 	return path;
 }
 
@@ -921,6 +933,16 @@ void redirect_ntoskrnl_file_functions(const std::shared_ptr<emulator_t>& emulato
 	redirect_function(
 		[device_io_control_handler] { device_io_control_handler("ZwDeviceIoControlFile"); },
 		mapped_image, "ZwDeviceIoControlFile"
+	);
+
+	redirect_function(
+		[device_io_control_handler] { device_io_control_handler("NtFsControlFile"); },
+		mapped_image, "NtFsControlFile"
+	);
+
+	redirect_function(
+		[device_io_control_handler] { device_io_control_handler("ZwFsControlFile"); },
+		mapped_image, "ZwFsControlFile"
 	);
 
 	const auto query_directory_file_handler = [emulator](const std::string_view caller_name)

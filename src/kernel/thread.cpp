@@ -300,7 +300,8 @@ void kernel::run_all_threads(const std::shared_ptr<emulator_t>& emulator, const 
 
 		if (const bool thread_finished = current_thread->start())
 		{
-			THREAD_LOG("thread returned to default return address and is now finished");
+			const auto rax = emulator->read_register<x86::reg::rax, std::uint64_t>();
+			THREAD_LOG("thread returned to default return address and is now finished (rax=0x{:X})", rax);
 
 			delete_current_thread = true;
 			pending_thread_switch = true;
