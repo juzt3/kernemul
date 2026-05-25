@@ -13,6 +13,7 @@
 #include <memory>
 #include <optional>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <atomic>
 #include <queue>
@@ -36,9 +37,6 @@ namespace kernel
 	inline std::shared_ptr<registry_t> registry;
 	inline std::shared_ptr<object_manager_t> object_manager;
 	inline std::unordered_map<emulator_t::address_type, function_implementation_t> redirected_functions;
-
-	inline emulator_t::address_type idt_handler_base = 0;
-	inline emulator_t::size_type idt_handler_size = 0;
 
 	[[nodiscard]] std::shared_ptr<kernel_image_t> find_module(std::string_view name);
 	[[nodiscard]] std::shared_ptr<kernel_image_t> find_module_from_rip(emulator_t::address_type rip);

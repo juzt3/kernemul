@@ -83,6 +83,7 @@ namespace hm
 
 		[[nodiscard]] bool run_at(address_type start_address, address_type end_address = 0);
 		void stop();
+		void cancel_pending_single_step() { pending_single_step_cancelled_ = true; }
 
 		std::shared_ptr<hook_t> hook_code(const hook_t::code_callback& callback, address_type start_physical_address = default_start_address, address_type end_physical_address = default_end_address);
 		std::shared_ptr<hook_t> hook_basic_block(const hook_t::code_callback& callback, address_type start_physical_address = default_start_address, address_type end_physical_address = default_end_address);
@@ -215,5 +216,6 @@ namespace hm
 		std::vector<std::shared_ptr<hook_t>> hooks_ = { };
 
 		bool block_hook_was_control_flow_ = false;
+		bool pending_single_step_cancelled_ = false;
 	};
 }

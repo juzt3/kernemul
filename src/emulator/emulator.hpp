@@ -329,6 +329,8 @@ public:
 		const emulator_hook_t::memory_access_callback& callback, protection_type monitored_protection,
 		address_type start_address, address_type end_address) = 0;
 
+	virtual void cancel_pending_single_step() = 0;
+
 	template <x86::register_t Register, class T>
 	T read_register()
 	{

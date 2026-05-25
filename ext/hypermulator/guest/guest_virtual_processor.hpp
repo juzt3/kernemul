@@ -118,6 +118,6 @@ namespace hm
 		std::shared_ptr<guest_partition_t> partition_ = { };
 		id_type id_ = 0;
 
-		bool pending_stop_ = false;
+		std::shared_ptr<std::atomic<std::uint64_t>> stop_epoch_ = std::make_shared<std::atomic<std::uint64_t>>(0);
 	};
 }

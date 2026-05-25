@@ -7,15 +7,15 @@ void redirect_tdi_misc_functions(const std::shared_ptr<emulator_t>& emulator,
 		[emulator]
 		{
 			const auto binding_info = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
-			const auto binding_handle_out = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+			const auto info_size = emulator->read_register<x86::reg::rdx, std::uint64_t>();
+			const auto binding_handle_out = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
 
 			THREAD_LOG("TdiRegisterPnPHandlers called (binding_info=0x{:X}, handle_out=0x{:X})", binding_info, binding_handle_out);
 
-			// return a fake handle
 			if (binding_handle_out)
 			{
-				constexpr std::uint64_t fake_handle = 0xDEAD0001;
-				emulator_err_t error = emulator->write_virtual_memory(binding_handle_out, &fake_handle, sizeof(fake_handle));
+				const auto handle = kernel::object_manager->allocate_id();
+				emulator_err_t error = emulator->write_virtual_memory(binding_handle_out, &handle, sizeof(handle));
 				error.throw_if("TdiRegisterPnPHandlers: write handle");
 			}
 

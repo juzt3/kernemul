@@ -696,7 +696,17 @@ bool hm::emulator_t::memory_process_memory_hook(guest_virtual_processor_t& proce
 
 	hook_callback(symbolic_accessed_address, info.type);
 
-	set_memory_hook_step(processor, context, hook, step_handled);
+	if (pending_single_step_cancelled_)
+	{
+		pending_single_step_cancelled_ = false;
+		block_pending_single_step_exception(processor);
+		set_trap_flag(processor, false);
+		step_handled = true;
+	}
+	else
+	{
+		set_memory_hook_step(processor, context, hook, step_handled);
+	}
 
 	return true;
 }

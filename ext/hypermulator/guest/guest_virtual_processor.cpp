@@ -11,25 +11,47 @@ hm::guest_virtual_processor_t::id_type hm::guest_virtual_processor_t::id() const
 
 void hm::guest_virtual_processor_t::run()
 {
-	pending_stop_ = false;
+	const auto start_epoch = stop_epoch_->load();
 
 	vmexit_context_t vmexit_context;
 
-	do
+	while (true)
 	{
 		if (!partition_->run_virtual_processor(*this, vmexit_context))
 		{
 			break;
 		}
 
-	} while (!pending_stop_ && process_vmexit(vmexit_context));
+		if (vmexit_context.reason == vmexit_reason_t::cancelled)
+		{
+			if (stop_epoch_->load() != start_epoch)
+			{
+				break;
+			}
+
+			// stale cancel - WHvCancelRunVirtualProcessor was issued before this
+			// run() started (e.g. from the previous thread's stop), so the cancel
+			// was consumed but the epoch hasn't changed since our entry
+			continue;
+		}
+
+		if (stop_epoch_->load() != start_epoch)
+		{
+			break;
+		}
+
+		if (!process_vmexit(vmexit_context))
+		{
+			break;
+		}
+	}
 
 	reset_exception_state();
 }
 
 void hm::guest_virtual_processor_t::stop()
 {
-	pending_stop_ = true;
+	stop_epoch_->fetch_add(1);
 
 	partition_->stop_virtual_processor(*this);
 }

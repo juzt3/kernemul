@@ -13,9 +13,6 @@
 #include "util/logs.hpp"
 #include "util/util.hpp"
 
-#include "portable_executable/dos_header.hpp"
-#include "portable_executable/image.hpp"
-
 static void set_up_user_shared_data(const std::shared_ptr<emulator_t>& emulator)
 {
 	/*_KUSER_SHARED_DATA contents = { };
@@ -118,88 +115,79 @@ static emulator_object_t<_KPCR> set_up_kpcr(const std::shared_ptr<emulator_t>& e
 	return kpcr;
 }
 
-static void patch_dbgctl_check(const std::shared_ptr<emulator_t>& emulator)
+static void set_up_ntoskrnl_globals(const std::shared_ptr<emulator_t>& emulator, const std::shared_ptr<kernel_image_t>& nt_image)
 {
-	const auto image_buffer = kernel::emulated_module->buffer();
-	const auto image = reinterpret_cast<const portable_executable::image_t*>(image_buffer.data());
-
-	if (const auto dbgctl_signature = image->signature_scan("0F 30 0F 32"))
+	// MmPfnDatabase - allocate a fake PFN database and write its address
+	if (const auto symbol = nt_image->find_symbol("MmPfnDatabase"))
 	{
-		const std::int64_t dbgctl_rva = dbgctl_signature - image_buffer.data();
-		const emulator_t::address_type dbgctl_runtime_address = kernel::emulated_module->base_address() + dbgctl_rva;
+		constexpr emulator_t::size_type pfn_db_size = 0x10000;
+		const auto pfn_db = emulator->heap_allocate(pfn_db_size, prot_read_write, true);
+		emulator_err_t error = pfn_db.error_or({});
+		error.throw_if("allocate fake PFN database");
 
-		constexpr std::array<std::uint8_t, 4> stub = {
-			0x31, 0xD2, // xor edx, edx
-			0xB0, 0x03 // mov al, 3
-		};
+		const auto pfn_db_address = *pfn_db;
+		error = emulator->write_virtual_memory(*symbol, &pfn_db_address, sizeof(pfn_db_address));
+		error.throw_if("write MmPfnDatabase");
 
-		const emulator_err_t error = emulator->write_virtual_memory(dbgctl_runtime_address, stub);
-
-		error.throw_if("write MSR stub memory");
-
-		/*const emulator_err_t error = emulator->hook_code(
-			[emulator, dbgctl_runtime_address]()
-			{
-				emulator->write_register<x86::reg::rdx>(0);
-				emulator->write_register<x86::reg::rax>(3);
-				emulator->write_register<x86::reg::rip>(dbgctl_runtime_address + 4);
-			},
-			dbgctl_runtime_address,
-			dbgctl_runtime_address + 1
-		).error_or({});
-
-		error.throw_if("place MSR hook stub");*/
+		GLOBAL_LOG("initialized MmPfnDatabase at 0x{:X} -> 0x{:X}", *symbol, pfn_db_address);
 	}
-}
 
-static void patch_is_address_valid_routine(const std::shared_ptr<emulator_t>& emulator)
-{
-	const auto image_buffer = kernel::emulated_module->buffer();
-	const auto image = reinterpret_cast<const portable_executable::image_t*>(image_buffer.data());
-
-	if (const auto reference_signature = image->signature_scan("E8 ? ? ? ? 4C 8B F8"))//"48 8B CF E9 ? ? ? ? E8 ? ? ? ? 84 C0 0F 84 ? ? ? ? 83 FE"))
+	// NtBuildNumber - Windows 10 22H2 free build
+	if (const auto symbol = nt_image->find_symbol("NtBuildNumber"))
 	{
-		constexpr std::size_t call_signature_offset = 0;
-		constexpr std::size_t call_imm_offset = 1;
-		constexpr std::size_t call_size = 5;
+		constexpr std::uint32_t build_number = 0xF0004A65; // 19045 | 0xF0000000 (free build)
+		const emulator_err_t error = emulator->write_virtual_memory(*symbol, &build_number, sizeof(build_number));
+		error.throw_if("write NtBuildNumber");
 
-		const auto call_local_address = reference_signature + call_signature_offset;
-		const auto rip_local_address = call_local_address + call_size;
+		GLOBAL_LOG("initialized NtBuildNumber at 0x{:X} -> 0x{:X}", *symbol, build_number);
+	}
 
-		const auto routine_local_address = rip_local_address + *reinterpret_cast<const std::int32_t*>(call_local_address + call_imm_offset);
+	// KiProcessorBlock - allocate a single processor block entry pointing to the KPRCB
+	if (const auto symbol = nt_image->find_symbol("KiProcessorBlock"))
+	{
+		// single entry array - entry 0 will be filled later when KPRCB is set up
+		constexpr std::uint64_t placeholder = 0;
+		const emulator_err_t error = emulator->write_virtual_memory(*symbol, &placeholder, sizeof(placeholder));
+		error.throw_if("write KiProcessorBlock");
 
-		const std::int64_t routine_rva = routine_local_address - image_buffer.data();
-		const emulator_t::address_type routine_runtime_address = kernel::emulated_module->base_address() + routine_rva;
+		GLOBAL_LOG("initialized KiProcessorBlock at 0x{:X}", *symbol);
+	}
 
-		constexpr std::array<std::uint8_t, 3> stub = {
-			//0xB0, 0x01, // mov al, 1
-			0x30, 0xC0, // xor al, al
-			0xC3 // ret
-		};
+	// MmHighestUserAddress
+	if (const auto symbol = nt_image->find_symbol("MmHighestUserAddress"))
+	{
+		constexpr std::uint64_t highest_user = 0x00007FFFFFFEFFFF;
+		const emulator_err_t error = emulator->write_virtual_memory(*symbol, &highest_user, sizeof(highest_user));
+		error.throw_if("write MmHighestUserAddress");
+	}
 
-		const emulator_err_t error = emulator->write_virtual_memory(routine_runtime_address, stub);
+	// MmSystemRangeStart
+	if (const auto symbol = nt_image->find_symbol("MmSystemRangeStart"))
+	{
+		constexpr std::uint64_t system_range = 0xFFFF800000000000;
+		const emulator_err_t error = emulator->write_virtual_memory(*symbol, &system_range, sizeof(system_range));
+		error.throw_if("write MmSystemRangeStart");
+	}
 
-		error.throw_if("write 'is address valid' stub memory");
+	// initialize empty LIST_ENTRY heads in ntoskrnl that the driver walks
+	const char* list_head_symbols[] = {
+		"PiDDBCacheList",
+		"CallbackListHead",
+	};
 
-		/*const emulator_err_t error = emulator->hook_code(
-			[emulator]()
-			{
-				emulator->write_register<x86::reg::rax>(0);
+	for (const auto* name : list_head_symbols)
+	{
+		if (const auto symbol = nt_image->find_symbol(name))
+		{
+			const std::uint64_t self_ptr = *symbol;
+			emulator_err_t error = emulator->write_virtual_memory(*symbol, &self_ptr, sizeof(self_ptr));
+			error.throw_if(std::format("write {}.Flink", name));
 
-				const auto rsp = emulator->read_register<x86::reg::rsp, std::uint64_t>();
+			error = emulator->write_virtual_memory(*symbol + sizeof(std::uint64_t), &self_ptr, sizeof(self_ptr));
+			error.throw_if(std::format("write {}.Blink", name));
 
-				std::uint64_t return_address = 0;
-
-				emulator->read_virtual_memory(rsp, &return_address, sizeof(return_address)).throw_if("read return address");
-
-				emulator->write_register<x86::reg::rsp>(rsp + 8);
-				emulator->write_register<x86::reg::rip>(return_address);
-			},
-			routine_runtime_address,
-			routine_runtime_address + 1
-		).error_or({});
-
-		error.throw_if("place 'is address valid' hook stub");*/
+			GLOBAL_LOG("initialized {} at 0x{:X} (empty list)", name, *symbol);
+		}
 	}
 }
 
@@ -297,6 +285,23 @@ std::int32_t main()
 		kernel::filesystem->load_at(EMULATED_MODULE_NAME,
 			to_string(EMULATED_MODULE_DIRECTORY) + EMULATED_MODULE_NAME);
 
+		// also register under system32/drivers/ since some drivers look themselves up there
+		kernel::filesystem->load_at(EMULATED_MODULE_NAME,
+			"system32/drivers/" + std::string(EMULATED_MODULE_NAME));
+
+		// create the driver's installation directory so NtCreateFile on it succeeds
+		{
+			auto dir_path = to_string(EMULATED_MODULE_DIRECTORY);
+			for (auto& c : dir_path)
+			{
+				if (c == '\\') c = '/';
+				c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+			}
+			while (!dir_path.empty() && dir_path.back() == '/')
+				dir_path.pop_back();
+			static_cast<void>(kernel::filesystem->create_directory_at(dir_path));
+		}
+
 		static_cast<void>(kernel::filesystem->create_at("physicaldrive0"));
 		static_cast<void>(kernel::filesystem->create_at("physicaldrive1"));
 		static_cast<void>(kernel::filesystem->create_at("physicaldrive2"));
@@ -333,15 +338,8 @@ std::int32_t main()
 
 		kernel::emulated_module = kernel::map_kernel_image(emulator, EMULATED_MODULE_NAME, true, EMULATED_MODULE_DIRECTORY);
 
-		/*emulator->hook_basic_block([emulator]()
-			{
-				spdlog::info("basic block executed at 0x{:X}", emulator->read_register<x86::reg::rip, std::uint64_t>());
-			}, kernel::emulated_module->base_address(),
-				kernel::emulated_module->base_address() + kernel::emulated_module->size()
-		);*/
+		set_up_ntoskrnl_globals(emulator, nt_image);
 
-		//patch_dbgctl_check(emulator);
-		//patch_is_address_valid_routine(emulator);
 		set_up_interrupt_flag(emulator);
 
 		kernel::set_up_initial_system_process(emulator);
@@ -358,6 +356,16 @@ std::int32_t main()
 		const auto kpcr = set_up_kpcr(emulator, nt_image, kernel::current_thread);
 		kernel::set_up_kernel_gs(emulator, kpcr.address());
 
+		// write KPRCB address to KiProcessorBlock[0] now that KPCR is set up
+		if (const auto ki_proc_block = nt_image->find_symbol("KiProcessorBlock"))
+		{
+			_KPCR kpcr_contents = {};
+			static_cast<void>(emulator->read_virtual_memory(kpcr.address(), &kpcr_contents, sizeof(kpcr_contents)));
+
+			const auto prcb_address = reinterpret_cast<std::uint64_t>(kpcr_contents.CurrentPrcb);
+			static_cast<void>(emulator->write_virtual_memory(*ki_proc_block, &prcb_address, sizeof(prcb_address)));
+		}
+
 		set_up_lstar_msr(emulator, nt_image);
 
 		const emulator_t::address_type base_address = kernel::emulated_module->base_address();
@@ -367,7 +375,7 @@ std::int32_t main()
 		GLOBAL_LOG("mapped image at 0x{:X}", base_address);
 
 		const auto redirect_execute_handler = [emulator]
-		([[maybe_unused]] const emulator_t::address_type accessed_address, [[maybe_unused]] const protection_t protection) -> void
+		([[maybe_unused]] const emulator_t::address_type accessed_address, [[maybe_unused]] const protection_t protection)
 			{
 				const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
 				const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
@@ -380,7 +388,7 @@ std::int32_t main()
 
 				if (const auto redirected_function = kernel::find_redirected_function(rip))
 				{
-					THREAD_LOG("redirecting function (return address=0x{:X})", return_address);
+					THREAD_LOG("redirecting function at 0x{:X} (return address=0x{:X})", rip, return_address);
 
 					bool skip_return = false;
 
@@ -392,14 +400,16 @@ std::int32_t main()
 						emulator->write_register<x86::reg::rip>(return_address);
 					}
 
-					// clear TF - if the driver set the trap flag before calling this function,
-					// on real hardware INT1 would fire inside the kernel function and be handled there.
-					// since we skip the real function body, we absorb the trap here.
-					const auto rflags = emulator->read_register<x86::reg::rflags, std::uint64_t>();
-					if (rflags & 0x100)
+					rflags flags = emulator->read_register<x86::reg::rflags, rflags>();
+
+					if (flags.trap_flag)
 					{
-						emulator->write_register<x86::reg::rflags>(rflags & ~static_cast<std::uint64_t>(0x100));
+						flags.trap_flag = 0;
+
+						emulator->write_register<x86::reg::rflags>(flags.flags);
 					}
+
+					emulator->cancel_pending_single_step();
 
 					return;
 				}
@@ -430,8 +440,9 @@ std::int32_t main()
 					THREAD_ERR_LOG("unimplemented function in '{}' (address=0x{:X}, return address=0x{:X})", module_name, rip, return_address);
 				}
 
-
 				static_cast<void>(emulator->stop());
+
+				emulator->cancel_pending_single_step();
 			};
 
 		for (const auto& module : kernel::module_entries)
@@ -456,12 +467,13 @@ std::int32_t main()
 			{
 				const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
 				const auto rax = emulator->read_register<x86::reg::rax, std::int32_t>();
+				const auto rcx = emulator->read_register<x86::reg::rcx, std::int32_t>();
 
-				THREAD_LOG("cpuid executed at 0x{:X} (rax=0x{:X})", rip, rax);
+				THREAD_LOG("cpuid executed at 0x{:X} (rax=0x{:X}, rcx=0x{:X})", rip, rax, rcx);
 
 				std::array<std::int32_t, 4> result;
 
-				__cpuid(result.data(), rax);
+				__cpuidex(result.data(), rax, rcx);
 
 				emulator->write_register<x86::reg::rax, std::int32_t>(result[0]);
 				emulator->write_register<x86::reg::rbx, std::int32_t>(result[1]);
@@ -479,17 +491,20 @@ std::int32_t main()
 		error = emulator->hook_invalid_memory(
 			[emulator](const emulator_t::address_type faulting_address, const protection_t access) -> bool
 			{
-				const auto page_base = faulting_address & ~static_cast<emulator_t::address_type>(0xFFF);
-				const auto map_result = emulator->map_virtual_memory(page_base, 0x1000, prot_read_write);
+				const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
 
-				if (!map_result)
-				{
-					THREAD_LOG("demand-paged 0x{:X} (access={})", page_base, static_cast<std::uint32_t>(access));
-					return true;
-				}
-
-				THREAD_LOG("invalid memory accessed at 0x{:X} (access={}) - could not demand-page",
-					faulting_address, static_cast<std::uint32_t>(access));
+				THREAD_ERR_LOG("invalid memory access at 0x{:X} (rip=0x{:X}, access={})",
+					faulting_address, rip, static_cast<std::uint32_t>(access));
+				THREAD_ERR_LOG("  rax=0x{:X} rbx=0x{:X} rcx=0x{:X} rdx=0x{:X}",
+					emulator->read_register<x86::reg::rax, std::uint64_t>(),
+					emulator->read_register<x86::reg::rbx, std::uint64_t>(),
+					emulator->read_register<x86::reg::rcx, std::uint64_t>(),
+					emulator->read_register<x86::reg::rdx, std::uint64_t>());
+				THREAD_ERR_LOG("  rsi=0x{:X} rdi=0x{:X} rbp=0x{:X} rsp=0x{:X}",
+					emulator->read_register<x86::reg::rsi, std::uint64_t>(),
+					emulator->read_register<x86::reg::rdi, std::uint64_t>(),
+					emulator->read_register<x86::reg::rbp, std::uint64_t>(),
+					emulator->read_register<x86::reg::rsp, std::uint64_t>());
 
 				return false;
 			},
@@ -499,21 +514,6 @@ std::int32_t main()
 		).error_or({});
 
 		error.throw_if("monitor invalid memory");
-
-		error = emulator->hook_instruction(x86::insn::rdtsc,
-			[emulator]()
-			{
-				const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
-
-				THREAD_LOG("rdtsc executed at 0x{:X}", rip);
-
-				return false;
-			},
-			emulator_t::default_start_address,
-			emulator_t::default_end_address
-		).error_or({});
-
-		error.throw_if("instruction hook attach");
 
 		error = emulator->hook_msr(
 			[emulator](const std::uint32_t msr_number, const bool write)

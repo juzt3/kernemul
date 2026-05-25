@@ -345,6 +345,11 @@ std::expected<emulator_t::hook_type, emulator_err_t> hypermulator_t::hook_memory
 	return add_native_hook(native_hooks, callback);
 }
 
+void hypermulator_t::cancel_pending_single_step()
+{
+	backend_->cancel_pending_single_step();
+}
+
 std::vector<hypermulator_hook_t::native_hook_type> hypermulator_t::wrap_virtual_hook_creation(
 	const virtual_hook_creation_callback& callback, const address_type start_address, const address_type end_address)
 {

@@ -41,16 +41,19 @@ void kernel::switch_thread(const std::shared_ptr<emulator_t>& emulator, const bo
 		return;
 	}
 
-	const emulator_err_t error = emulator->stop();
-
-	error.throw_if("stop thread");
-
 	if (delete_current)
 	{
 		delete_current_thread = true;
 	}
 
+	// set flag before stop - stop() is asynchronous (WHvCancelRunVirtualProcessor),
+	// so the main thread can observe the cancellation and check this flag before we
+	// get a chance to set it, causing the run loop to exit prematurely
 	pending_thread_switch = true;
+
+	const emulator_err_t error = emulator->stop();
+
+	error.throw_if("stop thread");
 
 	GLOBAL_LOG("switch_thread succeeded");
 }
@@ -149,7 +152,9 @@ void thread_t::load_state()
 	emulator_->write_register<x86::reg::r13>(state_.r13);
 	emulator_->write_register<x86::reg::r14>(state_.r14);
 	emulator_->write_register<x86::reg::r15>(state_.r15);
+
 	emulator_->write_register<x86::reg::rip>(state_.rip);
+
 	// clear TF - if the driver set trap flag before a context switch, absorb it
 	// to prevent spurious INT1 after resuming
 	emulator_->write_register<x86::reg::rflags>(state_.rflags & ~static_cast<std::uint64_t>(0x100));
@@ -254,14 +259,21 @@ void kernel::run_all_threads(const std::shared_ptr<emulator_t>& emulator, const 
 	auto thread_scheduler = std::thread(
 		[&ended, emulator]()
 		{
-			while (!ended)
+			try
 			{
-				if (!pending_thread_switch)
+				while (!ended)
 				{
-					switch_thread(emulator);
-				}
+					if (!pending_thread_switch)
+					{
+						switch_thread(emulator);
+					}
 
-				std::this_thread::sleep_for(std::chrono::milliseconds(15));
+					std::this_thread::sleep_for(std::chrono::milliseconds(15));
+				}
+			}
+			catch (const std::exception& e)
+			{
+				GLOBAL_ERR_LOG("scheduler thread exception: {}", e.what());
 			}
 		}
 	);
@@ -272,42 +284,52 @@ void kernel::run_all_threads(const std::shared_ptr<emulator_t>& emulator, const 
 
 	std::shared_ptr<thread_t> last_thread;
 
-	do
+	try
 	{
-		if (pending_thread_switch)
+		do
 		{
-			if (!wait_for_runnable_thread())
+			if (pending_thread_switch)
 			{
-				if (pending_threads.empty() && delete_current_thread)
+				if (!wait_for_runnable_thread())
 				{
-					break;
+					if (pending_threads.empty() && delete_current_thread)
+					{
+						break;
+					}
+
+					GLOBAL_LOG("switching thread {} -> {}", current_thread->id(), pending_threads.front()->id());
+					perform_thread_switch();
 				}
-
-				perform_thread_switch();
 			}
-		}
 
-		GLOBAL_LOG("running thread {}", current_thread->id());
+			GLOBAL_LOG("running thread {}", current_thread->id());
 
-		if (last_thread)
-		{
-			last_thread->save_state();
-		}
+			if (last_thread)
+			{
+				last_thread->save_state();
+			}
 
-		last_thread = current_thread;
+			last_thread = current_thread;
 
-		pending_thread_switch = false;
+			pending_thread_switch = false;
 
-		if (const bool thread_finished = current_thread->start())
-		{
-			const auto rax = emulator->read_register<x86::reg::rax, std::uint64_t>();
-			THREAD_LOG("thread returned to default return address and is now finished (rax=0x{:X})", rax);
+			if (const bool thread_finished = current_thread->start())
+			{
+				const auto rax = emulator->read_register<x86::reg::rax, std::uint64_t>();
+				THREAD_LOG("thread returned to default return address and is now finished (rax=0x{:X})", rax);
 
-			delete_current_thread = true;
-			pending_thread_switch = true;
-		}
+				delete_current_thread = true;
+				pending_thread_switch = true;
+			}
 
-	} while (pending_thread_switch);
+		} while (pending_thread_switch);
+
+		GLOBAL_LOG("run_all_threads finished (pending_threads={})", pending_threads.size());
+	}
+	catch (const std::exception& e)
+	{
+		GLOBAL_ERR_LOG("run_all_threads exception: {}", e.what());
+	}
 
 	ended = true;
 

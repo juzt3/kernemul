@@ -173,14 +173,69 @@ void kernel::set_up_idt(const std::shared_ptr<emulator_t>& emulator, const kerne
 	emulator_err_t error = idt_base_address.error_or({});
 	error.throw_if("map IDT");
 
-	const auto handler_base = nt_image.base_address();
+	// resolve Ki* interrupt handler symbols from ntoskrnl PDB
+	struct ki_entry { std::uint32_t vector; const char* name; };
 
-	idt_handler_base = handler_base;
-	idt_handler_size = handler_count * sizeof(segment_descriptor_interrupt_gate_64);
+	static constexpr ki_entry ki_symbols[] = {
+		{ 0, "KiDivideErrorFault" }, { 1, "KiDebugTrapOrFault" },
+		{ 2, "KiNmiInterrupt" }, { 3, "KiBreakpointTrap" },
+		{ 4, "KiOverflowTrap" }, { 5, "KiBoundFault" },
+		{ 6, "KiInvalidOpcodeFault" }, { 7, "KiNpxNotAvailableFault" },
+		{ 8, "KiDoubleFaultAbort" }, { 9, "KiNpxSegmentOverrunAbort" },
+		{ 10, "KiInvalidTssFault" }, { 11, "KiSegmentNotPresentFault" },
+		{ 12, "KiStackFault" }, { 13, "KiGeneralProtectionFault" },
+		{ 14, "KiPageFault" }, { 16, "KiFloatingErrorFault" },
+		{ 17, "KiAlignmentFault" }, { 18, "KiMcheckAbort" },
+		{ 19, "KiXmmException" }, { 20, "KiVirtualizationException" },
+		{ 21, "KiControlProtectionFault" }, { 29, "KiRaiseSecurityCheckFailure" },
+		{ 44, "KiRaiseAssertion" }, { 45, "KiDebugServiceTrap" },
+	};
+
+	std::unordered_map<std::uint32_t, emulator_t::address_type> ki_addresses;
+	std::uint32_t ki_resolved = 0;
+
+	for (const auto& [vector, name] : ki_symbols)
+	{
+		if (const auto addr = nt_image.find_symbol(name))
+		{
+			ki_addresses[vector] = *addr;
+			++ki_resolved;
+		}
+	}
+
+	// compute fallback base from end of ntoskrnl .text section
+	const auto image_buffer = nt_image.buffer();
+	const auto dos_header = reinterpret_cast<const IMAGE_DOS_HEADER*>(image_buffer.data());
+	const auto nt_headers = reinterpret_cast<const IMAGE_NT_HEADERS64*>(image_buffer.data() + dos_header->e_lfanew);
+	const auto sections = IMAGE_FIRST_SECTION(nt_headers);
+
+	emulator_t::address_type fallback_base = nt_image.base_address();
+
+	for (std::uint16_t s = 0; s < nt_headers->FileHeader.NumberOfSections; ++s)
+	{
+		if (sections[s].Characteristics & IMAGE_SCN_MEM_EXECUTE)
+		{
+			const auto section_end = nt_image.base_address() + sections[s].VirtualAddress + sections[s].Misc.VirtualSize;
+			fallback_base = section_end - handler_count * 16;
+			break;
+		}
+	}
+
+	GLOBAL_LOG("IDT handler resolution: {} Ki* symbols resolved, {} fallback (base=0x{:X})",
+		ki_resolved, handler_count - ki_resolved, fallback_base);
 
 	for (std::uint32_t i = 0; i < handler_count; i++)
 	{
-		const auto handler_address = handler_base + (i * sizeof(segment_descriptor_interrupt_gate_64));
+		emulator_t::address_type handler_address;
+
+		if (const auto it = ki_addresses.find(i); it != ki_addresses.end())
+		{
+			handler_address = it->second;
+		}
+		else
+		{
+			handler_address = fallback_base + (i * 16);
+		}
 
 		constexpr std::array<std::uint32_t, 10> error_code_handlers = {
 			8, 10, 11,
@@ -291,7 +346,7 @@ void kernel::set_up_idt(const std::shared_ptr<emulator_t>& emulator, const kerne
 		const std::uint32_t offset = i * sizeof(segment_descriptor_interrupt_gate_64);
 		const std::string name = std::format("IDT vector #{:X}", i);
 
-		auto entry_object = emulator_object_t<segment_descriptor_interrupt_gate_64>::view_at(emulator, *idt_base_address + offset, name, true);
+		auto entry_object = emulator_object_t<segment_descriptor_interrupt_gate_64>::view_at(emulator, *idt_base_address + offset, name, false);
 
 		segment_descriptor_interrupt_gate_64 contents = { };
 
@@ -308,6 +363,4 @@ void kernel::set_up_idt(const std::shared_ptr<emulator_t>& emulator, const kerne
 
 	error = emulator->write_idt(*idt_base_address, idt_size - 1);
 	error.throw_if("load IDT");
-
-	GLOBAL_LOG("mapped IDT at 0x{:X}", *idt_base_address);
 }

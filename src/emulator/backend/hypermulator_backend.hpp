@@ -63,6 +63,8 @@ public:
 	std::expected<hook_type, emulator_err_t> hook_memory(const emulator_hook_t::memory_access_callback& callback,
 	                                                     protection_type monitored_protection, address_type start_address, address_type end_address) override;
 
+	void cancel_pending_single_step() override;
+
 protected:
 	using virtual_hook_creation_callback = std::function<hypermulator_hook_t::native_hook_type(address_type start_physical_address, address_type end_physical_address)>;
 
