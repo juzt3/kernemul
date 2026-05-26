@@ -271,6 +271,17 @@ void redirect_ntoskrnl_object_functions(const std::shared_ptr<emulator_t>& emula
 	redirect_function(
 		[emulator]
 		{
+			const auto registration_handle = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+
+			THREAD_LOG("ObUnRegisterCallbacks called (handle=0x{:X})", registration_handle);
+		},
+		mapped_image,
+		"ObUnRegisterCallbacks"
+	);
+
+	redirect_function(
+		[emulator]
+		{
 			const auto handle_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
 			const auto desired_access = emulator->read_register<x86::reg::rdx, std::uint32_t>();
 			const auto object_attributes_address = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
