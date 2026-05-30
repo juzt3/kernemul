@@ -61,6 +61,27 @@ static std::string normalize_path(const std::wstring& guest_path)
 	strip_prefix(path, nt_prefix);
 	strip_prefix(path, systemroot_prefix);
 
+	// strip harddiskvolumeN/ or harddiskvolumN/windows/ prefixes
+	{
+		const auto hdv_pos = path.find("harddiskvolume");
+
+		if (hdv_pos == 0)
+		{
+			auto slash = path.find('/', hdv_pos);
+
+			if (slash != std::string::npos)
+			{
+				path = path.substr(slash + 1);
+
+				// also strip "windows/" to normalize to system32/ paths
+				if (path.starts_with("windows/"))
+				{
+					path = path.substr(8);
+				}
+			}
+		}
+	}
+
 	// handle bare /systemroot with no trailing slash
 	if (path == "/systemroot")
 	{
@@ -889,6 +910,54 @@ void redirect_ntoskrnl_file_functions(const std::shared_ptr<emulator_t>& emulato
 		},
 		mapped_image,
 		"IoQueryFileInformation"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto file_object = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto name_info_out = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+
+			THREAD_LOG("IoQueryFileDosDeviceName called (file_object=0x{:X}, name_info_out=0x{:X})",
+				file_object, name_info_out);
+
+			// OBJECT_NAME_INFORMATION is { UNICODE_STRING Name; } followed by the string buffer
+			const std::wstring fake_path = L"\\Device\\HarddiskVolume1\\Windows\\System32\\ntoskrnl.exe";
+			const auto byte_len = static_cast<std::uint16_t>(fake_path.size() * sizeof(wchar_t));
+
+			// allocate: sizeof(UNICODE_STRING) = 16 bytes, then the wchar buffer
+			const auto total_size = static_cast<std::uint64_t>(sizeof(UNICODE_STRING) + byte_len + sizeof(wchar_t));
+			const auto alloc = emulator->heap_allocate(total_size, prot_read_write, true);
+			auto error = alloc.error_or({});
+			error.throw_if("IoQueryFileDosDeviceName: allocate name info");
+
+			const auto alloc_addr = *alloc;
+			const auto buffer_addr = alloc_addr + sizeof(UNICODE_STRING);
+
+			UNICODE_STRING us{};
+			us.Length = byte_len;
+			us.MaximumLength = byte_len + sizeof(wchar_t);
+			us.Buffer = reinterpret_cast<wchar_t*>(buffer_addr);
+
+			error = emulator->write_virtual_memory(alloc_addr, &us, sizeof(us));
+			error.throw_if("IoQueryFileDosDeviceName: write UNICODE_STRING");
+
+			error = emulator->write_virtual_memory(buffer_addr, fake_path.data(), byte_len);
+			error.throw_if("IoQueryFileDosDeviceName: write name buffer");
+
+			// write null terminator
+			const wchar_t null_term = L'\0';
+			error = emulator->write_virtual_memory(buffer_addr + byte_len, &null_term, sizeof(null_term));
+			error.throw_if("IoQueryFileDosDeviceName: write null terminator");
+
+			// write the pointer to the allocated OBJECT_NAME_INFORMATION
+			error = emulator->write_virtual_memory(name_info_out, &alloc_addr, sizeof(alloc_addr));
+			error.throw_if("IoQueryFileDosDeviceName: write output pointer");
+
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"IoQueryFileDosDeviceName"
 	);
 
 	const auto device_io_control_handler = [emulator](const std::string_view caller_name)

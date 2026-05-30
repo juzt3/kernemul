@@ -279,6 +279,14 @@ std::int32_t main()
 
 		kernel::filesystem->load_at("ntoskrnl.exe", "system32/ntoskrnl.exe");
 		kernel::filesystem->load_at("ntoskrnl.exe", "system32/drivers/ntoskrnl.exe");
+		kernel::filesystem->load_at("HAL.dll", "system32/hal.dll");
+		kernel::filesystem->load_at("CI.dll", "system32/ci.dll");
+		kernel::filesystem->load_at("kd.dll", "system32/kd.dll");
+		kernel::filesystem->load_at("cng.sys", "system32/drivers/cng.sys");
+		kernel::filesystem->load_at("FLTMGR.SYS", "system32/drivers/fltmgr.sys");
+		kernel::filesystem->load_at("tbs.sys", "system32/drivers/tbs.sys");
+		kernel::filesystem->load_at("tdi.sys", "system32/drivers/tdi.sys");
+		kernel::filesystem->load_at("WdfLdr.sys", "system32/drivers/wdfldr.sys");
 		kernel::filesystem->load_at("ntdll.dll", "system32/ntdll.dll");
 		kernel::filesystem->load_at("win32k.sys", "system32/win32k.sys");
 		kernel::filesystem->load_at("win32u.dll", "system32/win32u.dll");
@@ -367,6 +375,9 @@ std::int32_t main()
 
 			const auto prcb_address = reinterpret_cast<std::uint64_t>(kpcr_contents.CurrentPrcb);
 			static_cast<void>(emulator->write_virtual_memory(*ki_proc_block, &prcb_address, sizeof(prcb_address)));
+
+			kernel::kprcb_address = prcb_address;
+			GLOBAL_LOG("initialized KPRCB at 0x{:X}", prcb_address);
 		}
 
 		set_up_lstar_msr(emulator, nt_image);

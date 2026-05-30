@@ -368,6 +368,12 @@ std::shared_ptr<thread_t> kernel::create_thread_at(const std::shared_ptr<emulato
 	thread->state().rsp = rsp;
 	thread->state().rflags = 0x202;
 
+	// store start address in ETHREAD for ZwQueryInformationThread
+	emulator->write_virtual_memory(thread->address() + offsetof(_ETHREAD, StartAddress), &target_address, sizeof(target_address))
+		.throw_if("create_thread_at: write StartAddress");
+	emulator->write_virtual_memory(thread->address() + offsetof(_ETHREAD, Win32StartAddress), &target_address, sizeof(target_address))
+		.throw_if("create_thread_at: write Win32StartAddress");
+
 	if (arguments.size() > 0)
 	{
 		thread->state().rcx = arguments[0];

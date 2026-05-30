@@ -1057,6 +1057,31 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 		[emulator]
 		{
 			const auto process_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto file_object_out = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+
+			THREAD_LOG("PsReferenceProcessFilePointer called (process=0x{:X}, file_object_out=0x{:X})",
+				process_address, file_object_out);
+
+			if (file_object_out)
+			{
+				const auto fake_file_object = emulator->heap_allocate(0x100, prot_read_write, true);
+				auto error = fake_file_object.error_or({});
+				error.throw_if("PsReferenceProcessFilePointer: allocate fake file object");
+
+				error = emulator->write_virtual_memory(file_object_out, &fake_file_object.value(), sizeof(fake_file_object.value()));
+				error.throw_if("PsReferenceProcessFilePointer: write file object pointer");
+			}
+
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"PsReferenceProcessFilePointer"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto process_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
 			const auto image_file_name_address = process_address + offsetof(_EPROCESS, ImageFileName);
 
 			THREAD_LOG("PsGetProcessImageFileName called (process=0x{:X}) -> 0x{:X}",
@@ -1080,6 +1105,51 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 		},
 		mapped_image,
 		"PsGetProcessWow64Process"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto process_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+
+			std::uint32_t flags = 0;
+			const auto error = emulator->read_virtual_memory(
+				process_address + offsetof(_EPROCESS, Flags), &flags, sizeof(flags));
+			error.throw_if("PsGetProcessExitProcessCalled: read Flags");
+
+			const auto exit_called = (flags & 4) != 0;
+
+			THREAD_LOG("PsGetProcessExitProcessCalled called (process=0x{:X}, flags=0x{:X}) -> {}",
+				process_address, flags, exit_called);
+
+			write_return_value(emulator, static_cast<std::uint64_t>(exit_called ? 1 : 0));
+		},
+		mapped_image,
+		"PsGetProcessExitProcessCalled"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto process_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+
+			THREAD_LOG("PsAcquireProcessExitSynchronization called (process=0x{:X})", process_address);
+
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"PsAcquireProcessExitSynchronization"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto process_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+
+			THREAD_LOG("PsReleaseProcessExitSynchronization called (process=0x{:X})", process_address);
+		},
+		mapped_image,
+		"PsReleaseProcessExitSynchronization"
 	);
 
 	const auto read_process_protection = [emulator]() -> _PS_PROTECTION
@@ -1488,6 +1558,60 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 	);
 
 	redirect_function(
+		[emulator]
+		{
+			const auto thread_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto increment = emulator->read_register<x86::reg::rdx, std::int32_t>();
+
+			THREAD_LOG("KeSetBasePriorityThread called (thread=0x{:X}, increment={})", thread_address, increment);
+
+			write_return_value(emulator, static_cast<std::uint64_t>(0));
+		},
+		mapped_image,
+		"KeSetBasePriorityThread"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto object_name_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto attributes = emulator->read_register<x86::reg::rdx, std::uint32_t>();
+			const auto access_state = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
+			const auto desired_access = emulator->read_register<x86::reg::r9, std::uint32_t>();
+
+			const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
+
+			emulator_t::address_type object_type = 0;
+			static_cast<void>(emulator->read_virtual_memory(rsp + 0x28, &object_type, sizeof(object_type)));
+
+			std::uint8_t access_mode = 0;
+			static_cast<void>(emulator->read_virtual_memory(rsp + 0x30, &access_mode, sizeof(access_mode)));
+
+			emulator_t::address_type parse_context = 0;
+			static_cast<void>(emulator->read_virtual_memory(rsp + 0x38, &parse_context, sizeof(parse_context)));
+
+			emulator_t::address_type object_out = 0;
+			static_cast<void>(emulator->read_virtual_memory(rsp + 0x40, &object_out, sizeof(object_out)));
+
+			std::wstring name;
+			if (object_name_address)
+			{
+				const auto us = emulator_object_t<UNICODE_STRING>::view_at(emulator, object_name_address).read();
+				const auto buf_addr = reinterpret_cast<emulator_t::address_type>(us.Buffer);
+				name = kernel::read_guest_wstring(*emulator, buf_addr);
+			}
+
+			THREAD_LOG("ObReferenceObjectByName called (name='{}', attrs=0x{:X}, access=0x{:X}, type=0x{:X}, object_out=0x{:X})",
+				util::narrow_wstring(name), attributes, desired_access, object_type, object_out);
+
+			constexpr std::uint32_t status_object_name_not_found = 0xC0000034;
+			write_nt_status(emulator, status_object_name_not_found);
+		},
+		mapped_image,
+		"ObReferenceObjectByName"
+	);
+
+	redirect_function(
 		[emulator](bool& skip_return)
 		{
 			const auto exit_status = emulator->read_register<x86::reg::rcx, std::uint32_t>();
@@ -1868,6 +1992,89 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 		},
 		mapped_image,
 		"IofCompleteRequest"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			THREAD_LOG("IoGetTopLevelIrp called -> 0x0");
+
+			write_return_value(emulator, static_cast<std::uint64_t>(0));
+		},
+		mapped_image,
+		"IoGetTopLevelIrp"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto irp = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+
+			THREAD_LOG("IoSetTopLevelIrp called (irp=0x{:X})", irp);
+		},
+		mapped_image,
+		"IoSetTopLevelIrp"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto value_name_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto type_out = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+			const auto data = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
+			const auto data_size = emulator->read_register<x86::reg::r9, std::uint32_t>();
+
+			std::wstring name;
+			if (value_name_address)
+			{
+				const auto us = emulator_object_t<UNICODE_STRING>::view_at(emulator, value_name_address).read();
+				const auto buf_addr = reinterpret_cast<emulator_t::address_type>(us.Buffer);
+				name = kernel::read_guest_wstring(*emulator, buf_addr);
+			}
+
+			THREAD_LOG("ZwQueryLicenseValue called (name='{}', data=0x{:X}, size={})",
+				util::narrow_wstring(name), data, data_size);
+
+			constexpr std::uint32_t status_object_name_not_found = 0xC0000034;
+			write_nt_status(emulator, status_object_name_not_found);
+		},
+		mapped_image,
+		"ZwQueryLicenseValue"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto work_item_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto queue_type = emulator->read_register<x86::reg::rdx, std::uint32_t>();
+
+			// WORK_QUEUE_ITEM: LIST_ENTRY(16) + WorkerRoutine(8) + Parameter(8)
+			emulator_t::address_type worker_routine = 0;
+			emulator->read_virtual_memory(work_item_address + 0x10, &worker_routine, sizeof(worker_routine))
+				.throw_if("ExQueueWorkItem: read WorkerRoutine");
+
+			emulator_t::address_type parameter = 0;
+			emulator->read_virtual_memory(work_item_address + 0x18, &parameter, sizeof(parameter))
+				.throw_if("ExQueueWorkItem: read Parameter");
+
+			THREAD_LOG("ExQueueWorkItem called (work_item=0x{:X}, queue_type={}, routine=0x{:X}, param=0x{:X})",
+				work_item_address, queue_type, worker_routine, parameter);
+
+			// the parameter is often an event that the caller waits on
+			// signal it preemptively in case the work item thread crashes
+			if (parameter)
+			{
+				const std::int32_t signaled = 1;
+				static_cast<void>(emulator->write_virtual_memory(
+					parameter + offsetof(_KEVENT, Header.SignalState), &signaled, sizeof(signaled)));
+			}
+
+			const std::uint64_t args[] = { parameter };
+			auto thread = kernel::create_thread_at(emulator, worker_routine, args);
+			kernel::pending_threads.push(thread);
+		},
+		mapped_image,
+		"ExQueueWorkItem"
 	);
 
 	// todo: actually create symbolic link in object namespace
@@ -2730,19 +2937,51 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 			basic_info.exit_status = 0x103; // STATUS_PENDING
 			basic_info.base_priority = 8;
 
-			// try to get the process ID from the handle
-			const auto entry = kernel::object_manager->lookup_handle(process_handle);
-			if (entry)
+			// handle NtCurrentProcess() pseudo-handle
+			constexpr std::uint64_t nt_current_process = 0xFFFFFFFFFFFFFFFF;
+			if (process_handle == nt_current_process)
 			{
-				for (const auto& proc : kernel::process_entries)
+				// use the system process (pid=4)
+				if (!kernel::process_entries.empty())
 				{
-					if (proc->address() == entry->body_address)
+					basic_info.unique_process_id = kernel::process_entries[0]->id();
+				}
+			}
+			else
+			{
+				// try to get the process ID from the handle
+				const auto entry = kernel::object_manager->lookup_handle(process_handle);
+				if (entry)
+				{
+					for (const auto& proc : kernel::process_entries)
 					{
-						basic_info.unique_process_id = proc->id();
-						break;
+						if (proc->address() == entry->body_address)
+						{
+							basic_info.unique_process_id = proc->id();
+							break;
+						}
 					}
 				}
 			}
+
+			// allocate a fake PEB so callers don't crash dereferencing null
+			static emulator_t::address_type fake_peb_address = 0;
+			if (!fake_peb_address)
+			{
+				// PEB is ~0x7C8 bytes; allocate enough zeroed memory
+				const auto peb_alloc = emulator->heap_allocate(0x1000, prot_read_write, true);
+				peb_alloc.error_or({}).throw_if("NtQueryInformationProcess: allocate fake PEB");
+				fake_peb_address = *peb_alloc;
+
+				// allocate fake RTL_USER_PROCESS_PARAMETERS at PEB+0x20
+				const auto params_alloc = emulator->heap_allocate(0x400, prot_read_write, true);
+				params_alloc.error_or({}).throw_if("NtQueryInformationProcess: allocate fake ProcessParameters");
+				const auto params_addr = *params_alloc;
+
+				emulator->write_virtual_memory(fake_peb_address + 0x20, &params_addr, sizeof(params_addr))
+					.throw_if("NtQueryInformationProcess: write PEB->ProcessParameters");
+			}
+			basic_info.peb_base_address = fake_peb_address;
 
 			const auto write_size = std::min(static_cast<std::size_t>(buffer_length), sizeof(basic_info));
 			if (buffer_address && write_size)
@@ -2837,6 +3076,109 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 		mapped_image,
 		"ZwQueryInformationProcess"
 	);
+
+	const auto query_information_thread = [emulator]
+	{
+		const auto thread_handle = emulator->read_register<x86::reg::rcx, std::uint64_t>();
+		const auto info_class = emulator->read_register<x86::reg::rdx, std::uint32_t>();
+		const auto buffer_address = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
+		const auto buffer_length = emulator->read_register<x86::reg::r9, std::uint32_t>();
+
+		const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
+		emulator_t::address_type return_length_address = 0;
+		static_cast<void>(emulator->read_virtual_memory(rsp + 0x28, &return_length_address, sizeof(return_length_address)));
+
+		THREAD_LOG("ZwQueryInformationThread called (handle=0x{:X}, class=0x{:X}, buffer=0x{:X}, length=0x{:X})",
+			thread_handle, info_class, buffer_address, buffer_length);
+
+		constexpr std::uint32_t thread_basic_information = 0x00;
+		constexpr std::uint32_t thread_is_terminated = 0x14;
+
+		if (info_class == thread_basic_information)
+		{
+			// THREAD_BASIC_INFORMATION: ExitStatus(4) + pad(4) + TebBaseAddress(8) + ClientId(16) + AffinityMask(8) + Priority(4) + BasePriority(4)
+			struct
+			{
+				std::int32_t exit_status;
+				std::uint32_t padding;
+				std::uint64_t teb_base_address;
+				std::uint64_t unique_process;
+				std::uint64_t unique_thread;
+				std::uint64_t affinity_mask;
+				std::int32_t priority;
+				std::int32_t base_priority;
+			} info = {};
+
+			info.exit_status = 0x103; // STATUS_PENDING
+			info.affinity_mask = 0xFF;
+			info.priority = 8;
+			info.base_priority = 8;
+
+			const auto write_size = std::min(static_cast<std::size_t>(buffer_length), sizeof(info));
+			if (buffer_address && write_size)
+			{
+				emulator->write_virtual_memory(buffer_address, &info, write_size)
+					.throw_if("ZwQueryInformationThread: write ThreadBasicInformation");
+			}
+			if (return_length_address)
+			{
+				const auto ret_len = static_cast<std::uint32_t>(sizeof(info));
+				static_cast<void>(emulator->write_virtual_memory(return_length_address, &ret_len, sizeof(ret_len)));
+			}
+
+			THREAD_LOG("ZwQueryInformationThread: ThreadBasicInformation");
+			write_nt_success(emulator);
+		}
+		else if (info_class == 0x09) // ThreadQuerySetWin32StartAddress
+		{
+			// read Win32StartAddress from current thread's ETHREAD
+			std::uint64_t start_address = 0;
+
+			constexpr std::uint64_t nt_current_thread = 0xFFFFFFFFFFFFFFFE;
+			if (thread_handle == nt_current_thread && kernel::current_thread)
+			{
+				emulator->read_virtual_memory(
+					kernel::current_thread->address() + offsetof(_ETHREAD, Win32StartAddress),
+					&start_address, sizeof(start_address))
+					.throw_if("ZwQueryInformationThread: read Win32StartAddress");
+			}
+
+			if (buffer_address && buffer_length >= sizeof(std::uint64_t))
+			{
+				emulator->write_virtual_memory(buffer_address, &start_address, sizeof(start_address))
+					.throw_if("ZwQueryInformationThread: write ThreadQuerySetWin32StartAddress");
+			}
+			if (return_length_address)
+			{
+				const std::uint32_t ret_len = sizeof(std::uint64_t);
+				static_cast<void>(emulator->write_virtual_memory(return_length_address, &ret_len, sizeof(ret_len)));
+			}
+
+			THREAD_LOG("ZwQueryInformationThread: ThreadQuerySetWin32StartAddress -> 0x{:X}", start_address);
+			write_nt_success(emulator);
+		}
+		else if (info_class == thread_is_terminated)
+		{
+			if (buffer_address && buffer_length >= sizeof(std::uint32_t))
+			{
+				const std::uint32_t terminated = 0;
+				emulator->write_virtual_memory(buffer_address, &terminated, sizeof(terminated))
+					.throw_if("ZwQueryInformationThread: write ThreadIsTerminated");
+			}
+
+			THREAD_LOG("ZwQueryInformationThread: ThreadIsTerminated -> false");
+			write_nt_success(emulator);
+		}
+		else
+		{
+			THREAD_WARN_LOG("ZwQueryInformationThread: unhandled class 0x{:X}", info_class);
+			constexpr std::uint32_t status_invalid_info_class = 0xC0000003;
+			write_nt_status(emulator, status_invalid_info_class);
+		}
+	};
+
+	redirect_function(query_information_thread, mapped_image, "NtQueryInformationThread");
+	redirect_function(query_information_thread, mapped_image, "ZwQueryInformationThread");
 
 	const auto query_active_processor_count = [emulator]
 	{

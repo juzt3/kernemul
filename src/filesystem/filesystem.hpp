@@ -65,5 +65,7 @@ public:
 	[[nodiscard]] std::vector<directory_entry_t> list_directory(const path_type& path) const;
 
 protected:
+	[[nodiscard]] static path_type normalize(path_type path);
+
 	std::unordered_map<path_type, std::shared_ptr<file_t>> list_;
 };

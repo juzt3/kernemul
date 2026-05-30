@@ -35,9 +35,30 @@ bool file_t::is_directory() const noexcept
 	return is_directory_;
 }
 
+filesystem_t::path_type filesystem_t::normalize(path_type path)
+{
+	for (auto& c : path)
+	{
+		if (c == '\\')
+		{
+			c = '/';
+		}
+
+		c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+	}
+
+	while (!path.empty() && path.back() == '/')
+	{
+		path.pop_back();
+	}
+
+	return path;
+}
+
 std::shared_ptr<file_t> filesystem_t::open_at(const path_type& path)
 {
-	const auto it = list_.find(path);
+	const auto normalized = normalize(path);
+	const auto it = list_.find(normalized);
 
 	if (it == std::end(list_))
 	{
@@ -49,12 +70,14 @@ std::shared_ptr<file_t> filesystem_t::open_at(const path_type& path)
 
 std::shared_ptr<file_t> filesystem_t::open_directory_at(const path_type& path)
 {
-	if (const auto it = list_.find(path); it != std::end(list_) && it->second && it->second->is_directory())
+	const auto normalized = normalize(path);
+
+	if (const auto it = list_.find(normalized); it != std::end(list_) && it->second && it->second->is_directory())
 	{
 		return it->second;
 	}
 
-	if (!directory_exists(path))
+	if (!directory_exists(normalized))
 	{
 		return {};
 	}
@@ -64,25 +87,28 @@ std::shared_ptr<file_t> filesystem_t::open_directory_at(const path_type& path)
 
 std::shared_ptr<file_t> filesystem_t::create_at(const path_type& path)
 {
+	const auto normalized = normalize(path);
 	const auto file = std::make_shared<file_t>();
 
-	list_[path] = file;
+	list_[normalized] = file;
 
 	return file;
 }
 
 std::shared_ptr<file_t> filesystem_t::create_directory_at(const path_type& path)
 {
+	const auto normalized = normalize(path);
 	const auto file = std::make_shared<file_t>(file_t::directory_tag);
 
-	list_[path] = file;
+	list_[normalized] = file;
 
 	return file;
 }
 
 bool filesystem_t::delete_at(const path_type& path)
 {
-	const auto it = list_.find(path);
+	const auto normalized = normalize(path);
+	const auto it = list_.find(normalized);
 
 	if (it == std::end(list_))
 	{
@@ -101,22 +127,24 @@ bool filesystem_t::delete_at(const path_type& path)
 
 bool filesystem_t::exists(const path_type& path) const
 {
-	return list_.contains(path);
+	return list_.contains(normalize(path));
 }
 
 bool filesystem_t::directory_exists(const path_type& path) const
 {
-	if (path.empty())
+	const auto normalized = normalize(path);
+
+	if (normalized.empty())
 	{
 		return true;
 	}
 
-	if (const auto it = list_.find(path); it != std::end(list_) && it->second && it->second->is_directory())
+	if (const auto it = list_.find(normalized); it != std::end(list_) && it->second && it->second->is_directory())
 	{
 		return true;
 	}
 
-	std::string prefix = path;
+	std::string prefix = normalized;
 
 	if (prefix.back() != '/')
 	{
@@ -136,7 +164,7 @@ bool filesystem_t::directory_exists(const path_type& path) const
 
 std::vector<filesystem_t::directory_entry_t> filesystem_t::list_directory(const path_type& path) const
 {
-	std::string prefix = path;
+	std::string prefix = normalize(path);
 
 	if (!prefix.empty() && prefix.back() != '/')
 	{
@@ -207,31 +235,11 @@ bool filesystem_t::load_at(const std::string& host_path, const path_type& virtua
 	}
 
 	const auto file_size = buffer->size();
-	list_[virtual_path] = std::make_shared<file_t>(std::move(*buffer));
+	list_[normalize(virtual_path)] = std::make_shared<file_t>(std::move(*buffer));
 
 	GLOBAL_LOG("filesystem: loaded '{}' -> '{}' ({} bytes)", host_path, virtual_path, file_size);
 
 	return true;
-}
-
-static std::string normalize_virtual_path(std::string path)
-{
-	for (auto& c : path)
-	{
-		if (c == '\\')
-		{
-			c = '/';
-		}
-
-		c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-	}
-
-	while (!path.empty() && path.back() == '/')
-	{
-		path.pop_back();
-	}
-
-	return path;
 }
 
 bool filesystem_t::load_directory_at(const std::string& host_path, const path_type& virtual_path)
@@ -248,7 +256,7 @@ bool filesystem_t::load_directory_at(const std::string& host_path, const path_ty
 		return false;
 	}
 
-	const auto base = normalize_virtual_path(virtual_path);
+	const auto base = normalize(virtual_path);
 
 	list_[base] = std::make_shared<file_t>(file_t::directory_tag);
 
@@ -274,8 +282,8 @@ bool filesystem_t::load_directory_at(const std::string& host_path, const path_ty
 			continue;
 		}
 
-		auto child = base.empty() ? normalize_virtual_path(relative.string())
-			: base + "/" + normalize_virtual_path(relative.string());
+		auto child = base.empty() ? normalize(relative.string())
+			: base + "/" + normalize(relative.string());
 
 		if (it->is_directory(ec))
 		{

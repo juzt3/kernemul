@@ -778,105 +778,104 @@ void redirect_ntoskrnl_memory_functions(const std::shared_ptr<emulator_t>& emula
 		"MmCreateSection"
 	);
 
-	redirect_function(
-		[emulator]
+	const auto create_section_handler = [emulator]
+	{
+		const auto section_handle_out = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+		const auto desired_access = emulator->read_register<x86::reg::rdx, std::uint32_t>();
+		const auto object_attributes = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
+		const auto max_size_ptr = emulator->read_register<x86::reg::r9, emulator_t::address_type>();
+
+		const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
+
+		std::uint32_t section_page_protection = 0;
+		emulator_err_t error = emulator->read_virtual_memory(rsp + 0x28, &section_page_protection, sizeof(section_page_protection));
+		error.throw_if("NtCreateSection: read SectionPageProtection");
+
+		std::uint32_t allocation_attributes = 0;
+		error = emulator->read_virtual_memory(rsp + 0x30, &allocation_attributes, sizeof(allocation_attributes));
+		error.throw_if("NtCreateSection: read AllocationAttributes");
+
+		emulator_t::address_type file_handle = 0;
+		error = emulator->read_virtual_memory(rsp + 0x38, &file_handle, sizeof(file_handle));
+		error.throw_if("NtCreateSection: read FileHandle");
+
+		std::int64_t max_size = 0;
+		if (max_size_ptr)
 		{
-			const auto section_handle_out = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
-			const auto desired_access = emulator->read_register<x86::reg::rdx, std::uint32_t>();
-			const auto object_attributes = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
-			const auto max_size_ptr = emulator->read_register<x86::reg::r9, emulator_t::address_type>();
+			error = emulator->read_virtual_memory(max_size_ptr, &max_size, sizeof(max_size));
+			error.throw_if("NtCreateSection: read MaximumSize value");
+		}
 
-			const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
+		std::shared_ptr<file_object_t> file_obj;
+		std::string file_path;
 
-			std::uint32_t section_page_protection = 0;
-			emulator_err_t error = emulator->read_virtual_memory(rsp + 0x28, &section_page_protection, sizeof(section_page_protection));
-			error.throw_if("NtCreateSection: read SectionPageProtection");
+		if (file_handle)
+		{
+			file_obj = kernel::object_manager->get_object_from_handle<file_object_t>(file_handle);
+		}
 
-			std::uint32_t allocation_attributes = 0;
-			error = emulator->read_virtual_memory(rsp + 0x30, &allocation_attributes, sizeof(allocation_attributes));
-			error.throw_if("NtCreateSection: read AllocationAttributes");
+		if (file_obj)
+		{
+			file_path = file_obj->path;
+		}
 
-			emulator_t::address_type file_handle = 0;
-			error = emulator->read_virtual_memory(rsp + 0x38, &file_handle, sizeof(file_handle));
-			error.throw_if("NtCreateSection: read FileHandle");
+		THREAD_LOG("NtCreateSection called (section_handle_out=0x{:X}, access=0x{:X}, oa=0x{:X}, max_size={}, protection=0x{:X}, alloc_attrs=0x{:X}, file_handle=0x{:X}, path='{}')",
+			section_handle_out, desired_access, object_attributes, max_size, section_page_protection, allocation_attributes, file_handle, file_path);
 
-			std::int64_t max_size = 0;
-			if (max_size_ptr)
+		std::shared_ptr<file_t> backing_file;
+
+		if (file_obj && file_obj->file)
+		{
+			backing_file = file_obj->file;
+		}
+
+		if (backing_file && (allocation_attributes & sec_image))
+		{
+			auto mapped = map_pe_image(backing_file);
+
+			if (mapped)
 			{
-				error = emulator->read_virtual_memory(max_size_ptr, &max_size, sizeof(max_size));
-				error.throw_if("NtCreateSection: read MaximumSize value");
+				THREAD_LOG("NtCreateSection: SEC_IMAGE detected, PE-mapped {} -> {} bytes", backing_file->size(), mapped->size());
+				backing_file = mapped;
 			}
-
-			std::shared_ptr<file_object_t> file_obj;
-			std::string file_path;
-
-			if (file_handle)
+			else
 			{
-				file_obj = kernel::object_manager->get_object_from_handle<file_object_t>(file_handle);
+				THREAD_WARN_LOG("NtCreateSection: SEC_IMAGE set but PE mapping failed for '{}'", file_path);
 			}
+		}
 
-			if (file_obj)
-			{
-				file_path = file_obj->path;
-			}
+		auto host_object = std::make_shared<section_object_t>(backing_file);
 
-			THREAD_LOG("NtCreateSection called (section_handle_out=0x{:X}, access=0x{:X}, oa=0x{:X}, max_size={}, protection=0x{:X}, alloc_attrs=0x{:X}, file_handle=0x{:X}, path='{}')",
-				section_handle_out, desired_access, object_attributes, max_size, section_page_protection, allocation_attributes, file_handle, file_path);
+		constexpr std::size_t section_body_size = 0x40;
+		std::array<std::uint8_t, section_body_size> body{};
 
-			std::shared_ptr<file_t> backing_file;
+		if (backing_file)
+		{
+			const std::int64_t file_size = static_cast<std::int64_t>(backing_file->size());
+			std::memcpy(body.data() + 0x30, &file_size, sizeof(file_size));
+		}
+		else if (max_size > 0)
+		{
+			std::memcpy(body.data() + 0x30, &max_size, sizeof(max_size));
+		}
 
-			if (file_obj && file_obj->file)
-			{
-				backing_file = file_obj->file;
-			}
+		const auto body_address = kernel::object_manager->create_object(0, body.data(), body.size(), host_object);
+		const auto section_handle = kernel::object_manager->create_handle(body_address, desired_access);
 
-			if (backing_file && (allocation_attributes & sec_image))
-			{
-				auto mapped = map_pe_image(backing_file);
+		if (section_handle_out)
+		{
+			error = emulator->write_virtual_memory(section_handle_out, &section_handle, sizeof(section_handle));
+			error.throw_if("NtCreateSection: write handle");
+		}
 
-				if (mapped)
-				{
-					THREAD_LOG("NtCreateSection: SEC_IMAGE detected, PE-mapped {} -> {} bytes", backing_file->size(), mapped->size());
-					backing_file = mapped;
-				}
-				else
-				{
-					THREAD_WARN_LOG("NtCreateSection: SEC_IMAGE set but PE mapping failed for '{}'", file_path);
-				}
-			}
+		THREAD_LOG("NtCreateSection: created section handle 0x{:X} at 0x{:X} (path='{}', size={})",
+			section_handle, body_address, file_path, backing_file ? backing_file->size() : 0);
 
-			auto host_object = std::make_shared<section_object_t>(backing_file);
+		write_nt_success(emulator);
+	};
 
-			constexpr std::size_t section_body_size = 0x40;
-			std::array<std::uint8_t, section_body_size> body{};
-
-			if (backing_file)
-			{
-				const std::int64_t file_size = static_cast<std::int64_t>(backing_file->size());
-				std::memcpy(body.data() + 0x30, &file_size, sizeof(file_size));
-			}
-			else if (max_size > 0)
-			{
-				std::memcpy(body.data() + 0x30, &max_size, sizeof(max_size));
-			}
-
-			const auto body_address = kernel::object_manager->create_object(0, body.data(), body.size(), host_object);
-			const auto section_handle = kernel::object_manager->create_handle(body_address, desired_access);
-
-			if (section_handle_out)
-			{
-				error = emulator->write_virtual_memory(section_handle_out, &section_handle, sizeof(section_handle));
-				error.throw_if("NtCreateSection: write handle");
-			}
-
-			THREAD_LOG("NtCreateSection: created section handle 0x{:X} at 0x{:X} (path='{}', size={})",
-				section_handle, body_address, file_path, backing_file ? backing_file->size() : 0);
-
-			write_nt_success(emulator);
-		},
-		mapped_image,
-		"NtCreateSection"
-	);
+	redirect_function(create_section_handler, mapped_image, "NtCreateSection");
+	redirect_function(create_section_handler, mapped_image, "ZwCreateSection");
 
 	redirect_function(
 		[emulator]
@@ -999,74 +998,6 @@ void redirect_ntoskrnl_memory_functions(const std::shared_ptr<emulator_t>& emula
 			const auto mapping_end = mapping_base + view_size;
 
 			THREAD_LOG("MmMapViewInSystemSpace: mapped 0x{:X} bytes at 0x{:X}", view_size, mapping_base);
-
-			const auto monitor_callback = [emulator, mapping_base](const emulator_t::address_type accessed_address, const protection_t access_type)
-			{
-				const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
-				const auto offset = accessed_address - mapping_base;
-				const auto type_str = (static_cast<std::uint32_t>(access_type) & static_cast<std::uint32_t>(prot_write)) ? "write" : "read";
-
-				THREAD_LOG("[section-view] {} at 0x{:X}+0x{:X} (rip=0x{:X})", type_str, mapping_base, offset, rip);
-
-				return false;
-			};
-
-			bool is_pe = false;
-
-			if (data.size() >= sizeof(portable_executable::dos_header_t))
-			{
-				const auto pe = reinterpret_cast<const portable_executable::image_t*>(data.data());
-
-				if (pe->dos_header()->valid())
-				{
-					is_pe = true;
-
-					const auto nt = pe->nt_headers();
-					const auto headers_size = nt->optional_header.size_of_headers;
-					const auto export_dir = nt->optional_header.data_directories.export_directory;
-					const auto export_rva_start = export_dir.virtual_address;
-					const auto export_rva_end = export_rva_start + export_dir.size;
-
-					for (const auto& pe_section : pe->sections())
-					{
-						if (pe_section.virtual_address < headers_size)
-						{
-							continue;
-						}
-
-						const auto section_rva_end = pe_section.virtual_address + pe_section.virtual_size;
-
-						if (export_rva_start && pe_section.virtual_address < export_rva_end && section_rva_end > export_rva_start)
-						{
-							continue;
-						}
-
-						const auto section_name = std::string(pe_section.name, strnlen(pe_section.name, 8));
-
-						if (section_name == ".edata")
-						{
-							continue;
-						}
-
-						const auto hook_start = mapping_base + pe_section.virtual_address;
-						const auto hook_end = mapping_base + section_rva_end;
-
-						if (hook_end > mapping_end)
-						{
-							continue;
-						}
-
-						const emulator_err_t hook_error = emulator->hook_memory(monitor_callback, prot_read_write, hook_start, hook_end).error_or({});
-						hook_error.throw_if("MmMapViewInSystemSpace: hook section");
-					}
-				}
-			}
-
-			if (!is_pe)
-			{
-				const emulator_err_t hook_error = emulator->hook_memory(monitor_callback, prot_read_write, mapping_base, mapping_end).error_or({});
-				hook_error.throw_if("MmMapViewInSystemSpace: hook mapping");
-			}
 
 			write_nt_success(emulator);
 		},

@@ -876,6 +876,19 @@ void redirect_ntoskrnl_registry_functions(const std::shared_ptr<emulator_t>& emu
 	redirect_function(
 		[emulator]
 		{
+			const auto cookie = emulator->read_register<x86::reg::rcx, std::int64_t>();
+
+			THREAD_LOG("CmUnRegisterCallback called (cookie=0x{:X})", cookie);
+
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"CmUnRegisterCallback"
+	);
+
+	redirect_function(
+		[emulator]
+		{
 			const auto relative_to = emulator->read_register<x86::reg::rcx, std::uint32_t>();
 			const auto path_address = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
 			const auto table_address = emulator->read_register<x86::reg::r8, emulator_t::address_type>();

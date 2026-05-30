@@ -35,6 +35,8 @@ namespace kernel
 	inline std::shared_ptr<thread_t> main_thread;
 	inline emulator_object_t<_DRIVER_OBJECT> driver_object;
 
+	inline emulator_t::address_type kprcb_address = 0;
+
 	inline std::shared_ptr<filesystem_t> filesystem;
 	inline std::shared_ptr<registry_t> registry;
 	inline std::shared_ptr<object_manager_t> object_manager;

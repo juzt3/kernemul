@@ -417,6 +417,142 @@ void redirect_ntoskrnl_string_functions(const std::shared_ptr<emulator_t>& emula
 		{
 			const auto str1_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
 			const auto str2_address = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+			auto max_count = emulator->read_register<x86::reg::r8, std::uint64_t>();
+
+			if (!max_count)
+			{
+				THREAD_LOG("_strnicmp called (str1=..., str2=..., max_count=0, result=0)");
+				write_return_value(emulator, 0);
+				return;
+			}
+
+			const auto str1 = kernel::read_guest_string(*emulator, str1_address);
+			const auto str2 = kernel::read_guest_string(*emulator, str2_address);
+
+			const auto len1 = str1.size();
+			const auto len2 = str2.size();
+			const auto limit = static_cast<std::size_t>(max_count);
+
+			std::int32_t result = 0;
+
+			for (std::size_t i = 0; i < limit; ++i)
+			{
+				const auto raw1 = i < len1 ? static_cast<std::int32_t>(static_cast<unsigned char>(str1[i])) : 0;
+				const auto raw2 = i < len2 ? static_cast<std::int32_t>(static_cast<unsigned char>(str2[i])) : 0;
+
+				const auto c1 = (static_cast<std::uint32_t>(raw1 - 65) <= 0x19) ? raw1 + 32 : raw1;
+				const auto c2 = (static_cast<std::uint32_t>(raw2 - 65) <= 0x19) ? raw2 + 32 : raw2;
+
+				if (c1 < c2)
+				{
+					result = -1;
+					break;
+				}
+
+				if (c1 > c2)
+				{
+					result = 1;
+					break;
+				}
+
+				if (c1 == 0)
+					break;
+			}
+
+			THREAD_LOG("_strnicmp called (str1='{}', str2='{}', max_count={}, result={})",
+				str1, str2, max_count, result);
+
+			write_return_value(emulator, static_cast<std::uint32_t>(result));
+		},
+		mapped_image,
+		"_strnicmp"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto dest_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto src_address = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+			const auto count = emulator->read_register<x86::reg::r8, std::uint64_t>();
+
+			const auto src = kernel::read_guest_string(*emulator, src_address);
+			const auto src_len = src.size();
+			const auto limit = static_cast<std::size_t>(count);
+
+			std::vector<char> buffer(limit, 0);
+
+			for (std::size_t i = 0; i < limit; ++i)
+			{
+				if (i < src_len)
+				{
+					buffer[i] = src[i];
+				}
+				else
+				{
+					buffer[i] = '\0';
+				}
+			}
+
+			const auto error = emulator->write_virtual_memory(dest_address, buffer.data(), limit);
+			error.throw_if("strncpy write dest");
+
+			THREAD_LOG("strncpy called (dest=0x{:X}, src='{}', count={})", dest_address, src, count);
+
+			write_return_value(emulator, dest_address);
+		},
+		mapped_image,
+		"strncpy"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto dest_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto src_address = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+			const auto count = emulator->read_register<x86::reg::r8, std::uint64_t>();
+
+			if (!count)
+			{
+				THREAD_LOG("wcsncpy called (dest=0x{:X}, src=0x{:X}, count=0)", dest_address, src_address);
+				write_return_value(emulator, dest_address);
+				return;
+			}
+
+			const auto byte_count = count * sizeof(wchar_t);
+			std::vector<wchar_t> buffer(count, L'\0');
+
+			// read source chars one by one until null or count
+			for (std::size_t i = 0; i < count; ++i)
+			{
+				wchar_t ch = L'\0';
+				emulator->read_virtual_memory(src_address + i * sizeof(wchar_t), &ch, sizeof(ch))
+					.throw_if("wcsncpy: read source char");
+
+				buffer[i] = ch;
+
+				if (ch == L'\0')
+				{
+					break;
+				}
+			}
+
+			emulator->write_virtual_memory(dest_address, buffer.data(), byte_count)
+				.throw_if("wcsncpy: write dest");
+
+			const auto src_str = kernel::read_guest_wstring(*emulator, src_address);
+			THREAD_LOG("wcsncpy called (dest=0x{:X}, src='{}', count={})", dest_address, util::narrow_wstring(src_str), count);
+
+			write_return_value(emulator, dest_address);
+		},
+		mapped_image,
+		"wcsncpy"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto str1_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto str2_address = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
 
 			const auto str1 = kernel::read_guest_string(*emulator, str1_address);
 			const auto str2 = kernel::read_guest_string(*emulator, str2_address);
@@ -999,5 +1135,181 @@ void redirect_ntoskrnl_string_functions(const std::shared_ptr<emulator_t>& emula
 		},
 		mapped_image,
 		"RtlCompareUnicodeString"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto string1_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto string2_address = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+			const auto case_insensitive = emulator->read_register<x86::reg::r8, std::uint8_t>();
+
+			const auto us1 = emulator_object_t<UNICODE_STRING>::view_at(emulator, string1_address).read();
+			const auto us2 = emulator_object_t<UNICODE_STRING>::view_at(emulator, string2_address).read();
+
+			const auto buf1_addr = reinterpret_cast<emulator_t::address_type>(us1.Buffer);
+			const auto buf2_addr = reinterpret_cast<emulator_t::address_type>(us2.Buffer);
+
+			const auto len1 = us1.Length / sizeof(wchar_t);
+			const auto len2 = us2.Length / sizeof(wchar_t);
+
+			std::uint8_t result = 0;
+
+			if (len2 >= len1)
+			{
+				if (len1 == 0)
+				{
+					result = 1;
+				}
+				else
+				{
+					std::vector<wchar_t> buf1(len1);
+					std::vector<wchar_t> buf2(len1);
+
+					emulator->read_virtual_memory(buf1_addr, buf1.data(), len1 * sizeof(wchar_t))
+						.throw_if("RtlPrefixUnicodeString: read string1");
+					emulator->read_virtual_memory(buf2_addr, buf2.data(), len1 * sizeof(wchar_t))
+						.throw_if("RtlPrefixUnicodeString: read string2");
+
+					result = 1;
+
+					for (std::uint16_t i = 0; i < len1; ++i)
+					{
+						auto c1 = buf1[i];
+						auto c2 = buf2[i];
+
+						if (case_insensitive)
+						{
+							if (c1 >= L'A' && c1 <= L'Z') c1 += 32;
+							if (c2 >= L'A' && c2 <= L'Z') c2 += 32;
+						}
+
+						if (c1 != c2)
+						{
+							result = 0;
+							break;
+						}
+					}
+				}
+			}
+
+			const auto narrow1 = kernel::read_guest_wstring(*emulator, buf1_addr);
+			const auto narrow2 = kernel::read_guest_wstring(*emulator, buf2_addr);
+
+			THREAD_LOG("RtlPrefixUnicodeString called (prefix='{}', str='{}', case_insensitive={}) -> {}",
+				util::narrow_wstring(narrow1), util::narrow_wstring(narrow2), case_insensitive, result);
+
+			write_return_value(emulator, static_cast<std::uint64_t>(result));
+		},
+		mapped_image,
+		"RtlPrefixUnicodeString"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto string1_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto string2_address = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+			const auto case_insensitive = emulator->read_register<x86::reg::r8, std::uint8_t>();
+
+			const auto us1 = emulator_object_t<UNICODE_STRING>::view_at(emulator, string1_address).read();
+			const auto us2 = emulator_object_t<UNICODE_STRING>::view_at(emulator, string2_address).read();
+
+			const auto buf1_addr = reinterpret_cast<emulator_t::address_type>(us1.Buffer);
+			const auto buf2_addr = reinterpret_cast<emulator_t::address_type>(us2.Buffer);
+
+			const auto len1 = us1.Length / sizeof(wchar_t);
+			const auto len2 = us2.Length / sizeof(wchar_t);
+
+			std::uint8_t result = 0;
+
+			if (us1.Length == us2.Length)
+			{
+				if (len1 == 0)
+				{
+					result = 1;
+				}
+				else
+				{
+					std::vector<wchar_t> buf1(len1);
+					std::vector<wchar_t> buf2(len2);
+
+					emulator->read_virtual_memory(buf1_addr, buf1.data(), len1 * sizeof(wchar_t))
+						.throw_if("RtlEqualUnicodeString: read string1");
+					emulator->read_virtual_memory(buf2_addr, buf2.data(), len2 * sizeof(wchar_t))
+						.throw_if("RtlEqualUnicodeString: read string2");
+
+					result = 1;
+
+					for (std::uint16_t i = 0; i < len1; ++i)
+					{
+						auto c1 = buf1[i];
+						auto c2 = buf2[i];
+
+						if (case_insensitive)
+						{
+							if (c1 >= L'A' && c1 <= L'Z') c1 += 32;
+							if (c2 >= L'A' && c2 <= L'Z') c2 += 32;
+						}
+
+						if (c1 != c2)
+						{
+							result = 0;
+							break;
+						}
+					}
+				}
+			}
+
+			const auto narrow1 = kernel::read_guest_wstring(*emulator, buf1_addr);
+			const auto narrow2 = kernel::read_guest_wstring(*emulator, buf2_addr);
+
+			THREAD_LOG("RtlEqualUnicodeString called (str1='{}', str2='{}', case_insensitive={}) -> {}",
+				util::narrow_wstring(narrow1), util::narrow_wstring(narrow2), case_insensitive, result);
+
+			write_return_value(emulator, static_cast<std::uint64_t>(result));
+		},
+		mapped_image,
+		"RtlEqualUnicodeString"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto c = emulator->read_register<x86::reg::rcx, std::uint32_t>();
+
+			auto result = static_cast<wchar_t>(c);
+
+			if (result >= L'A' && result <= L'Z')
+			{
+				result += 32;
+			}
+
+			THREAD_LOG("towlower called (c=0x{:X} '{}') -> 0x{:X}", c, static_cast<char>(c & 0x7F), static_cast<std::uint32_t>(result));
+
+			write_return_value(emulator, static_cast<std::uint64_t>(result));
+		},
+		mapped_image,
+		"towlower"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto c = emulator->read_register<x86::reg::rcx, std::uint32_t>();
+
+			auto result = static_cast<wchar_t>(c);
+
+			if (result >= L'a' && result <= L'z')
+			{
+				result -= 32;
+			}
+
+			THREAD_LOG("towupper called (c=0x{:X}) -> 0x{:X}", c, static_cast<std::uint32_t>(result));
+
+			write_return_value(emulator, static_cast<std::uint64_t>(result));
+		},
+		mapped_image,
+		"towupper"
 	);
 }
