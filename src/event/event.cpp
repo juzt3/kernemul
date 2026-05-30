@@ -178,6 +178,101 @@ static void apply_buffer_refs(const std::shared_ptr<emulator_t>& emulator,
 	}
 }
 
+constexpr std::uint32_t irp_mj_device_control = 14;
+
+struct ioctl_dispatch_t
+{
+	emulator_t::address_type dispatch_function;
+	emulator_t::address_type device_object;
+	emulator_t::address_type irp_address;
+};
+
+static ioctl_dispatch_t build_ioctl_irp(const std::shared_ptr<emulator_t>& emulator,
+	const fbs::IoctlTargetT* ioctl, const event_t& event,
+	const std::vector<emulator_t::address_type>& buffer_addresses)
+{
+	if (kernel::driver_object.address() == 0)
+	{
+		throw std::runtime_error("IOCTL dispatch: driver object not set");
+	}
+
+	const auto driver_obj = kernel::driver_object.read();
+
+	const auto device_object = reinterpret_cast<emulator_t::address_type>(driver_obj.DeviceObject);
+	const auto dispatch_function = reinterpret_cast<emulator_t::address_type>(driver_obj.MajorFunction[irp_mj_device_control]);
+
+	if (!dispatch_function)
+	{
+		throw std::runtime_error("IOCTL dispatch: MajorFunction[IRP_MJ_DEVICE_CONTROL] is null");
+	}
+
+	GLOBAL_LOG("event: IOCTL dispatch (code=0x{:X}, device=0x{:X}, handler=0x{:X})",
+		ioctl->code, device_object, dispatch_function);
+
+	// derive input size from first buffer's data
+	const std::uint32_t input_size = (!event.buffers.empty() && event.buffers[0] && !event.buffers[0]->data.empty())
+		? static_cast<std::uint32_t>(event.buffers[0]->data.size())
+		: 0;
+
+	const std::uint32_t output_size = ioctl->output_size;
+	const std::uint32_t system_buffer_size = (std::max)(input_size, output_size);
+
+	// allocate SystemBuffer if needed (may be larger than the event buffer)
+	emulator_t::address_type system_buffer_addr = 0;
+
+	if (system_buffer_size > 0)
+	{
+		const auto sys_alloc = emulator->heap_allocate(system_buffer_size, prot_read_write, true);
+		emulator_err_t sys_err = sys_alloc.error_or({});
+		sys_err.throw_if("IOCTL dispatch: allocate SystemBuffer");
+
+		system_buffer_addr = *sys_alloc;
+
+		// copy input data from event buffer if present
+		if (input_size > 0 && !buffer_addresses.empty())
+		{
+			std::vector<std::uint8_t> input_data(input_size);
+			sys_err = emulator->read_virtual_memory(buffer_addresses[0], input_data.data(), input_size);
+			sys_err.throw_if("IOCTL dispatch: read input from buffer");
+
+			sys_err = emulator->write_virtual_memory(system_buffer_addr, input_data.data(), input_size);
+			sys_err.throw_if("IOCTL dispatch: write input to SystemBuffer");
+		}
+	}
+
+	// allocate IRP + IO_STACK_LOCATION contiguously
+	const auto alloc = emulator->heap_allocate(sizeof(_IRP) + sizeof(_IO_STACK_LOCATION), prot_read_write, true);
+	emulator_err_t alloc_err = alloc.error_or({});
+	alloc_err.throw_if("IOCTL dispatch: allocate IRP");
+
+	const auto irp_addr = *alloc;
+	const auto iostack_addr = irp_addr + sizeof(_IRP);
+
+	_IRP irp = {};
+	irp.Type = 6;
+	irp.Size = sizeof(_IRP);
+	irp.StackCount = 1;
+	irp.CurrentLocation = 1;
+	irp.Tail.Overlay.CurrentStackLocation = reinterpret_cast<_IO_STACK_LOCATION*>(iostack_addr);
+	irp.AssociatedIrp.SystemBuffer = reinterpret_cast<VOID*>(system_buffer_addr);
+	irp.UserBuffer = reinterpret_cast<VOID*>(system_buffer_addr);
+
+	alloc_err = emulator->write_virtual_memory(irp_addr, &irp, sizeof(irp));
+	alloc_err.throw_if("IOCTL dispatch: write IRP");
+
+	_IO_STACK_LOCATION iostack = {};
+	iostack.MajorFunction = static_cast<UCHAR>(irp_mj_device_control);
+	iostack.Parameters.DeviceIoControl.IoControlCode = ioctl->code;
+	iostack.Parameters.DeviceIoControl.InputBufferLength = input_size;
+	iostack.Parameters.DeviceIoControl.OutputBufferLength = output_size;
+	iostack.DeviceObject = reinterpret_cast<_DEVICE_OBJECT*>(device_object);
+
+	alloc_err = emulator->write_virtual_memory(iostack_addr, &iostack, sizeof(iostack));
+	alloc_err.throw_if("IOCTL dispatch: write IO_STACK_LOCATION");
+
+	return { dispatch_function, device_object, irp_addr };
+}
+
 static emulator_t::address_type resolve_event_target(const event_t& event)
 {
 	if (const auto* call = event.target.AsCallTarget())
@@ -189,7 +284,7 @@ static emulator_t::address_type resolve_event_target(const event_t& event)
 
 	if (event.target.AsIoctlTarget())
 	{
-		throw std::runtime_error("IOCTL dispatch not yet implemented");
+		throw std::runtime_error("use dispatch_ioctl_event for IOCTL targets");
 	}
 
 	throw std::runtime_error("event has no target set");
@@ -229,8 +324,8 @@ void event_runner_t::load_folder(const std::filesystem::path& folder)
 		}
 	}
 
-	std::sort(event_files.begin(), event_files.end(),
-		[](const auto& a, const auto& b) { return a.first < b.first; });
+	std::ranges::sort(event_files,
+	                  [](const auto& a, const auto& b) { return a.first < b.first; });
 
 	for (const auto& [index, path] : event_files)
 	{
@@ -274,7 +369,23 @@ void event_runner_t::dispatch_next()
 	auto arguments = event.arguments;
 	apply_buffer_refs(emulator_, event, current_buffer_addresses_, arguments);
 
-	const auto target_address = resolve_event_target(event);
+	emulator_t::address_type target_address = 0;
+
+	if (const auto* ioctl = event.target.AsIoctlTarget())
+	{
+		auto dispatch = build_ioctl_irp(emulator_, ioctl, event, current_buffer_addresses_);
+		target_address = dispatch.dispatch_function;
+		current_irp_address_ = dispatch.irp_address;
+
+		arguments.clear();
+		arguments.push_back(dispatch.device_object);
+		arguments.push_back(dispatch.irp_address);
+	}
+	else
+	{
+		target_address = resolve_event_target(event);
+		current_irp_address_ = 0;
+	}
 
 	auto thread = kernel::create_thread_at(emulator_, target_address, arguments);
 	current_event_tid_ = thread->id();
@@ -291,9 +402,40 @@ void event_runner_t::collect_result(const std::shared_ptr<thread_t>& finished)
 		return;
 	}
 
-	const auto return_value = finished->state().rax;
+	auto return_value = finished->state().rax;
+	std::uint64_t io_information = 0;
 
-	GLOBAL_LOG("event: '{}' completed (return_value=0x{:X})", current_event_->description, return_value);
+	if (current_irp_address_ != 0)
+	{
+		_IRP irp_readback = {};
+		static_cast<void>(emulator_->read_virtual_memory(
+			current_irp_address_, &irp_readback, sizeof(irp_readback)));
+
+		const auto io_status = static_cast<std::uint32_t>(irp_readback.IoStatus.Status);
+		io_information = irp_readback.IoStatus.Information;
+
+		GLOBAL_LOG("event: IOCTL '{}' completed (ntstatus=0x{:X}, io_info={}, handler_return=0x{:X})",
+			current_event_->description, io_status, io_information, return_value);
+
+		return_value = io_status;
+
+		// copy SystemBuffer output back into buffer 0 so modified_buffers captures it
+		if (io_information > 0 && !current_buffer_addresses_.empty())
+		{
+			const auto sys_buffer_addr = reinterpret_cast<emulator_t::address_type>(irp_readback.AssociatedIrp.SystemBuffer);
+			const auto read_size = static_cast<std::uint32_t>(io_information);
+
+			std::vector<std::uint8_t> output_data(read_size);
+			static_cast<void>(emulator_->read_virtual_memory(sys_buffer_addr, output_data.data(), read_size));
+
+			static_cast<void>(emulator_->write_virtual_memory(
+				current_buffer_addresses_[0], output_data.data(), read_size));
+		}
+	}
+	else
+	{
+		GLOBAL_LOG("event: '{}' completed (return_value=0x{:X})", current_event_->description, return_value);
+	}
 
 	event_result_t result;
 	result.return_value = return_value;
@@ -321,6 +463,7 @@ void event_runner_t::collect_result(const std::shared_ptr<thread_t>& finished)
 
 	current_event_ = nullptr;
 	current_event_tid_ = 0;
+	current_irp_address_ = 0;
 	current_buffer_addresses_.clear();
 }
 

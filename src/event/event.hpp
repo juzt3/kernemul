@@ -40,6 +40,7 @@ private:
 	std::size_t next_event_index_ = 0;
 
 	thread_t::id_type current_event_tid_ = 0;
+	emulator_t::address_type current_irp_address_ = 0;
 	std::vector<emulator_t::address_type> current_buffer_addresses_;
 	const event_t* current_event_ = nullptr;
 

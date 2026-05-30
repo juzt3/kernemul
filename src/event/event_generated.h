@@ -760,20 +760,26 @@ inline ::flatbuffers::Offset<CallTarget> CreateCallTargetDirect(
 struct IoctlTargetT : public ::flatbuffers::NativeTable {
   typedef IoctlTarget TableType;
   uint32_t code = 0;
+  uint32_t output_size = 0;
 };
 
 struct IoctlTarget FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   typedef IoctlTargetT NativeTableType;
   typedef IoctlTargetBuilder Builder;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
-    VT_CODE = 4
+    VT_CODE = 4,
+    VT_OUTPUT_SIZE = 6
   };
   uint32_t code() const {
     return GetField<uint32_t>(VT_CODE, 0);
   }
+  uint32_t output_size() const {
+    return GetField<uint32_t>(VT_OUTPUT_SIZE, 0);
+  }
   bool Verify(::flatbuffers::Verifier &verifier) const {
     return VerifyTableStart(verifier) &&
            VerifyField<uint32_t>(verifier, VT_CODE, 4) &&
+           VerifyField<uint32_t>(verifier, VT_OUTPUT_SIZE, 4) &&
            verifier.EndTable();
   }
   IoctlTargetT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
@@ -788,6 +794,9 @@ struct IoctlTargetBuilder {
   void add_code(uint32_t code) {
     fbb_.AddElement<uint32_t>(IoctlTarget::VT_CODE, code, 0);
   }
+  void add_output_size(uint32_t output_size) {
+    fbb_.AddElement<uint32_t>(IoctlTarget::VT_OUTPUT_SIZE, output_size, 0);
+  }
   explicit IoctlTargetBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -801,8 +810,10 @@ struct IoctlTargetBuilder {
 
 inline ::flatbuffers::Offset<IoctlTarget> CreateIoctlTarget(
     ::flatbuffers::FlatBufferBuilder &_fbb,
-    uint32_t code = 0) {
+    uint32_t code = 0,
+    uint32_t output_size = 0) {
   IoctlTargetBuilder builder_(_fbb);
+  builder_.add_output_size(output_size);
   builder_.add_code(code);
   return builder_.Finish();
 }
@@ -1431,6 +1442,7 @@ inline void IoctlTarget::UnPackTo(IoctlTargetT *_o, const ::flatbuffers::resolve
   (void)_o;
   (void)_resolver;
   { auto _e = code(); _o->code = _e; }
+  { auto _e = output_size(); _o->output_size = _e; }
 }
 
 inline ::flatbuffers::Offset<IoctlTarget> IoctlTarget::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const IoctlTargetT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
@@ -1442,9 +1454,11 @@ inline ::flatbuffers::Offset<IoctlTarget> CreateIoctlTarget(::flatbuffers::FlatB
   (void)_o;
   struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const IoctlTargetT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
   auto _code = _o->code;
+  auto _output_size = _o->output_size;
   return fbs::CreateIoctlTarget(
       _fbb,
-      _code);
+      _code,
+      _output_size);
 }
 
 inline EventT::EventT(const EventT &o)

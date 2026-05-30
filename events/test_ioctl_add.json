@@ -1,0 +1,11 @@
+{
+  "description": "IOCTL add - code 0x80002008 (5 + 3 = 8)",
+  "target_type": "IoctlTarget",
+  "target": {
+    "code": 2147491848,
+    "output_size": 8
+  },
+  "buffers": [
+    { "data": [5, 0, 0, 0, 3, 0, 0, 0] }
+  ]
+}

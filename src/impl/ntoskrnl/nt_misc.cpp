@@ -1858,6 +1858,18 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 		"IoCreateSymbolicLink"
 	);
 
+	redirect_function(
+		[emulator]
+		{
+			const auto irp_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto priority_boost = emulator->read_register<x86::reg::rdx, std::uint8_t>();
+
+			THREAD_LOG("IofCompleteRequest called (irp=0x{:X}, priority_boost={})", irp_address, priority_boost);
+		},
+		mapped_image,
+		"IofCompleteRequest"
+	);
+
 	// todo: actually create symbolic link in object namespace
 	redirect_function(
 		[emulator]

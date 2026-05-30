@@ -42,13 +42,15 @@ static emulator_object_t<_DRIVER_OBJECT> set_up_driver_object(const std::shared_
 	return emulator_object_t<_DRIVER_OBJECT>::allocate(emulator, contents, image.name());
 }
 
-static void set_up_driver_entry(const std::shared_ptr<emulator_t>& emulator)
+static emulator_object_t<_DRIVER_OBJECT> set_up_driver_entry(const std::shared_ptr<emulator_t>& emulator)
 {
-	const auto driver_object = set_up_driver_object(emulator, *kernel::emulated_module);
+	auto driver_object = set_up_driver_object(emulator, *kernel::emulated_module);
 	const auto registry_path = kernel::allocate_unicode_string_object(emulator, EMULATED_MODULE_REG_PATH, "RegistryPath");
 
 	emulator->write_register<x86::reg::rcx>(driver_object.address());
 	emulator->write_register<x86::reg::rdx>(registry_path.address());
+
+	return driver_object;
 }
 
 static void set_up_stack(emulator_t& emulator)
@@ -547,7 +549,7 @@ std::int32_t main()
 		emulator->map_virtual_page(0xFFFFF0F87C3E1000, current_cr3.address_of_page_directory << 12);
 		emulator->map_virtual_page(0xFFFFF0F87C3FF000, current_cr3.address_of_page_directory << 12);
 
-		set_up_driver_entry(emulator);
+		kernel::driver_object = set_up_driver_entry(emulator);
 
 		kernel::main_thread = kernel::current_thread;
 
