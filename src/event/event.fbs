@@ -1,0 +1,62 @@
+namespace fbs;
+
+table Buffer {
+  data:[ubyte];
+  size:uint32;
+}
+
+table ArgumentRef {
+  arg_index:uint32;
+  source_buffer:uint32;
+  source_offset:uint32;
+}
+
+table PatchRef {
+  target_buffer:uint32;
+  target_offset:uint32;
+  source_buffer:uint32;
+  source_offset:uint32;
+}
+
+union BufferRef { ArgumentRef, PatchRef }
+
+table ImmediateTrigger {}
+table AfterDriverEntryTrigger {}
+
+union Trigger { ImmediateTrigger, AfterDriverEntryTrigger }
+
+table CallTarget {
+  function:string;
+}
+
+table IoctlTarget {
+  code:uint32;
+}
+
+union Target { CallTarget, IoctlTarget }
+
+table Event {
+  description:string;
+  target:Target;
+  arguments:[uint64];
+  buffers:[Buffer];
+  buffer_refs:[BufferRef];
+  trigger:Trigger;
+}
+
+table EventResult {
+  return_value:uint64;
+  succeeded:bool;
+  modified_buffers:[ModifiedBuffer];
+}
+
+table ModifiedBuffer {
+  index:uint32;
+  data:[ubyte];
+}
+
+table ResultSequence {
+  results:[EventResult];
+}
+
+root_type Event;

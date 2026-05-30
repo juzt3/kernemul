@@ -1,6 +1,7 @@
 #include "emulator/backend/hypermulator_backend.hpp"
 #include "emulator/backend/unicorn_backend.hpp"
 #include "emulator/object.hpp"
+#include "event/event.hpp"
 #include "kernel/kernel.hpp"
 #include "kernel/kernel_string.hpp"
 #include "kernel/exception.hpp"
@@ -548,15 +549,24 @@ std::int32_t main()
 
 		set_up_driver_entry(emulator);
 
-		kernel::run_all_threads(emulator, entry_point_address);
+		kernel::main_thread = kernel::current_thread;
 
-		const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
+		event_runner_t runner(emulator);
+		runner.load_folder("events/");
+
+		kernel::run_all_threads(emulator, entry_point_address,
+			[&runner](const std::shared_ptr<thread_t>& finished)
+			{
+				runner.on_thread_done(finished);
+			});
+
 		const auto rax = emulator->read_register<x86::reg::rax, emulator_t::address_type>();
-		const auto rcx = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
-		const auto rdx = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
-		const auto rsi = emulator->read_register<x86::reg::rsi, emulator_t::address_type>();
+		GLOBAL_LOG("emulation finished (rax=0x{:X})", rax);
 
-		GLOBAL_LOG("emulation finished at rip=0x{:X}, rax=0x{:X}, rcx=0x{:X}, rdx=0x{:X}, rdi=0x{:X}", rip, rax, rcx, rdx, rsi);
+		if (!runner.results().empty())
+		{
+			GLOBAL_LOG("processed {} events", runner.results().size());
+		}
 
 		error.throw_if("emulation running");
 	}

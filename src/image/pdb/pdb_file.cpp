@@ -1,5 +1,6 @@
 #include "pdb_file.hpp"
 #include "symbol_server.hpp"
+#include "../../util/file.hpp"
 
 #include <raw_pdb/PDB.h>
 #include <raw_pdb/PDB_RawFile.h>
@@ -204,20 +205,14 @@ std::size_t pdb::pdb_file_t::symbol_count() const noexcept
 
 pdb::pdb_file_t pdb::load_pdb_from_file(const std::string_view path)
 {
-	std::ifstream file(std::string(path), std::ios::binary | std::ios::ate);
+	auto data = util::read_file(std::filesystem::path(path));
 
-	if (!file.is_open())
+	if (!data)
 	{
 		throw std::runtime_error(std::format("failed to open PDB file '{}'", path));
 	}
 
-	const auto file_size = file.tellg();
-	file.seekg(0, std::ios::beg);
-
-	std::vector<std::uint8_t> data(static_cast<std::size_t>(file_size));
-	file.read(reinterpret_cast<char*>(data.data()), file_size);
-
-	return pdb_file_t(std::move(data));
+	return pdb_file_t(std::move(*data));
 }
 
 pdb::pdb_file_t pdb::load_pdb_for_image(const std::string_view image_path)
@@ -232,19 +227,14 @@ static std::string make_cache_path(const std::string_view module_name)
 
 static bool read_file(const std::string_view path, std::vector<std::uint8_t>& out_data)
 {
-	std::ifstream file(std::string(path), std::ios::binary | std::ios::ate);
+	auto data = util::read_file(std::filesystem::path(path));
 
-	if (!file.is_open())
+	if (!data)
 	{
 		return false;
 	}
 
-	const auto file_size = file.tellg();
-	file.seekg(0, std::ios::beg);
-
-	out_data.resize(static_cast<std::size_t>(file_size));
-	file.read(reinterpret_cast<char*>(out_data.data()), file_size);
-
+	out_data = std::move(*data);
 	return true;
 }
 

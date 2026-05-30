@@ -1,9 +1,8 @@
 #include "filesystem.hpp"
-
+#include "../util/file.hpp"
 #include "../util/logs.hpp"
 
 #include <filesystem>
-#include <fstream>
 #include <map>
 
 std::span<const std::uint8_t> file_t::read() const
@@ -199,21 +198,16 @@ bool filesystem_t::load_at(const std::string& host_path, const path_type& virtua
 	if(host_path.substr(0, 3) == std::string("vfs"))
 		vfs_path = host_path;
 
-	std::ifstream file(vfs_path, std::ios::binary | std::ios::ate);
+	auto buffer = util::read_file(vfs_path);
 
-	if (!file.is_open())
+	if (!buffer)
 	{
 		GLOBAL_WARN_LOG("filesystem: failed to open host file '{}'", vfs_path.string());
 		return false;
 	}
 
-	const std::streamsize file_size = file.tellg();
-	file.seekg(0, std::ios::beg);
-
-	std::vector<std::uint8_t> buffer(static_cast<std::size_t>(file_size));
-	file.read(reinterpret_cast<char*>(buffer.data()), file_size);
-
-	list_[virtual_path] = std::make_shared<file_t>(std::move(buffer));
+	const auto file_size = buffer->size();
+	list_[virtual_path] = std::make_shared<file_t>(std::move(*buffer));
 
 	GLOBAL_LOG("filesystem: loaded '{}' -> '{}' ({} bytes)", host_path, virtual_path, file_size);
 

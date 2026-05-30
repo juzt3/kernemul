@@ -188,6 +188,7 @@
     <ClCompile Include="ext\raw_pdb\PDB_SourceFileStream.cpp" />
     <ClCompile Include="ext\raw_pdb\PDB_TPIStream.cpp" />
     <ClCompile Include="ext\raw_pdb\PDB_Types.cpp" />
+    <ClCompile Include="src\event\event.cpp" />
     <ClCompile Include="src\emulator\backend\hypermulator_backend.cpp" />
     <ClCompile Include="src\emulator\backend\unicorn_backend.cpp" />
     <ClCompile Include="src\emulator\emulator_memory.cpp" />
@@ -286,6 +287,8 @@
     <ClInclude Include="ext\raw_pdb\PDB_Types.h" />
     <ClInclude Include="ext\raw_pdb\PDB_Util.h" />
     <ClInclude Include="src\config.hpp" />
+    <ClInclude Include="src\event\event.hpp" />
+    <ClInclude Include="src\event\event_generated.h" />
     <ClInclude Include="src\emulator\backend\hypermulator_backend.hpp" />
     <ClInclude Include="src\emulator\backend\unicorn_backend.hpp" />
     <ClInclude Include="src\emulator\emulator.hpp" />
@@ -317,6 +320,7 @@
     <ClInclude Include="src\kernel\thread.hpp" />
     <ClInclude Include="src\kernel\segments.hpp" />
     <ClInclude Include="src\kernel\kernel_def.hpp" />
+    <ClInclude Include="src\util\file.hpp" />
     <ClInclude Include="src\util\logs.hpp" />
     <ClInclude Include="src\util\util.hpp" />
   </ItemGroup>

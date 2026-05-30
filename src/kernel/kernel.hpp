@@ -32,6 +32,7 @@ namespace kernel
 	inline std::atomic_bool pending_thread_switch = false;
 	inline std::atomic_bool delete_current_thread = false;
 	inline std::shared_ptr<thread_t> current_thread;
+	inline std::shared_ptr<thread_t> main_thread;
 
 	inline std::shared_ptr<filesystem_t> filesystem;
 	inline std::shared_ptr<registry_t> registry;

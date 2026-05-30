@@ -8,6 +8,7 @@
 #include <chrono>
 #include <cstdint>
 #include <memory>
+#include <span>
 
 struct alignas(16) xmm_state_register_t
 {
@@ -132,5 +133,12 @@ namespace kernel
 
 	void switch_thread(const std::shared_ptr<emulator_t>& emulator, bool delete_current = false, bool force = false);
 
-	void run_all_threads(const std::shared_ptr<emulator_t>& emulator, emulator_t::address_type entry_point_address);
+	void run_all_threads(const std::shared_ptr<emulator_t>& emulator, emulator_t::address_type entry_point_address,
+		std::function<void(const std::shared_ptr<thread_t>&)> on_thread_done = {});
+
+	[[nodiscard]] std::shared_ptr<thread_t> create_thread_at(const std::shared_ptr<emulator_t>& emulator,
+		emulator_t::address_type target_address, std::span<const std::uint64_t> arguments = {});
+
+	std::uint64_t run_thread_immediately(const std::shared_ptr<emulator_t>& emulator,
+		const std::shared_ptr<thread_t>& thread);
 }

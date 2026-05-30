@@ -5,6 +5,7 @@
 #include "../util/logs.hpp"
 
 #include <format>
+#include <span>
 #include <thread>
 
 std::shared_ptr<thread_t> kernel::create_thread(const std::shared_ptr<emulator_t>& emulator,
@@ -252,7 +253,8 @@ static void perform_thread_switch()
 	kernel::delete_current_thread = false;
 }
 
-void kernel::run_all_threads(const std::shared_ptr<emulator_t>& emulator, const emulator_t::address_type entry_point_address)
+void kernel::run_all_threads(const std::shared_ptr<emulator_t>& emulator, const emulator_t::address_type entry_point_address,
+	std::function<void(const std::shared_ptr<thread_t>&)> on_thread_done)
 {
 	std::atomic_bool ended = false;
 
@@ -318,6 +320,13 @@ void kernel::run_all_threads(const std::shared_ptr<emulator_t>& emulator, const 
 				const auto rax = emulator->read_register<x86::reg::rax, std::uint64_t>();
 				THREAD_LOG("thread returned to default return address and is now finished (rax=0x{:X})", rax);
 
+				current_thread->save_state();
+
+				if (on_thread_done)
+				{
+					on_thread_done(current_thread);
+				}
+
 				delete_current_thread = true;
 				pending_thread_switch = true;
 			}
@@ -334,4 +343,73 @@ void kernel::run_all_threads(const std::shared_ptr<emulator_t>& emulator, const 
 	ended = true;
 
 	thread_scheduler.join();
+}
+
+std::shared_ptr<thread_t> kernel::create_thread_at(const std::shared_ptr<emulator_t>& emulator,
+	const emulator_t::address_type target_address, const std::span<const std::uint64_t> arguments)
+{
+	const auto thread_id = object_manager->allocate_id();
+	const auto& process = process_entries.front();
+	auto thread = create_thread(emulator, thread_id, process);
+
+	constexpr emulator_t::size_type stack_size = 0x10000;
+	const auto stack_allocation = emulator->heap_allocate(stack_size, prot_read_write, true);
+	emulator_err_t error = stack_allocation.error_or({});
+	error.throw_if("create_thread_at: allocate stack");
+
+	const emulator_t::address_type stack_top = *stack_allocation + stack_size - 0x1000;
+	const emulator_t::address_type sentinel = emulator_t::thread_return_address;
+	const emulator_t::address_type rsp = (stack_top & ~0xFull) - 8;
+
+	error = emulator->write_virtual_memory(rsp, &sentinel, sizeof(sentinel));
+	error.throw_if("create_thread_at: write sentinel");
+
+	thread->state().rip = target_address;
+	thread->state().rsp = rsp;
+	thread->state().rflags = 0x202;
+
+	if (arguments.size() > 0)
+	{
+		thread->state().rcx = arguments[0];
+	}
+
+	if (arguments.size() > 1)
+	{
+		thread->state().rdx = arguments[1];
+	}
+
+	if (arguments.size() > 2)
+	{
+		thread->state().r8 = arguments[2];
+	}
+
+	if (arguments.size() > 3)
+	{
+		thread->state().r9 = arguments[3];
+	}
+
+	for (std::size_t i = 4; i < arguments.size(); ++i)
+	{
+		const emulator_t::address_type slot_address = rsp + 0x28 + (i - 4) * sizeof(std::uint64_t);
+		error = emulator->write_virtual_memory(slot_address, &arguments[i], sizeof(std::uint64_t));
+		error.throw_if("create_thread_at: write stack argument");
+	}
+
+	GLOBAL_LOG("create_thread_at (tid={}, target=0x{:X}, args={})", thread_id, target_address, arguments.size());
+
+	return thread;
+}
+
+std::uint64_t kernel::run_thread_immediately(const std::shared_ptr<emulator_t>& emulator,
+	const std::shared_ptr<thread_t>& thread)
+{
+	current_thread = thread;
+	pending_thread_switch = false;
+	delete_current_thread = false;
+
+	GLOBAL_LOG("run_thread_immediately (tid={}, rip=0x{:X})", thread->id(), thread->state().rip);
+
+	run_all_threads(emulator, thread->state().rip);
+
+	return thread->state().rax;
 }

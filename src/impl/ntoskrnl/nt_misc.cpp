@@ -1440,12 +1440,8 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 	redirect_function(
 		[emulator]
 		{
-			const emulator_t::address_type thread_handle_out = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
-			const std::uint32_t desired_access = emulator->read_register<x86::reg::rdx, std::uint32_t>();
-			const emulator_t::address_type object_attributes = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
-			const emulator_t::address_type process_handle = emulator->read_register<x86::reg::r9, emulator_t::address_type>();
-
-			const emulator_t::address_type rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
+			const auto thread_handle_out = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
 
 			emulator_t::address_type client_id_out = 0;
 			emulator_t::address_type start_routine = 0;
@@ -1460,29 +1456,8 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 			error = emulator->read_virtual_memory(rsp + 0x38, &start_context, sizeof(start_context));
 			error.throw_if("PsCreateSystemThread: read StartContext");
 
-			const thread_t::id_type thread_id = kernel::object_manager->allocate_id();
-
-			const auto& process = kernel::current_thread->process();
-			auto thread = kernel::create_thread(emulator, thread_id, process);
-
-			constexpr emulator_t::size_type thread_stack_size = 0x10000;
-			const auto stack_allocation = emulator->heap_allocate(thread_stack_size, prot_read_write, true);
-			error = stack_allocation.error_or({});
-			error.throw_if("PsCreateSystemThread: allocate thread stack");
-
-			const emulator_t::address_type stack_top = *stack_allocation + thread_stack_size - 0x1000;
-
-			const emulator_t::address_type sentinel = emulator_t::thread_return_address;
-
-			const emulator_t::address_type thread_rsp = (stack_top & ~0xFull) - 8;
-
-			error = emulator->write_virtual_memory(thread_rsp, &sentinel, sizeof(sentinel));
-			error.throw_if("PsCreateSystemThread: write sentinel return address");
-
-			thread->state().rip = start_routine;
-			thread->state().rcx = start_context;
-			thread->state().rsp = thread_rsp;
-			thread->state().rflags = 0x202;
+			const std::uint64_t args[] = { start_context };
+			auto thread = kernel::create_thread_at(emulator, start_routine, args);
 
 			kernel::pending_threads.push(thread);
 
@@ -1497,13 +1472,14 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 
 			if (client_id_out)
 			{
-				const std::uint64_t cid[2] = { process->id(), thread_id };
+				const auto& process = kernel::current_thread->process();
+				const std::uint64_t cid[2] = { process->id(), thread->id() };
 				error = emulator->write_virtual_memory(client_id_out, &cid, sizeof(cid));
 				error.throw_if("PsCreateSystemThread: write ClientId");
 			}
 
-			THREAD_LOG("PsCreateSystemThread called (handle_out=0x{:X}, start_routine=0x{:X}, start_context=0x{:X}, tid={}, stack=0x{:X})",
-				thread_handle_out, start_routine, start_context, thread_id, stack_top);
+			THREAD_LOG("PsCreateSystemThread called (handle_out=0x{:X}, start_routine=0x{:X}, start_context=0x{:X}, tid={})",
+				thread_handle_out, start_routine, start_context, thread->id());
 
 			write_nt_success(emulator);
 		},

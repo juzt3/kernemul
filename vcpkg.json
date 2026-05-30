@@ -4,6 +4,7 @@
     "zydis",
     "spdlog",
     "boost-beast",
+    "flatbuffers",
     {
       "name": "boost-asio",
       "features": [ "ssl" ]
