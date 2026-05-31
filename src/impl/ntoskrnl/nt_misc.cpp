@@ -156,7 +156,6 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 		"KeInitializeTimer"
 	);
 
-	// todo: actually insert timer into a timer queue and fire dpc when due
 	redirect_function(
 		[emulator]
 		{
@@ -164,11 +163,32 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 			const auto due_time = emulator->read_register<x86::reg::rdx, std::int64_t>();
 			const auto dpc = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
 
-			THREAD_LOG("KeSetTimer called (timer=0x{:X}, due_time={}, dpc=0x{:X})",
-				timer_address, due_time, dpc);
+			// convert relative due time to absolute
+			std::uint64_t absolute_due_time;
 
+			if (due_time < 0)
+			{
+				FILETIME ft;
+				GetSystemTimeAsFileTime(&ft);
+				const auto now = (static_cast<std::uint64_t>(ft.dwHighDateTime) << 32) | ft.dwLowDateTime;
+				absolute_due_time = now + static_cast<std::uint64_t>(-due_time);
+			}
+			else
+			{
+				absolute_due_time = static_cast<std::uint64_t>(due_time);
+			}
+
+			THREAD_LOG("KeSetTimer called (timer=0x{:X}, due_time={}, absolute=0x{:X}, dpc=0x{:X})",
+				timer_address, due_time, absolute_due_time, dpc);
+
+			// unsignal the timer
+			constexpr std::int32_t unsignaled = 0;
 			emulator_err_t error = emulator->write_virtual_memory(
-				timer_address + offsetof(_KTIMER, DueTime), &due_time, sizeof(due_time));
+				timer_address + offsetof(_KTIMER, Header.SignalState), &unsignaled, sizeof(unsignaled));
+			error.throw_if("KeSetTimer: unsignal");
+
+			error = emulator->write_virtual_memory(
+				timer_address + offsetof(_KTIMER, DueTime), &absolute_due_time, sizeof(absolute_due_time));
 			error.throw_if("KeSetTimer: write DueTime");
 
 			error = emulator->write_virtual_memory(
@@ -1604,8 +1624,23 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 			THREAD_LOG("ObReferenceObjectByName called (name='{}', attrs=0x{:X}, access=0x{:X}, type=0x{:X}, object_out=0x{:X})",
 				util::narrow_wstring(name), attributes, desired_access, object_type, object_out);
 
-			constexpr std::uint32_t status_object_name_not_found = 0xC0000034;
-			write_nt_status(emulator, status_object_name_not_found);
+			if (object_out)
+			{
+				const auto fake_obj = emulator->heap_allocate(sizeof(_DRIVER_OBJECT), prot_read_write, true);
+				auto error = fake_obj.error_or({});
+				error.throw_if("ObReferenceObjectByName: allocate fake object");
+
+				error = emulator->write_virtual_memory(object_out, &fake_obj.value(), sizeof(fake_obj.value()));
+				error.throw_if("ObReferenceObjectByName: write object pointer");
+
+				THREAD_LOG("ObReferenceObjectByName: returning fake object at 0x{:X}", *fake_obj);
+				write_nt_success(emulator);
+			}
+			else
+			{
+				constexpr std::uint32_t status_object_name_not_found = 0xC0000034;
+				write_nt_status(emulator, status_object_name_not_found);
+			}
 		},
 		mapped_image,
 		"ObReferenceObjectByName"
@@ -1743,6 +1778,17 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 		},
 		mapped_image,
 		"IoCreateDevice"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto device_object = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+
+			THREAD_LOG("IoDeleteDevice called (device=0x{:X})", device_object);
+		},
+		mapped_image,
+		"IoDeleteDevice"
 	);
 
 	redirect_function(
@@ -2213,6 +2259,39 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 		static_cast<void>(emulator->read_virtual_memory(
 			object_address + offsetof(_KEVENT, Header.SignalState), &signal_state, sizeof(signal_state)));
 
+		// check if the object is a timer that has expired
+		if (signal_state <= 0)
+		{
+			std::uint8_t obj_type = 0;
+			static_cast<void>(emulator->read_virtual_memory(
+				object_address + offsetof(_KEVENT, Header.Type), &obj_type, sizeof(obj_type)));
+
+			constexpr std::uint8_t timer_notification = 8;
+			constexpr std::uint8_t timer_synchronization = 9;
+
+			if (obj_type == timer_notification || obj_type == timer_synchronization)
+			{
+				union _ULARGE_INTEGER due_time = {};
+				static_cast<void>(emulator->read_virtual_memory(
+					object_address + offsetof(_KTIMER, DueTime), &due_time, sizeof(due_time)));
+
+				if (due_time.QuadPart != 0)
+				{
+					FILETIME ft;
+					GetSystemTimeAsFileTime(&ft);
+					const auto now = (static_cast<std::uint64_t>(ft.dwHighDateTime) << 32) | ft.dwLowDateTime;
+
+					if (now >= due_time.QuadPart)
+					{
+						signal_state = 1;
+						static_cast<void>(emulator->write_virtual_memory(
+							object_address + offsetof(_KEVENT, Header.SignalState), &signal_state, sizeof(signal_state)));
+						THREAD_LOG("{} - timer expired, signaling (object=0x{:X})", caller_name, object_address);
+					}
+				}
+			}
+		}
+
 		THREAD_LOG("{} called (object=0x{:X}, reason={}, mode={}, alertable={}, timeout={}, signal_state={})",
 			caller_name, object_address, wait_reason, wait_mode, alertable,
 			has_timeout ? std::format("{}", timeout_value) : "infinite", signal_state);
@@ -2353,6 +2432,48 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 			constexpr std::uint32_t status_timeout = 0x102;
 			constexpr std::int64_t check_interval_100ns = 1000000;
 
+			// helper to check and auto-signal expired timers
+			const auto check_timer_expiration = [&emulator](emulator_t::address_type obj_addr, std::int32_t& sig_state)
+			{
+				if (sig_state > 0)
+				{
+					return;
+				}
+
+				std::uint8_t obj_type = 0;
+				static_cast<void>(emulator->read_virtual_memory(
+					obj_addr + offsetof(_KEVENT, Header.Type), &obj_type, sizeof(obj_type)));
+
+				constexpr std::uint8_t timer_notification = 8;
+				constexpr std::uint8_t timer_synchronization = 9;
+
+				if (obj_type != timer_notification && obj_type != timer_synchronization)
+				{
+					return;
+				}
+
+				union _ULARGE_INTEGER due_time = {};
+				static_cast<void>(emulator->read_virtual_memory(
+					obj_addr + offsetof(_KTIMER, DueTime), &due_time, sizeof(due_time)));
+
+				if (due_time.QuadPart == 0)
+				{
+					return;
+				}
+
+				FILETIME ft;
+				GetSystemTimeAsFileTime(&ft);
+				const auto now = (static_cast<std::uint64_t>(ft.dwHighDateTime) << 32) | ft.dwLowDateTime;
+
+				if (now >= due_time.QuadPart)
+				{
+					sig_state = 1;
+					static_cast<void>(emulator->write_virtual_memory(
+						obj_addr + offsetof(_KEVENT, Header.SignalState), &sig_state, sizeof(sig_state)));
+					THREAD_LOG("KeWaitForMultipleObjects - timer expired, signaling (object=0x{:X})", obj_addr);
+				}
+			};
+
 			if (wait_type == wait_all)
 			{
 				bool all_signaled = true;
@@ -2362,6 +2483,8 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 					std::int32_t signal_state = 0;
 					static_cast<void>(emulator->read_virtual_memory(
 						object_addresses[i] + offsetof(_KEVENT, Header.SignalState), &signal_state, sizeof(signal_state)));
+
+					check_timer_expiration(object_addresses[i], signal_state);
 
 					THREAD_LOG("  object[{}]=0x{:X} signal_state={}", i, object_addresses[i], signal_state);
 
@@ -2449,6 +2572,8 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 					std::int32_t signal_state = 0;
 					static_cast<void>(emulator->read_virtual_memory(
 						object_addresses[i] + offsetof(_KEVENT, Header.SignalState), &signal_state, sizeof(signal_state)));
+
+					check_timer_expiration(object_addresses[i], signal_state);
 
 					THREAD_LOG("  object[{}]=0x{:X} signal_state={}", i, object_addresses[i], signal_state);
 

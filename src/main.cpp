@@ -366,6 +366,7 @@ std::int32_t main()
 
 		const auto kpcr = set_up_kpcr(emulator, nt_image, kernel::current_thread);
 		kernel::set_up_kernel_gs(emulator, kpcr.address());
+		kernel::kpcr_address = kpcr.address();
 
 		// write KPRCB address to KiProcessorBlock[0] now that KPCR is set up
 		if (const auto ki_proc_block = nt_image->find_symbol("KiProcessorBlock"))
@@ -378,6 +379,18 @@ std::int32_t main()
 
 			kernel::kprcb_address = prcb_address;
 			GLOBAL_LOG("initialized KPRCB at 0x{:X}", prcb_address);
+		}
+
+		// write CurrentThread to the embedded KPRCB location at KPCR+0x180
+		// in real Windows, gs:[0x188] = KPCR.Prcb.CurrentThread
+		// KPRCB is embedded at KPCR+0x180, CurrentThread is at KPRCB+0x8
+		{
+			constexpr std::uint64_t kprcb_embedded_offset = 0x180;
+			const auto thread_address = kernel::current_thread->address();
+			static_cast<void>(emulator->write_virtual_memory(
+				kpcr.address() + kprcb_embedded_offset + offsetof(_KPRCB, CurrentThread),
+				&thread_address, sizeof(thread_address)));
+			GLOBAL_LOG("wrote CurrentThread 0x{:X} to KPCR+0x188", thread_address);
 		}
 
 		set_up_lstar_msr(emulator, nt_image);

@@ -33,12 +33,30 @@ void redirect_ci_sign_functions(const std::shared_ptr<emulator_t>& emulator,
 
 			const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
 
+			emulator_t::address_type policy_info_address = 0;
+			static_cast<void>(emulator->read_virtual_memory(rsp + 0x30, &policy_info_address, sizeof(policy_info_address)));
+
 			emulator_t::address_type signing_time_address = 0;
 			static_cast<void>(emulator->read_virtual_memory(rsp + 0x38, &signing_time_address, sizeof(signing_time_address)));
 
 			const auto hash_hex = read_guest_hash_hex(*emulator, digest_address, static_cast<std::uint32_t>(digest_size));
 
-			THREAD_LOG("CiCheckSignedFile called (hash='{}', digest_size={})", hash_hex, digest_size);
+			THREAD_LOG("CiCheckSignedFile called (hash='{}', digest_size={}, policy_info=0x{:X})",
+				hash_hex, digest_size, policy_info_address);
+
+			// populate MINCRYPT_POLICY_INFO to indicate a valid Microsoft signer
+			if (policy_info_address)
+			{
+				// zero-fill the full struct first, then set key fields
+				std::array<std::uint8_t, 0x70> policy_info{};
+				auto* p32 = reinterpret_cast<std::uint32_t*>(policy_info.data());
+
+				p32[0] = 0x70;    // Size
+				p32[1] = 0;       // VerificationStatus (success)
+				p32[2] = 0xFFFFFFFF; // PolicyBits - all signer flags set
+
+				static_cast<void>(emulator->write_virtual_memory(policy_info_address, policy_info.data(), policy_info.size()));
+			}
 
 			if (signing_time_address)
 			{

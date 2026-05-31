@@ -134,8 +134,28 @@ void redirect_cng_bcrypt_functions(const std::shared_ptr<emulator_t>& emulator,
 			THREAD_LOG("BCryptSetProperty called (handle=0x{:X}, property='{}', value=0x{:X}, size={}, flags=0x{:X})",
 				handle, util::narrow_wstring(property_name), value_address, value_size, flags);
 
-			THREAD_LOG("BCryptSetProperty: status=0x0");
-			write_return_value(emulator, static_cast<std::uint64_t>(0));
+			std::vector<std::uint8_t> value_buffer(value_size);
+			if (value_size > 0 && value_address)
+			{
+				emulator->read_virtual_memory(value_address, value_buffer.data(), value_size)
+					.throw_if("BCryptSetProperty: read value");
+			}
+
+			if (property_name == L"ChainingMode" && value_size >= 2)
+			{
+				const auto mode = std::wstring(reinterpret_cast<const wchar_t*>(value_buffer.data()));
+				THREAD_LOG("BCryptSetProperty: ChainingMode = '{}'", util::narrow_wstring(mode));
+			}
+
+			const auto status = ::BCryptSetProperty(
+				reinterpret_cast<BCRYPT_HANDLE>(handle),
+				property_name.c_str(),
+				value_buffer.data(),
+				value_size,
+				flags);
+
+			THREAD_LOG("BCryptSetProperty: status=0x{:X}", static_cast<std::uint32_t>(status));
+			write_return_value(emulator, static_cast<std::uint64_t>(status));
 		},
 		mapped_image,
 		"BCryptSetProperty"
@@ -428,9 +448,145 @@ void redirect_cng_bcrypt_functions(const std::shared_ptr<emulator_t>& emulator,
 			std::vector<std::uint8_t> output(output_size);
 			ULONG result_size = 0;
 
+			// handle padding/auth info
+			BCRYPT_PKCS1_PADDING_INFO pkcs1_info = {};
+			BCRYPT_OAEP_PADDING_INFO oaep_info = {};
+			BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO auth_info = {};
+			std::vector<std::uint8_t> nonce_buffer;
+			std::vector<std::uint8_t> auth_data_buffer;
+			std::vector<std::uint8_t> tag_buffer;
+			std::vector<std::uint8_t> mac_context_buffer;
+			void* host_padding_info = nullptr;
+
+			constexpr std::uint32_t bcrypt_pad_pkcs1 = 0x2;
+			constexpr std::uint32_t bcrypt_pad_oaep = 0x4;
+
+			// check for authenticated cipher mode info (GCM/CCM) - flags=0 but padding_info is set
+			if (padding_info && flags == 0)
+			{
+				// read the guest BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO
+				struct guest_auth_info
+				{
+					std::uint32_t cb_size;
+					std::uint32_t dw_info_version;
+					std::uint64_t pb_nonce;
+					std::uint32_t cb_nonce;
+					std::uint32_t pad1;
+					std::uint64_t pb_auth_data;
+					std::uint32_t cb_auth_data;
+					std::uint32_t pad2;
+					std::uint64_t pb_tag;
+					std::uint32_t cb_tag;
+					std::uint32_t pad3;
+					std::uint64_t pb_mac_context;
+					std::uint32_t cb_mac_context;
+					std::uint32_t cb_aad;
+					std::uint64_t cb_data;
+					std::uint32_t dw_flags;
+				} guest = {};
+
+				static_cast<void>(emulator->read_virtual_memory(padding_info, &guest, sizeof(guest)));
+
+				BCRYPT_INIT_AUTH_MODE_INFO(auth_info);
+
+				if (guest.cb_nonce > 0 && guest.pb_nonce)
+				{
+					nonce_buffer.resize(guest.cb_nonce);
+					static_cast<void>(emulator->read_virtual_memory(guest.pb_nonce, nonce_buffer.data(), guest.cb_nonce));
+					auth_info.pbNonce = nonce_buffer.data();
+					auth_info.cbNonce = guest.cb_nonce;
+				}
+
+				if (guest.cb_auth_data > 0 && guest.pb_auth_data)
+				{
+					auth_data_buffer.resize(guest.cb_auth_data);
+					static_cast<void>(emulator->read_virtual_memory(guest.pb_auth_data, auth_data_buffer.data(), guest.cb_auth_data));
+					auth_info.pbAuthData = auth_data_buffer.data();
+					auth_info.cbAuthData = guest.cb_auth_data;
+				}
+
+				if (guest.cb_tag > 0 && guest.pb_tag)
+				{
+					tag_buffer.resize(guest.cb_tag);
+					static_cast<void>(emulator->read_virtual_memory(guest.pb_tag, tag_buffer.data(), guest.cb_tag));
+					auth_info.pbTag = tag_buffer.data();
+					auth_info.cbTag = guest.cb_tag;
+				}
+
+				if (guest.cb_mac_context > 0 && guest.pb_mac_context)
+				{
+					mac_context_buffer.resize(guest.cb_mac_context);
+					static_cast<void>(emulator->read_virtual_memory(guest.pb_mac_context, mac_context_buffer.data(), guest.cb_mac_context));
+					auth_info.pbMacContext = mac_context_buffer.data();
+					auth_info.cbMacContext = guest.cb_mac_context;
+				}
+
+				auth_info.dwFlags = guest.dw_flags;
+
+				host_padding_info = &auth_info;
+
+				THREAD_LOG("BCryptEncrypt: GCM auth info (nonce_size={}, auth_data_size={}, tag_size={}, flags=0x{:X})",
+					guest.cb_nonce, guest.cb_auth_data, guest.cb_tag, guest.dw_flags);
+			}
+			else if ((flags & bcrypt_pad_pkcs1) && padding_info)
+			{
+				// BCRYPT_PKCS1_PADDING_INFO { LPCWSTR pszAlgId; }
+				// pszAlgId is NULL for encryption
+				host_padding_info = &pkcs1_info;
+			}
+			else if ((flags & bcrypt_pad_oaep) && padding_info)
+			{
+				// BCRYPT_OAEP_PADDING_INFO { LPCWSTR pszAlgId; PUCHAR pbLabel; ULONG cbLabel; }
+				// read the algorithm string pointer from the guest struct
+				emulator_t::address_type alg_id_ptr = 0;
+				static_cast<void>(emulator->read_virtual_memory(padding_info, &alg_id_ptr, sizeof(alg_id_ptr)));
+
+				std::wstring alg_name;
+				if (alg_id_ptr)
+				{
+					alg_name = kernel::read_guest_wstring(*emulator, alg_id_ptr);
+				}
+
+				// default to SHA256 if we can't read the algorithm name
+				if (alg_name.empty() || alg_name == L"SHA256")
+				{
+					oaep_info.pszAlgId = BCRYPT_SHA256_ALGORITHM;
+				}
+				else if (alg_name == L"SHA1")
+				{
+					oaep_info.pszAlgId = BCRYPT_SHA1_ALGORITHM;
+				}
+				else if (alg_name == L"SHA384")
+				{
+					oaep_info.pszAlgId = BCRYPT_SHA384_ALGORITHM;
+				}
+				else if (alg_name == L"SHA512")
+				{
+					oaep_info.pszAlgId = BCRYPT_SHA512_ALGORITHM;
+				}
+				else
+				{
+					oaep_info.pszAlgId = BCRYPT_SHA256_ALGORITHM;
+				}
+
+				// read pbLabel and cbLabel
+				emulator_t::address_type label_ptr = 0;
+				std::uint32_t label_size = 0;
+				static_cast<void>(emulator->read_virtual_memory(padding_info + 8, &label_ptr, sizeof(label_ptr)));
+				static_cast<void>(emulator->read_virtual_memory(padding_info + 16, &label_size, sizeof(label_size)));
+
+				oaep_info.pbLabel = nullptr;
+				oaep_info.cbLabel = 0;
+
+				host_padding_info = &oaep_info;
+
+				THREAD_LOG("BCryptEncrypt: OAEP padding (alg='{}', label=0x{:X}, label_size={})",
+					util::narrow_wstring(alg_name), label_ptr, label_size);
+			}
+
 			const auto status = ::BCryptEncrypt(
 				reinterpret_cast<BCRYPT_KEY_HANDLE>(key_handle),
-				input.data(), input_size, nullptr,
+				input.data(), input_size, host_padding_info,
 				iv_size > 0 ? iv.data() : nullptr, iv_size,
 				output_size > 0 ? output.data() : nullptr, output_size,
 				&result_size, flags);
@@ -446,6 +602,30 @@ void redirect_cng_bcrypt_functions(const std::shared_ptr<emulator_t>& emulator,
 				{
 					emulator->write_virtual_memory(iv_address, iv.data(), iv_size)
 						.throw_if("BCryptEncrypt: write updated IV");
+				}
+
+				// write back GCM tag and mac context to guest
+				if (host_padding_info == &auth_info)
+				{
+					if (auth_info.cbTag > 0 && auth_info.pbTag)
+					{
+						// read guest auth info to get the tag pointer
+						emulator_t::address_type guest_tag_ptr = 0;
+						static_cast<void>(emulator->read_virtual_memory(padding_info + 0x28, &guest_tag_ptr, sizeof(guest_tag_ptr)));
+						if (guest_tag_ptr)
+						{
+							static_cast<void>(emulator->write_virtual_memory(guest_tag_ptr, auth_info.pbTag, auth_info.cbTag));
+						}
+					}
+					if (auth_info.cbMacContext > 0 && auth_info.pbMacContext)
+					{
+						emulator_t::address_type guest_mac_ptr = 0;
+						static_cast<void>(emulator->read_virtual_memory(padding_info + 0x38, &guest_mac_ptr, sizeof(guest_mac_ptr)));
+						if (guest_mac_ptr)
+						{
+							static_cast<void>(emulator->write_virtual_memory(guest_mac_ptr, auth_info.pbMacContext, auth_info.cbMacContext));
+						}
+					}
 				}
 			}
 

@@ -301,6 +301,26 @@ void kernel::run_all_threads(const std::shared_ptr<emulator_t>& emulator, const 
 
 					GLOBAL_LOG("switching thread {} -> {}", current_thread->id(), pending_threads.front()->id());
 					perform_thread_switch();
+
+					if (current_thread)
+					{
+						const auto thread_addr = current_thread->address();
+
+						if (kprcb_address)
+						{
+							static_cast<void>(emulator->write_virtual_memory(
+								kprcb_address + offsetof(_KPRCB, CurrentThread),
+								&thread_addr, sizeof(thread_addr)));
+						}
+
+						if (kpcr_address)
+						{
+							constexpr std::uint64_t embedded_current_thread_offset = 0x188;
+							static_cast<void>(emulator->write_virtual_memory(
+								kpcr_address + embedded_current_thread_offset,
+								&thread_addr, sizeof(thread_addr)));
+						}
+					}
 				}
 			}
 
@@ -321,6 +341,12 @@ void kernel::run_all_threads(const std::shared_ptr<emulator_t>& emulator, const 
 				THREAD_LOG("thread returned to default return address and is now finished (rax=0x{:X})", rax);
 
 				current_thread->save_state();
+
+				// signal the thread's KTHREAD dispatcher header so waiters wake up
+				constexpr std::int32_t signaled = 1;
+				static_cast<void>(emulator->write_virtual_memory(
+					current_thread->address() + offsetof(_KTHREAD, Header.SignalState),
+					&signaled, sizeof(signaled)));
 
 				if (on_thread_done)
 				{
