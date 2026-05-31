@@ -43,6 +43,9 @@ namespace kernel
 	inline std::shared_ptr<object_manager_t> object_manager;
 	inline std::unordered_map<emulator_t::address_type, function_implementation_t> redirected_functions;
 
+	// \Driver\X namespace - maps lowercase driver names to guest DRIVER_OBJECT addresses
+	inline std::unordered_map<std::string, emulator_t::address_type> driver_objects;
+
 	[[nodiscard]] std::shared_ptr<kernel_image_t> find_module(std::string_view name);
 	[[nodiscard]] std::shared_ptr<kernel_image_t> find_module_from_rip(emulator_t::address_type rip);
 	[[nodiscard]] std::optional<function_implementation_t> find_redirected_function(emulator_t::address_type address);

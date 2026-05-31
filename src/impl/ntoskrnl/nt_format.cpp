@@ -124,6 +124,44 @@ std::wstring guest_vswprintf(const emulator_t& emulator, const std::wstring_view
 			break;
 		}
 
+		// handle %wZ / %Z (UNICODE_STRING pointer) - Windows kernel-specific format
+		{
+			bool is_unicode_string = false;
+
+			if (i < format.size() && format[i] == L'w' && (i + 1) < format.size() && format[i + 1] == L'Z')
+			{
+				i += 1; // advance to 'Z'
+				is_unicode_string = true;
+			}
+			else if (i < format.size() && format[i] == L'Z')
+			{
+				is_unicode_string = true;
+			}
+
+			if (is_unicode_string)
+			{
+				const auto raw_arg = read_guest_vararg(emulator, va_list_address, arg_index);
+
+				if (raw_arg)
+				{
+					UNICODE_STRING us = {};
+					static_cast<void>(emulator.read_virtual_memory(raw_arg, &us, sizeof(us)));
+					const auto buf_addr = reinterpret_cast<emulator_t::address_type>(us.Buffer);
+
+					if (buf_addr && us.Length)
+					{
+						result += kernel::read_guest_wstring(emulator, buf_addr);
+					}
+				}
+				else
+				{
+					result += L"(null)";
+				}
+
+				continue;
+			}
+		}
+
 		const wchar_t specifier = format[i];
 		const std::wstring spec_str(format.substr(spec_start, i - spec_start + 1));
 
@@ -622,6 +660,47 @@ void redirect_ntoskrnl_format_functions(const std::shared_ptr<emulator_t>& emula
 		mapped_image,
 		"swprintf_s"
 	);
+
+	// _snwprintf(buffer, count, format, ...) - same layout as swprintf_s
+	const auto snwprintf_handler = [emulator]
+	{
+		const auto buffer_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+		const auto count = emulator->read_register<x86::reg::rdx, std::uint64_t>();
+		const auto format_address = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
+		const auto r9 = emulator->read_register<x86::reg::r9, std::uint64_t>();
+
+		const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
+		const auto va_list_address = rsp + 0x20;
+
+		emulator_err_t error = emulator->write_virtual_memory(
+			va_list_address, &r9, sizeof(r9));
+		error.throw_if("_snwprintf: write r9");
+
+		if (!buffer_address || !format_address)
+		{
+			write_return_value(emulator, static_cast<std::uint64_t>(-1));
+			return;
+		}
+
+		const auto format_string = kernel::read_guest_wstring(*emulator, format_address);
+		const auto formatted = guest_vswprintf(*emulator, format_string, va_list_address);
+
+		if (formatted.size() >= count)
+		{
+			write_guest_wstring_buffer(*emulator, buffer_address, count, formatted.substr(0, count > 0 ? count - 1 : 0));
+			THREAD_LOG("_snwprintf called (result truncated, format='{}')", util::narrow_wstring(format_string));
+			write_return_value(emulator, static_cast<std::uint64_t>(-1));
+			return;
+		}
+
+		write_guest_wstring_buffer(*emulator, buffer_address, count, formatted);
+
+		THREAD_LOG("_snwprintf called (result='{}')", util::narrow_wstring(formatted));
+
+		write_return_value(emulator, static_cast<std::uint64_t>(formatted.size()));
+	};
+
+	redirect_function(snwprintf_handler, mapped_image, "_snwprintf");
 
 	redirect_function(
 		[emulator]

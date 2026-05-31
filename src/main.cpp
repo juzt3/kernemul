@@ -346,10 +346,52 @@ std::int32_t main()
 		kernel::map_kernel_image(emulator, "tbs.sys", false, L"\\SystemRoot\\System32\\drivers\\");
 		kernel::map_kernel_image(emulator, "tdi.sys", false, L"\\SystemRoot\\System32\\drivers\\");
 		kernel::map_kernel_image(emulator, "WdfLdr.sys", false, L"\\SystemRoot\\System32\\drivers\\");
+		kernel::map_kernel_image(emulator, "ndis.sys", false, L"\\SystemRoot\\System32\\drivers\\");
 
 		kernel::emulated_module = kernel::map_kernel_image(emulator, EMULATED_MODULE_NAME, true, EMULATED_MODULE_DIRECTORY);
 
 		set_up_ntoskrnl_globals(emulator, nt_image);
+
+		// create \Driver\X objects for all loaded modules
+		for (const auto& module : kernel::module_entries)
+		{
+			auto name = module->name();
+
+			// strip extension
+			const auto dot = name.find_last_of('.');
+			if (dot != std::string::npos)
+			{
+				name = name.substr(0, dot);
+			}
+
+			// lowercase
+			for (auto& c : name)
+			{
+				c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+			}
+
+			_DRIVER_OBJECT drv = {};
+			drv.DriverStart = reinterpret_cast<void*>(module->base_address());
+			drv.DriverSize = static_cast<std::uint32_t>(module->size());
+			drv.DriverSection = reinterpret_cast<void*>(module->table_entry().address());
+
+			const auto obj = emulator_object_t<_DRIVER_OBJECT>::allocate(emulator, drv, std::format("Driver\\{}", name));
+			kernel::driver_objects[name] = obj.address();
+		}
+
+		// also add common driver names that may not be loaded but are queried
+		const char* extra_drivers[] = { "pci", "acpi", "disk", "volmgr", "partmgr", "mountmgr", "ndis" };
+		for (const auto* drv_name : extra_drivers)
+		{
+			if (!kernel::driver_objects.contains(drv_name))
+			{
+				_DRIVER_OBJECT drv = {};
+				const auto obj = emulator_object_t<_DRIVER_OBJECT>::allocate(emulator, drv, std::format("Driver\\{}", drv_name));
+				kernel::driver_objects[drv_name] = obj.address();
+			}
+		}
+
+		GLOBAL_LOG("created {} driver objects", kernel::driver_objects.size());
 
 		set_up_interrupt_flag(emulator);
 

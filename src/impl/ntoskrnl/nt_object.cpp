@@ -331,6 +331,60 @@ void redirect_ntoskrnl_object_functions(const std::shared_ptr<emulator_t>& emula
 		"NtOpenDirectoryObject"
 	);
 
+	// alias for kernel-mode callers
+	redirect_function(
+		[emulator]
+		{
+			const auto handle_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto desired_access = emulator->read_register<x86::reg::rdx, std::uint32_t>();
+			const auto object_attributes_address = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
+
+			std::string directory_name = "(unknown)";
+
+			if (object_attributes_address)
+			{
+				OBJECT_ATTRIBUTES object_attributes = {};
+				emulator_err_t error = emulator->read_virtual_memory(
+					object_attributes_address, &object_attributes, sizeof(object_attributes));
+				error.throw_if("ZwOpenDirectoryObject: read OBJECT_ATTRIBUTES");
+
+				const auto name_address = reinterpret_cast<emulator_t::address_type>(object_attributes.ObjectName);
+
+				if (name_address)
+				{
+					UNICODE_STRING unicode_string = {};
+					error = emulator->read_virtual_memory(name_address, &unicode_string, sizeof(unicode_string));
+					error.throw_if("ZwOpenDirectoryObject: read UNICODE_STRING");
+
+					const auto buffer_address = reinterpret_cast<emulator_t::address_type>(unicode_string.Buffer);
+
+					if (buffer_address && unicode_string.Length)
+					{
+						directory_name = util::narrow_wstring(kernel::read_guest_wstring(*emulator, buffer_address));
+					}
+				}
+			}
+
+			constexpr std::size_t directory_body_size = 0x40;
+			std::array<std::uint8_t, directory_body_size> body{};
+			const auto body_address = kernel::object_manager->create_object(0, body.data(), body.size());
+			const auto handle_value = kernel::object_manager->create_handle(body_address, desired_access);
+
+			if (handle_address)
+			{
+				emulator_err_t error = emulator->write_virtual_memory(handle_address, &handle_value, sizeof(handle_value));
+				error.throw_if("ZwOpenDirectoryObject: write handle");
+			}
+
+			THREAD_LOG("ZwOpenDirectoryObject called (handle_address=0x{:X}, access=0x{:X}, name='{}') -> handle=0x{:X}",
+				handle_address, desired_access, directory_name, handle_value);
+
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"ZwOpenDirectoryObject"
+	);
+
 	redirect_function(
 		[emulator]
 		{

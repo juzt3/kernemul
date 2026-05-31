@@ -6,6 +6,7 @@
 #include "../impl/fltmgr/flt_helpers.hpp"
 #include "../impl/tbs/tbs_helpers.hpp"
 #include "../impl/tdi/tdi_helpers.hpp"
+#include "../impl/ndis/ndis_helpers.hpp"
 #include "../impl/ntoskrnl/nt_crashdump.hpp"
 #include "../impl/ntoskrnl/nt_debugger.hpp"
 #include "../impl/ntoskrnl/nt_helpers.hpp"
@@ -374,6 +375,11 @@ std::shared_ptr<kernel_image_t> kernel::map_kernel_image(const std::shared_ptr<e
 	if (name == "tdi.sys")
 	{
 		redirect_tdi_misc_functions(emulator, *mapped_image);
+	}
+
+	if (name == "ndis.sys")
+	{
+		redirect_ndis_misc_functions(emulator, *mapped_image);
 	}
 
 	if (is_ntoskrnl)

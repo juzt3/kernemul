@@ -1624,20 +1624,41 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 			THREAD_LOG("ObReferenceObjectByName called (name='{}', attrs=0x{:X}, access=0x{:X}, type=0x{:X}, object_out=0x{:X})",
 				util::narrow_wstring(name), attributes, desired_access, object_type, object_out);
 
-			if (object_out)
-			{
-				const auto fake_obj = emulator->heap_allocate(sizeof(_DRIVER_OBJECT), prot_read_write, true);
-				auto error = fake_obj.error_or({});
-				error.throw_if("ObReferenceObjectByName: allocate fake object");
+			// look up \Driver\X in the driver objects map
+			auto narrow_name = util::narrow_wstring(name);
 
-				error = emulator->write_virtual_memory(object_out, &fake_obj.value(), sizeof(fake_obj.value()));
+			// extract the driver name from \Driver\xxx path
+			std::string lookup_key;
+			const auto last_sep = narrow_name.find_last_of('\\');
+			if (last_sep != std::string::npos)
+			{
+				lookup_key = narrow_name.substr(last_sep + 1);
+			}
+			else
+			{
+				lookup_key = narrow_name;
+			}
+
+			// lowercase the key
+			for (auto& c : lookup_key)
+			{
+				c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+			}
+
+			const auto it = kernel::driver_objects.find(lookup_key);
+
+			if (it != kernel::driver_objects.end() && object_out)
+			{
+				const auto obj_addr = it->second;
+				emulator_err_t error = emulator->write_virtual_memory(object_out, &obj_addr, sizeof(obj_addr));
 				error.throw_if("ObReferenceObjectByName: write object pointer");
 
-				THREAD_LOG("ObReferenceObjectByName: returning fake object at 0x{:X}", *fake_obj);
+				THREAD_LOG("ObReferenceObjectByName: found '{}' at 0x{:X}", lookup_key, obj_addr);
 				write_nt_success(emulator);
 			}
 			else
 			{
+				THREAD_WARN_LOG("ObReferenceObjectByName: '{}' not found", lookup_key);
 				constexpr std::uint32_t status_object_name_not_found = 0xC0000034;
 				write_nt_status(emulator, status_object_name_not_found);
 			}
