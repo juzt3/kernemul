@@ -143,6 +143,9 @@ public:
 	void reference_object(emulator_t::address_type body_address);
 	void dereference_object(emulator_t::address_type body_address);
 
+	void register_named_object(const std::string& path, emulator_t::address_type body_address);
+	[[nodiscard]] std::optional<emulator_t::address_type> lookup_named_object(const std::string& path) const;
+
 	[[nodiscard]] std::uint64_t allocate_id();
 
 private:
@@ -151,6 +154,7 @@ private:
 	std::shared_ptr<emulator_t> emulator_;
 	std::unordered_map<emulator_t::address_type, object_entry_t> objects_;
 	std::unordered_map<handle_type, handle_entry_t> handles_;
+	std::unordered_map<std::string, emulator_t::address_type> named_objects_;
 	handle_type next_handle_ = 4;
 	std::uint64_t next_id_ = 4;
 };

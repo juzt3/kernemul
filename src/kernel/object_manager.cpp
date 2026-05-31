@@ -185,3 +185,44 @@ std::uint64_t object_manager_t::allocate_id()
 	next_id_ += 4;
 	return id;
 }
+
+void object_manager_t::register_named_object(const std::string& path, const emulator_t::address_type body_address)
+{
+	std::string normalized = path;
+
+	for (auto& c : normalized)
+	{
+		if (c == '/')
+		{
+			c = '\\';
+		}
+
+		c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+	}
+
+	named_objects_[normalized] = body_address;
+}
+
+std::optional<emulator_t::address_type> object_manager_t::lookup_named_object(const std::string& path) const
+{
+	std::string normalized = path;
+
+	for (auto& c : normalized)
+	{
+		if (c == '/')
+		{
+			c = '\\';
+		}
+
+		c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+	}
+
+	const auto it = named_objects_.find(normalized);
+
+	if (it == named_objects_.end())
+	{
+		return std::nullopt;
+	}
+
+	return it->second;
+}

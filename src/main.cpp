@@ -352,7 +352,7 @@ std::int32_t main()
 
 		set_up_ntoskrnl_globals(emulator, nt_image);
 
-		// create \Driver\X objects for all loaded modules
+		// create \Driver\X objects for all loaded modules in the object manager
 		for (const auto& module : kernel::module_entries)
 		{
 			auto name = module->name();
@@ -376,22 +376,20 @@ std::int32_t main()
 			drv.DriverSection = reinterpret_cast<void*>(module->table_entry().address());
 
 			const auto obj = emulator_object_t<_DRIVER_OBJECT>::allocate(emulator, drv, std::format("Driver\\{}", name));
-			kernel::driver_objects[name] = obj.address();
+			kernel::object_manager->register_named_object(std::format("\\driver\\{}", name), obj.address());
 		}
 
 		// also add common driver names that may not be loaded but are queried
-		const char* extra_drivers[] = { "pci", "acpi", "disk", "volmgr", "partmgr", "mountmgr", "ndis" };
+		const char* extra_drivers[] = { "pci", "acpi", "disk", "volmgr", "partmgr", "mountmgr" };
 		for (const auto* drv_name : extra_drivers)
 		{
-			if (!kernel::driver_objects.contains(drv_name))
+			if (!kernel::object_manager->lookup_named_object(std::format("\\driver\\{}", drv_name)))
 			{
 				_DRIVER_OBJECT drv = {};
 				const auto obj = emulator_object_t<_DRIVER_OBJECT>::allocate(emulator, drv, std::format("Driver\\{}", drv_name));
-				kernel::driver_objects[drv_name] = obj.address();
+				kernel::object_manager->register_named_object(std::format("\\driver\\{}", drv_name), obj.address());
 			}
 		}
-
-		GLOBAL_LOG("created {} driver objects", kernel::driver_objects.size());
 
 		set_up_interrupt_flag(emulator);
 

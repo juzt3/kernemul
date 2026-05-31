@@ -141,6 +141,8 @@ static void monitor_data_sections(const std::shared_ptr<emulator_t>& emulator,
                                   const std::shared_ptr<kernel_image_t>& mapped_image,
                                   const portable_executable::image_t* const pe_image)
 {
+	return;
+
 	const auto nt_headers = pe_image->nt_headers();
 
 	const auto headers_size = nt_headers->optional_header.size_of_headers;
