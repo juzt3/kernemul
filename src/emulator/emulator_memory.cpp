@@ -1,8 +1,8 @@
+#include <algorithm>
 #include <ranges>
 
 #include "emulator.hpp"
 #include <ia32-doc/ia32.hpp>
-#include <spdlog/spdlog.h>
 
 constexpr emulator_t::size_type paging_table_size = 0x1000;
 constexpr emulator_t::size_type paging_entry_count = 512;

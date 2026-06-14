@@ -321,6 +321,8 @@ public:
 
 	virtual std::expected<hook_type, emulator_err_t> hook_msr(const emulator_hook_t::msr_callback& callback) = 0;
 
+	virtual emulator_err_t monitor_msr(std::uint32_t msr_index) { return {}; }
+
 	virtual std::expected<hook_type, emulator_err_t> hook_invalid_memory(
 		const emulator_hook_t::invalid_memory_callback& callback, protection_type monitored_protection,
 		address_type start_address, address_type end_address) = 0;

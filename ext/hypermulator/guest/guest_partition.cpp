@@ -475,6 +475,29 @@ bool hm::guest_partition_t::set_msr_bitmap(const WHV_PARTITION_PROPERTY& propert
 	return this->set_partition_property(WHvPartitionPropertyCodeX64MsrExitBitmap, property);
 }
 
+bool hm::guest_partition_t::set_msr_action_list(const std::span<const WHV_MSR_ACTION_ENTRY> entries)
+{
+	if (entries.empty())
+	{
+		return true;
+	}
+
+	return SUCCEEDED(WHvSetPartitionProperty(
+		handle_,
+		WHvPartitionPropertyCodeMsrActionList,
+		entries.data(),
+		static_cast<UINT32>(entries.size_bytes())
+	));
+}
+
+bool hm::guest_partition_t::set_unimplemented_msr_action(const WHV_MSR_ACTION action)
+{
+	WHV_PARTITION_PROPERTY property = {};
+	property.UnimplementedMsrAction = action;
+
+	return this->set_partition_property(WHvPartitionPropertyCodeUnimplementedMsrAction, property);
+}
+
 bool hm::guest_partition_t::create_partition()
 {
 	return SUCCEEDED(WHvCreatePartition(&handle_));

@@ -1,4 +1,5 @@
 #include "nt_helpers.hpp"
+#include "../../util/util.hpp"
 
 void redirect_ntoskrnl_string_functions(const std::shared_ptr<emulator_t>& emulator,
 	const kernel_image_t& mapped_image)
@@ -856,7 +857,7 @@ void redirect_ntoskrnl_string_functions(const std::shared_ptr<emulator_t>& emula
 			THREAD_LOG("RtlAnsiStringToUnicodeString called (dest=0x{:X}, source='{}', allocate={})",
 				destination_address, ansi_string, allocate_destination);
 
-			std::wstring wide_string(ansi_string.begin(), ansi_string.end());
+			const auto wide_string = util::widen_string(ansi_string);
 
 			const auto unicode_byte_length = static_cast<std::uint32_t>(wide_string.size() * sizeof(wchar_t));
 			const auto unicode_size_with_null = unicode_byte_length + sizeof(wchar_t);
@@ -1125,8 +1126,8 @@ void redirect_ntoskrnl_string_functions(const std::shared_ptr<emulator_t>& emula
 				result = static_cast<std::int32_t>(len1) - static_cast<std::int32_t>(len2);
 			}
 
-			const std::string narrow1(buf1.begin(), buf1.end());
-			const std::string narrow2(buf2.begin(), buf2.end());
+			const auto narrow1 = util::narrow_wstring(std::wstring_view(buf1.data(), len1));
+			const auto narrow2 = util::narrow_wstring(std::wstring_view(buf2.data(), len2));
 
 			THREAD_LOG("RtlCompareUnicodeString called (str1=0x{:X} '{}', str2=0x{:X} '{}', case_insensitive={}) -> {}",
 				string1_address, narrow1, string2_address, narrow2, case_insensitive, result);

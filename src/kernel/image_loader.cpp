@@ -19,6 +19,7 @@
 #include <portable_executable/file.hpp>
 
 #include "../util/logs.hpp"
+#include "../util/util.hpp"
 #include <set>
 
 static void relocate_image(portable_executable::image_t* const image, const emulator_t::address_type runtime_base_address)
@@ -232,7 +233,7 @@ static void add_to_loaded_module_list(const std::shared_ptr<emulator_t>& emulato
 	contents.EntryPoint = reinterpret_cast<void*>(mapped_image->entry_point());
 
 	const auto& name = mapped_image->name();
-	const std::wstring wide_name(name.begin(), name.end());
+	const auto wide_name = util::widen_string(name);
 	const auto full_path = std::wstring(L"\\??\\").append(directory).append(wide_name);
 
 	contents.BaseDllName = kernel::init_unicode_string(*emulator, wide_name);

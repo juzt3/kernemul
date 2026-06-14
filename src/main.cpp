@@ -11,19 +11,13 @@
 #include "config.hpp"
 
 #include <ia32-doc/ia32.hpp>
+
+#include "portable_executable/image.hpp"
 #include "util/logs.hpp"
 #include "util/util.hpp"
 
 static void set_up_user_shared_data(const std::shared_ptr<emulator_t>& emulator)
 {
-	/*_KUSER_SHARED_DATA contents = { };
-
-	contents.NtBuildNumber = 19045;
-	contents.NtMajorVersion = 10;
-	contents.NtMinorVersion = 0;
-
-	kernel::user_shared_data = emulator_object_t<_KUSER_SHARED_DATA>::allocate_at(emulator, contents, 0xFFFFF78000000000);*/
-
 	const auto contents = reinterpret_cast<const _KUSER_SHARED_DATA*>(0x7FFE0000);
 
 	emulator_object_t<_KUSER_SHARED_DATA>::allocate_at(emulator, *contents, 0xFFFFF78000000000);
@@ -305,11 +299,17 @@ std::int32_t main()
 			auto dir_path = to_string(EMULATED_MODULE_DIRECTORY);
 			for (auto& c : dir_path)
 			{
-				if (c == '\\') c = '/';
+				if (c == '\\')
+				{
+					c = '/';
+				}
+
 				c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
 			}
 			while (!dir_path.empty() && dir_path.back() == '/')
+			{
 				dir_path.pop_back();
+			}
 			static_cast<void>(kernel::filesystem->create_directory_at(dir_path));
 		}
 
@@ -582,31 +582,87 @@ std::int32_t main()
 
 		error.throw_if("monitor invalid memory");
 
+		// MSRs that WHP handles natively (VMCS guest-state fields) - force vmexit
+		constexpr std::uint32_t monitored_msrs[] =
+		{
+			0x174,       // IA32_SYSENTER_CS
+			0x175,       // IA32_SYSENTER_ESP
+			0x176,       // IA32_SYSENTER_EIP
+			0x277,       // IA32_PAT
+			0xC0000080,  // IA32_EFER
+			0xC0000081,  // IA32_STAR
+			0xC0000082,  // IA32_LSTAR
+			0xC0000083,  // IA32_CSTAR
+			0xC0000084,  // IA32_FMASK
+			0xC0000102,  // IA32_KERNEL_GS_BASE
+			0xC0000103,  // IA32_TSC_AUX
+		};
+
+		for (const auto msr : monitored_msrs)
+		{
+			emulator->monitor_msr(msr);
+		}
+
+
+		static std::unordered_map<std::uint32_t, std::uint64_t> msr_values;
+
+		// pre-seed MSR values that were set via write_msr before the hook
+		if (const auto ki_system_call = nt_image->find_symbol("KiSystemCall64"))
+		{
+			msr_values[0xC0000082] = *ki_system_call; // IA32_LSTAR
+		}
+
+		// Hyper-V MSRs - root partition identity (bare metal under Hyper-V, not a VM)
+		// Guest OS ID: Microsoft (0x0001), Windows NT (0x04), 10.0.19045
+		msr_values[0x40000000] = 0x0001040A00004A65;
+		msr_values[0x40000001] = 0x1;                // HV_X64_MSR_HYPERCALL: enabled
+		msr_values[0x40000002] = 0x0;                // HV_X64_MSR_VP_INDEX
+		msr_values[0x40000003] = 0x0;                // HV_X64_MSR_RESET
+		msr_values[0x40000004] = 0x0;                // HV_X64_MSR_VP_RUNTIME
+		msr_values[0x40000070] = 0x0;                // HV_X64_MSR_SCONTROL
+		msr_values[0x40000071] = 0x1;                // HV_X64_MSR_SVERSION
+		msr_values[0x40000100] = 0x0;                // HV_X64_MSR_VP_ASSIST_PAGE
+
 		error = emulator->hook_msr(
 			[emulator](const std::uint32_t msr_number, const bool write)
 			{
 				const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
 
-				kernel::handle_exception(emulator, rip, 0, 0);
+				if (write)
+				{
+					const auto rax = emulator->read_register<x86::reg::rax, std::uint64_t>();
+					const auto rdx = emulator->read_register<x86::reg::rdx, std::uint64_t>();
+					const std::uint64_t value = ((rdx & 0xFFFFFFFF) << 32) | (rax & 0xFFFFFFFF);
 
-				THREAD_LOG("msr 0x{:X} accessed at 0x{:X} (write={})", msr_number, rip, write);
+					msr_values[msr_number] = value;
+
+					THREAD_LOG("wrmsr 0x{:X} <- 0x{:X} at 0x{:X}", msr_number, value, rip);
+				}
+				else
+				{
+					const auto it = msr_values.find(msr_number);
+
+					if (it == msr_values.end())
+					{
+						THREAD_WARN_LOG("rdmsr 0x{:X} - unknown MSR at 0x{:X}, dispatching #GP", msr_number, rip);
+						constexpr std::uint32_t status_access_violation = 0xC0000005;
+						kernel::handle_exception(emulator, rip, status_access_violation, 0);
+						return;
+					}
+
+					const std::uint64_t value = it->second;
+
+					emulator->write_register<x86::reg::rax>(static_cast<std::uint64_t>(static_cast<std::uint32_t>(value)));
+					emulator->write_register<x86::reg::rdx>(static_cast<std::uint64_t>(static_cast<std::uint32_t>(value >> 32)));
+
+					THREAD_LOG("rdmsr 0x{:X} -> 0x{:X} at 0x{:X}", msr_number, value, rip);
+				}
+
+				emulator->write_register<x86::reg::rip>(rip + 2);
 			}
 		).error_or({});
 
 		error.throw_if("instruction hook attach");
-
-		/*error = emulator->hook_basic_block(
-			[emulator]()
-			{
-				const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
-
-				THREAD_LOG("basic block executed at 0x{:X}", rip);
-			},
-			kernel::emulated_module->base_address(),
-			kernel::emulated_module->base_address() + kernel::emulated_module->size()
-		).error_or({});
-
-		error.throw_if("basic block hook attach");*/
 
 		const auto current_cr3 = emulator->read_register<x86::reg::cr3, cr3>();
 

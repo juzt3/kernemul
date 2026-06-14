@@ -182,6 +182,33 @@ void hm::emulator_t::reset_guest_exit_state()
 
 	if (!partition_->set_msr_bitmap(property))
 		__debugbreak();
+
+	if (!msr_exit_entries_.empty())
+	{
+		partition_->set_msr_action_list(msr_exit_entries_);
+	}
+
+	partition_->set_unimplemented_msr_action(WHvMsrActionExit);
+}
+
+bool hm::emulator_t::monitor_msr(const std::uint32_t msr_index)
+{
+	for (const auto& entry : msr_exit_entries_)
+	{
+		if (entry.Index == msr_index)
+		{
+			return true;
+		}
+	}
+
+	WHV_MSR_ACTION_ENTRY entry = {};
+	entry.Index = msr_index;
+	entry.ReadAction = WHvMsrActionExit;
+	entry.WriteAction = WHvMsrActionExit;
+
+	msr_exit_entries_.push_back(entry);
+
+	return partition_->set_msr_action_list(msr_exit_entries_);
 }
 
 bool hm::emulator_t::map_physical_memory(const address_type physical_address, const size_type size,

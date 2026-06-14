@@ -464,15 +464,14 @@ static bool call_exception_handler(const std::shared_ptr<emulator_t>& emulator,
 		auto record = build_exception_record(original_rip, code, faulting_address);
 		auto ctx = build_context(emulator);
 
-		constexpr std::size_t shadow_space = 0x20;
-		constexpr std::size_t alloc_size = shadow_space + sizeof(EXCEPTION_RECORD) + sizeof(CONTEXT) + 16;
-
-		const auto allocation = emulator->heap_allocate(alloc_size, prot_read_write, true);
+		constexpr emulator_t::size_type filter_stack_size = 0x4000;
+		constexpr std::size_t data_offset = 0x100;
+		const auto allocation = emulator->heap_allocate(filter_stack_size, prot_read_write, true);
 		emulator_err_t error = allocation.error_or({});
 		error.throw_if("allocate filter context");
 
 		const auto alloc_base = *allocation;
-		const auto record_address = alloc_base + shadow_space;
+		const auto record_address = alloc_base + data_offset;
 		const auto context_address = record_address + sizeof(EXCEPTION_RECORD);
 		const auto pointers_address = context_address + sizeof(CONTEXT);
 
@@ -486,6 +485,11 @@ static bool call_exception_handler(const std::shared_ptr<emulator_t>& emulator,
 		error = emulator->write_virtual_memory(pointers_address, &exception_pointers, sizeof(exception_pointers));
 		error.throw_if("write exception pointers for filter");
 
+		const emulator_t::address_type filter_rsp = ((alloc_base + filter_stack_size) & ~0xFull) - 0x28;
+		const emulator_t::address_type filter_sentinel = emulator_t::thread_return_address;
+		error = emulator->write_virtual_memory(filter_rsp, &filter_sentinel, sizeof(filter_sentinel));
+		error.throw_if("write return sentinel for filter");
+
 		const auto saved_rcx = emulator->read_register<x86::reg::rcx, std::uint64_t>();
 		const auto saved_rdx = emulator->read_register<x86::reg::rdx, std::uint64_t>();
 		const auto saved_rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
@@ -493,7 +497,7 @@ static bool call_exception_handler(const std::shared_ptr<emulator_t>& emulator,
 
 		emulator->write_register<x86::reg::rcx>(pointers_address);
 		emulator->write_register<x86::reg::rdx>(unwind.establisher_frame);
-		emulator->write_register<x86::reg::rsp>(alloc_base);
+		emulator->write_register<x86::reg::rsp>(filter_rsp);
 
 		THREAD_LOG("  calling filter at 0x{:X}", filter_address);
 

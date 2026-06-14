@@ -28,7 +28,7 @@ public:
 	void load_folder(const std::filesystem::path& folder);
 	void on_thread_done(const std::shared_ptr<thread_t>& finished);
 
-	const std::vector<event_result_t>& results() const;
+	[[nodiscard]] const std::vector<event_result_t>& results() const;
 
 private:
 	void dispatch_next();

@@ -184,7 +184,7 @@ static bool handle_system_process_information(const std::shared_ptr<emulator_t>&
 
 		// convert name to wide string
 		const auto& name = proc->name();
-		std::wstring wide_name(name.begin(), name.end());
+		const auto wide_name = util::widen_string(name);
 		const auto name_bytes = wide_name.size() * sizeof(wchar_t);
 		const auto aligned_name = (name_bytes + 7) & ~static_cast<std::size_t>(7);
 

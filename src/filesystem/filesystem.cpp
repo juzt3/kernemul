@@ -223,8 +223,10 @@ bool filesystem_t::load_at(const std::string& host_path, const path_type& virtua
 {
 	std::filesystem::path vfs_path = std::filesystem::path("vfs\\").append(host_path);
 
-	if(host_path.substr(0, 3) == std::string("vfs"))
+	if (host_path.starts_with("vfs"))
+	{
 		vfs_path = host_path;
+	}
 
 	auto buffer = util::read_file(vfs_path);
 

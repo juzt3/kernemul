@@ -130,6 +130,13 @@ std::shared_ptr<process_t> kernel::create_process(const std::shared_ptr<emulator
 
 	std::memcpy(contents.ImageFileName, image_name.data(), copy_length);
 
+	const auto handle_table_address = emulator->heap_allocate(0x80, prot_read_write, true);
+
+	if (handle_table_address)
+	{
+		contents.ObjectTable = reinterpret_cast<_HANDLE_TABLE*>(*handle_table_address);
+	}
+
 	auto object = emulator_object_t<_EPROCESS>::allocate(emulator, contents, object_name);
 
 	auto process = std::make_shared<process_t>(process_id, section_base_address, std::move(object), std::string(image_name));

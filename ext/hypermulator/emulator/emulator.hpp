@@ -92,6 +92,8 @@ namespace hm
 		std::shared_ptr<hook_t> hook_instruction(hook_instruction_t instruction, const hook_t::instruction_callback& callback, address_type start_address = default_start_address, address_type end_address = default_end_address);
 		std::shared_ptr<hook_t> hook_msr(const hook_t::msr_callback& callback);
 
+		bool monitor_msr(std::uint32_t msr_index);
+
 		bool remove_hook(const std::shared_ptr<hook_t>& hook);
 
 		bool map_physical_memory(address_type physical_address, size_type size, protection_type protection);
@@ -214,6 +216,7 @@ namespace hm
 		std::vector<vmexit_callback_t::routine_type> single_step_callbacks_;
 
 		std::vector<std::shared_ptr<hook_t>> hooks_ = { };
+		std::vector<WHV_MSR_ACTION_ENTRY> msr_exit_entries_;
 
 		bool block_hook_was_control_flow_ = false;
 		bool pending_single_step_cancelled_ = false;

@@ -471,13 +471,18 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 
 			const auto saved_rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
 
-			constexpr std::size_t shadow_space = 0x20 + 8;
-			const auto call_stack = emulator->heap_allocate(shadow_space, prot_read_write, true);
+			constexpr emulator_t::size_type stack_size = 0x4000;
+			const auto call_stack = emulator->heap_allocate(stack_size, prot_read_write, true);
 			emulator_err_t error = call_stack.error_or({});
 			error.throw_if("allocate KeIpiGenericCall stack");
 
+			const emulator_t::address_type rsp = ((*call_stack + stack_size) & ~0xFull) - 0x28;
+			const emulator_t::address_type sentinel = emulator_t::thread_return_address;
+			error = emulator->write_virtual_memory(rsp, &sentinel, sizeof(sentinel));
+			error.throw_if("KeIpiGenericCall: write return sentinel");
+
 			emulator->write_register<x86::reg::rcx>(context);
-			emulator->write_register<x86::reg::rsp>(*call_stack + shadow_space);
+			emulator->write_register<x86::reg::rsp>(rsp);
 
 			THREAD_LOG("KeIpiGenericCall: invoking guest BroadcastFunction at 0x{:X} with context=0x{:X}",
 				broadcast_function, context);
@@ -498,14 +503,14 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 			const auto run_result = emulator->run_at(broadcast_function, emulator_t::thread_return_address);
 			completed->store(true);
 
-			if (!run_result)
+			if (run_result)
 			{
 				THREAD_WARN_LOG("KeIpiGenericCall: guest callback did not complete (timeout or error)");
 			}
 
 			emulator->write_register<x86::reg::rsp>(saved_rsp);
 
-			const auto result = run_result ? emulator->read_register<x86::reg::rax, std::uint64_t>() : 0ULL;
+			const auto result = !run_result ? emulator->read_register<x86::reg::rax, std::uint64_t>() : 0ULL;
 
 			THREAD_LOG("KeIpiGenericCall: guest callback returned 0x{:X}", result);
 
@@ -869,15 +874,20 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 
 				const auto filter_address = image_base + scope.handler_address;
 
-				constexpr std::size_t pointers_size = 16;
-				const auto pointers_alloc = emulator->heap_allocate(pointers_size + 0x20, prot_read_write, true);
-				error = pointers_alloc.error_or({});
-				error.throw_if("__C_specific_handler: allocate exception pointers");
+				constexpr emulator_t::size_type filter_stack_size = 0x4000;
+				const auto filter_alloc = emulator->heap_allocate(filter_stack_size, prot_read_write, true);
+				error = filter_alloc.error_or({});
+				error.throw_if("__C_specific_handler: allocate filter stack");
 
-				const auto pointers_address = *pointers_alloc + 0x20;
+				const auto pointers_address = *filter_alloc;
 				const std::uint64_t exception_pointers[2] = { exception_record_addr, context_record_addr };
 				error = emulator->write_virtual_memory(pointers_address, &exception_pointers, sizeof(exception_pointers));
 				error.throw_if("__C_specific_handler: write exception pointers");
+
+				const emulator_t::address_type filter_rsp = ((*filter_alloc + filter_stack_size) & ~0xFull) - 0x28;
+				const emulator_t::address_type filter_sentinel = emulator_t::thread_return_address;
+				error = emulator->write_virtual_memory(filter_rsp, &filter_sentinel, sizeof(filter_sentinel));
+				error.throw_if("__C_specific_handler: write return sentinel");
 
 				const auto saved_rcx = emulator->read_register<x86::reg::rcx, std::uint64_t>();
 				const auto saved_rdx = emulator->read_register<x86::reg::rdx, std::uint64_t>();
@@ -886,7 +896,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 
 				emulator->write_register<x86::reg::rcx>(pointers_address);
 				emulator->write_register<x86::reg::rdx>(establisher_frame);
-				emulator->write_register<x86::reg::rsp>(*pointers_alloc);
+				emulator->write_register<x86::reg::rsp>(filter_rsp);
 
 				THREAD_LOG("__C_specific_handler: calling filter at 0x{:X}", filter_address);
 
@@ -1111,6 +1121,39 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 		},
 		mapped_image,
 		"PsGetProcessImageFileName"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto process_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+
+			_EPROCESS eprocess{};
+			static_cast<void>(emulator->read_virtual_memory(process_address + offsetof(_EPROCESS, SectionBaseAddress),
+				&eprocess.SectionBaseAddress, sizeof(eprocess.SectionBaseAddress)));
+
+			const auto result = reinterpret_cast<emulator_t::address_type>(eprocess.SectionBaseAddress);
+
+			THREAD_LOG("PsGetProcessSectionBaseAddress called (process=0x{:X}) -> 0x{:X}",
+				process_address, result);
+
+			write_return_value(emulator, result);
+		},
+		mapped_image,
+		"PsGetProcessSectionBaseAddress"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto process_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+
+			THREAD_LOG("PsGetProcessSessionId called (process=0x{:X}) -> 0", process_address);
+
+			write_return_value(emulator, static_cast<std::uint32_t>(0));
+		},
+		mapped_image,
+		"PsGetProcessSessionId"
 	);
 
 	redirect_function(
@@ -2124,7 +2167,6 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 		"ExQueueWorkItem"
 	);
 
-	// todo: actually create symbolic link in object namespace
 	redirect_function(
 		[emulator]
 		{
@@ -2184,10 +2226,15 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 
 			const auto saved_rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
 
-			constexpr std::size_t shadow_space = 0x20 + 8;
-			const auto call_stack = emulator->heap_allocate(shadow_space, prot_read_write, true);
+			constexpr emulator_t::size_type callback_stack_size = 0x4000;
+			const auto call_stack = emulator->heap_allocate(callback_stack_size, prot_read_write, true);
 			error = call_stack.error_or({});
 			error.throw_if("qsort: allocate call stack");
+
+			const emulator_t::address_type callback_rsp = ((*call_stack + callback_stack_size) & ~0xFull) - 0x28;
+			const emulator_t::address_type sentinel = emulator_t::thread_return_address;
+			error = emulator->write_virtual_memory(callback_rsp, &sentinel, sizeof(sentinel));
+			error.throw_if("qsort: write return sentinel");
 
 			std::vector<std::size_t> indices(num_elements);
 			std::iota(indices.begin(), indices.end(), 0);
@@ -2200,13 +2247,15 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 
 					emulator->write_register<x86::reg::rcx>(addr_a);
 					emulator->write_register<x86::reg::rdx>(addr_b);
-					emulator->write_register<x86::reg::rsp>(*call_stack + shadow_space);
+					emulator->write_register<x86::reg::rsp>(callback_rsp);
 
 					const auto run_result = emulator->run_at(comparator, emulator_t::thread_return_address);
 
-					if (!run_result)
+					if (run_result)
 					{
-						THREAD_ERR_LOG("qsort: comparator call failed");
+						const auto failed_rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
+						const auto failed_rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
+						THREAD_ERR_LOG("qsort: comparator call failed (rip=0x{:X}, rsp=0x{:X})", failed_rip, failed_rsp);
 						return false;
 					}
 
@@ -3143,7 +3192,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 
 			// build a fake path
 			const std::wstring path = L"\\Device\\HarddiskVolume3\\Windows\\System32\\" +
-				std::wstring(name.begin(), name.end());
+				util::widen_string(name);
 
 			const auto name_bytes = static_cast<std::uint16_t>(path.size() * sizeof(wchar_t));
 

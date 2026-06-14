@@ -345,6 +345,11 @@ std::expected<emulator_t::hook_type, emulator_err_t> hypermulator_t::hook_memory
 	return add_native_hook(native_hooks, callback);
 }
 
+emulator_err_t hypermulator_t::monitor_msr(const std::uint32_t msr_index)
+{
+	return emulator_err_t{ backend_->monitor_msr(msr_index) };
+}
+
 void hypermulator_t::cancel_pending_single_step()
 {
 	backend_->cancel_pending_single_step();

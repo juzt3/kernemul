@@ -279,110 +279,62 @@ void redirect_ntoskrnl_object_functions(const std::shared_ptr<emulator_t>& emula
 		"ObUnRegisterCallbacks"
 	);
 
-	redirect_function(
-		[emulator]
+	const auto open_directory_handler = [emulator](const std::string_view caller_name)
+	{
+		const auto handle_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+		const auto desired_access = emulator->read_register<x86::reg::rdx, std::uint32_t>();
+		const auto object_attributes_address = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
+
+		std::string directory_name;
+
+		if (object_attributes_address)
 		{
-			const auto handle_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
-			const auto desired_access = emulator->read_register<x86::reg::rdx, std::uint32_t>();
-			const auto object_attributes_address = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
+			OBJECT_ATTRIBUTES object_attributes = {};
+			emulator_err_t error = emulator->read_virtual_memory(object_attributes_address, &object_attributes, sizeof(object_attributes));
+			error.throw_if("OpenDirectoryObject: read OBJECT_ATTRIBUTES");
 
-			std::string directory_name;
+			const auto name_address = reinterpret_cast<emulator_t::address_type>(object_attributes.ObjectName);
 
-			if (object_attributes_address)
+			if (name_address)
 			{
-				OBJECT_ATTRIBUTES object_attributes = {};
-				emulator_err_t error = emulator->read_virtual_memory(object_attributes_address, &object_attributes, sizeof(object_attributes));
-				error.throw_if("NtOpenDirectoryObject: read OBJECT_ATTRIBUTES");
+				UNICODE_STRING unicode_string = {};
+				error = emulator->read_virtual_memory(name_address, &unicode_string, sizeof(unicode_string));
+				error.throw_if("OpenDirectoryObject: read UNICODE_STRING");
 
-				const auto name_address = reinterpret_cast<emulator_t::address_type>(object_attributes.ObjectName);
+				const auto buffer_address = reinterpret_cast<emulator_t::address_type>(unicode_string.Buffer);
 
-				if (name_address)
+				if (buffer_address && unicode_string.Length)
 				{
-					UNICODE_STRING unicode_string = {};
-					error = emulator->read_virtual_memory(name_address, &unicode_string, sizeof(unicode_string));
-					error.throw_if("NtOpenDirectoryObject: read UNICODE_STRING");
-
-					const auto buffer_address = reinterpret_cast<emulator_t::address_type>(unicode_string.Buffer);
-
-					if (buffer_address && unicode_string.Length)
-					{
-						directory_name = util::narrow_wstring(kernel::read_guest_wstring(*emulator, buffer_address));
-					}
+					directory_name = util::narrow_wstring(kernel::read_guest_wstring(*emulator, buffer_address));
 				}
 			}
+		}
 
-			constexpr std::size_t directory_body_size = 0x40;
-			std::array<std::uint8_t, directory_body_size> body{};
-			const auto body_address = kernel::object_manager->create_object(0, body.data(), body.size());
-			const auto handle_value = kernel::object_manager->create_handle(body_address, desired_access);
+		constexpr std::size_t directory_body_size = 0x40;
+		std::array<std::uint8_t, directory_body_size> body{};
+		const auto body_address = kernel::object_manager->create_object(0, body.data(), body.size());
+		const auto handle_value = kernel::object_manager->create_handle(body_address, desired_access);
 
-			if (handle_address)
-			{
-				emulator_err_t error = emulator->write_virtual_memory(handle_address, &handle_value, sizeof(handle_value));
-				error.throw_if("NtOpenDirectoryObject: write handle");
-			}
+		if (handle_address)
+		{
+			emulator_err_t error = emulator->write_virtual_memory(handle_address, &handle_value, sizeof(handle_value));
+			error.throw_if("OpenDirectoryObject: write handle");
+		}
 
-			THREAD_LOG("NtOpenDirectoryObject called (handle_address=0x{:X}, access=0x{:X}, name='{}') -> handle=0x{:X}",
-				handle_address, desired_access, directory_name, handle_value);
+		THREAD_LOG("{} called (handle_address=0x{:X}, access=0x{:X}, name='{}') -> handle=0x{:X}",
+			caller_name, handle_address, desired_access, directory_name, handle_value);
 
-			write_nt_success(emulator);
-		},
-		mapped_image,
-		"NtOpenDirectoryObject"
+		write_nt_success(emulator);
+	};
+
+	redirect_function(
+		[open_directory_handler] { open_directory_handler("NtOpenDirectoryObject"); },
+		mapped_image, "NtOpenDirectoryObject"
 	);
 
-	// alias for kernel-mode callers
 	redirect_function(
-		[emulator]
-		{
-			const auto handle_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
-			const auto desired_access = emulator->read_register<x86::reg::rdx, std::uint32_t>();
-			const auto object_attributes_address = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
-
-			std::string directory_name = "(unknown)";
-
-			if (object_attributes_address)
-			{
-				OBJECT_ATTRIBUTES object_attributes = {};
-				emulator_err_t error = emulator->read_virtual_memory(
-					object_attributes_address, &object_attributes, sizeof(object_attributes));
-				error.throw_if("ZwOpenDirectoryObject: read OBJECT_ATTRIBUTES");
-
-				const auto name_address = reinterpret_cast<emulator_t::address_type>(object_attributes.ObjectName);
-
-				if (name_address)
-				{
-					UNICODE_STRING unicode_string = {};
-					error = emulator->read_virtual_memory(name_address, &unicode_string, sizeof(unicode_string));
-					error.throw_if("ZwOpenDirectoryObject: read UNICODE_STRING");
-
-					const auto buffer_address = reinterpret_cast<emulator_t::address_type>(unicode_string.Buffer);
-
-					if (buffer_address && unicode_string.Length)
-					{
-						directory_name = util::narrow_wstring(kernel::read_guest_wstring(*emulator, buffer_address));
-					}
-				}
-			}
-
-			constexpr std::size_t directory_body_size = 0x40;
-			std::array<std::uint8_t, directory_body_size> body{};
-			const auto body_address = kernel::object_manager->create_object(0, body.data(), body.size());
-			const auto handle_value = kernel::object_manager->create_handle(body_address, desired_access);
-
-			if (handle_address)
-			{
-				emulator_err_t error = emulator->write_virtual_memory(handle_address, &handle_value, sizeof(handle_value));
-				error.throw_if("ZwOpenDirectoryObject: write handle");
-			}
-
-			THREAD_LOG("ZwOpenDirectoryObject called (handle_address=0x{:X}, access=0x{:X}, name='{}') -> handle=0x{:X}",
-				handle_address, desired_access, directory_name, handle_value);
-
-			write_nt_success(emulator);
-		},
-		mapped_image,
-		"ZwOpenDirectoryObject"
+		[open_directory_handler] { open_directory_handler("ZwOpenDirectoryObject"); },
+		mapped_image, "ZwOpenDirectoryObject"
 	);
 
 	redirect_function(
@@ -417,6 +369,58 @@ void redirect_ntoskrnl_object_functions(const std::shared_ptr<emulator_t>& emula
 		[dereference_handler] { dereference_handler("ObfDereferenceObjectWithTag"); },
 		mapped_image,
 		"ObfDereferenceObjectWithTag"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto process_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+
+			emulator_t::address_type object_table = 0;
+			static_cast<void>(emulator->read_virtual_memory(process_address + offsetof(_EPROCESS, ObjectTable),
+				&object_table, sizeof(object_table)));
+
+			THREAD_LOG("ObReferenceProcessHandleTable called (process=0x{:X}) -> 0x{:X}",
+				process_address, object_table);
+
+			write_return_value(emulator, object_table);
+		},
+		mapped_image,
+		"ObReferenceProcessHandleTable"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto process_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+
+			THREAD_LOG("ObDereferenceProcessHandleTable called (process=0x{:X})", process_address);
+		},
+		mapped_image,
+		"ObDereferenceProcessHandleTable"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto handle_table = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto callback = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+			const auto context = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
+			const auto handle_out = emulator->read_register<x86::reg::r9, emulator_t::address_type>();
+
+			THREAD_LOG("ExEnumHandleTable called (table=0x{:X}, callback=0x{:X}, context=0x{:X}, handle_out=0x{:X})",
+				handle_table, callback, context, handle_out);
+
+			if (handle_out)
+			{
+				emulator_t::address_type zero = 0;
+				static_cast<void>(emulator->write_virtual_memory(handle_out, &zero, sizeof(zero)));
+			}
+
+			write_return_value(emulator, static_cast<std::uint64_t>(0));
+		},
+		mapped_image,
+		"ExEnumHandleTable"
 	);
 
 	redirect_function(

@@ -110,6 +110,8 @@ namespace hm
 		bool run_vmexit_callbacks(guest_virtual_processor_t& virtual_processor, vmexit_context_t& context) const;
 
 		bool set_msr_bitmap(const WHV_PARTITION_PROPERTY& property);
+		bool set_msr_action_list(std::span<const WHV_MSR_ACTION_ENTRY> entries);
+		bool set_unimplemented_msr_action(WHV_MSR_ACTION action);
 
 		SET_EXCEPTION_EXITING(debug, WHvX64ExceptionTypeDebugTrapOrFault)
 		SET_EXCEPTION_EXITING(page_fault, WHvX64ExceptionTypePageFault)
