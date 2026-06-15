@@ -617,22 +617,30 @@ std::int32_t main()
 
 		static std::unordered_map<std::uint32_t, std::uint64_t> msr_values;
 
-		// pre-seed MSR values that were set via write_msr before the hook
-		if (const auto ki_system_call = nt_image->find_symbol("KiSystemCall64"))
-		{
-			msr_values[0xC0000082] = *ki_system_call; // IA32_LSTAR
-		}
+		// pre-seed monitored MSRs from current VP state (set during boot before hook)
+		msr_values[0xC0000080] = *emulator->read_msr(x86::msr::efer);
+		msr_values[0xC0000081] = *emulator->read_msr(x86::msr::star);
+		msr_values[0xC0000082] = *emulator->read_msr(x86::msr::lstar);
+		msr_values[0xC0000083] = *emulator->read_msr(x86::msr::cstar);
+		msr_values[0xC0000084] = *emulator->read_msr(x86::msr::sfmask);
 
-		// Hyper-V MSRs - root partition identity (bare metal under Hyper-V, not a VM)
-		// Guest OS ID: Microsoft (0x0001), Windows NT (0x04), 10.0.19045
-		msr_values[0x40000000] = 0x0001040A00004A65;
-		msr_values[0x40000001] = 0x1;                // HV_X64_MSR_HYPERCALL: enabled
-		msr_values[0x40000002] = 0x0;                // HV_X64_MSR_VP_INDEX
-		msr_values[0x40000003] = 0x0;                // HV_X64_MSR_RESET
-		msr_values[0x40000004] = 0x0;                // HV_X64_MSR_VP_RUNTIME
-		msr_values[0x40000070] = 0x0;                // HV_X64_MSR_SCONTROL
-		msr_values[0x40000071] = 0x1;                // HV_X64_MSR_SVERSION
-		msr_values[0x40000100] = 0x0;                // HV_X64_MSR_VP_ASSIST_PAGE
+		// monitored MSRs not readable via emulator API - known defaults
+		msr_values[0x174] = 0;                        // IA32_SYSENTER_CS
+		msr_values[0x175] = 0;                        // IA32_SYSENTER_ESP
+		msr_values[0x176] = 0;                        // IA32_SYSENTER_EIP
+		msr_values[0x277] = 0x0007040600070406;       // IA32_PAT (power-on default)
+		msr_values[0xC0000102] = 0;                   // IA32_KERNEL_GS_BASE
+		msr_values[0xC0000103] = 0;                   // IA32_TSC_AUX
+
+		// Hyper-V MSRs
+		msr_values[0x40000000] = 0x0001040A00004A65;    // HV_X64_MSR_GUEST_OS_ID (Win NT 10.0.19045)
+		msr_values[0x40000001] = (0x100ULL << 12) | 1;  // HV_X64_MSR_HYPERCALL (enabled, PFN=0x100)
+		msr_values[0x40000002] = 0;                      // HV_X64_MSR_VP_INDEX
+		msr_values[0x40000003] = 0;                      // HV_X64_MSR_RESET
+		msr_values[0x40000070] = 0;                      // HV_X64_MSR_SCONTROL
+		msr_values[0x40000071] = 1;                      // HV_X64_MSR_SVERSION
+		msr_values[0x40000100] = 0;                      // HV_X64_MSR_VP_ASSIST_PAGE
+
 
 		error = emulator->hook_msr(
 			[emulator](const std::uint32_t msr_number, const bool write)
