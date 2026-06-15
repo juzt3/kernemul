@@ -166,6 +166,17 @@ static void set_up_ntoskrnl_globals(const std::shared_ptr<emulator_t>& emulator,
 		error.throw_if("write MmSystemRangeStart");
 	}
 
+	// MmPteBase - virtual base of the PTE self-referencing address space
+	// PML4 index 0x1E1 is set as the self-referencing entry in set_up_page_tables()
+	if (const auto symbol = nt_image->find_symbol("MmPteBase"))
+	{
+		constexpr std::uint64_t pte_base = 0xFFFFF08000000000;
+		const emulator_err_t error = emulator->write_virtual_memory(*symbol, &pte_base, sizeof(pte_base));
+		error.throw_if("write MmPteBase");
+
+		GLOBAL_LOG("initialized MmPteBase at 0x{:X} -> 0x{:X}", *symbol, pte_base);
+	}
+
 	// initialize empty LIST_ENTRY heads in ntoskrnl that the driver walks
 	const char* list_head_symbols[] = {
 		"PiDDBCacheList",
@@ -663,11 +674,6 @@ std::int32_t main()
 		).error_or({});
 
 		error.throw_if("instruction hook attach");
-
-		const auto current_cr3 = emulator->read_register<x86::reg::cr3, cr3>();
-
-		emulator->map_virtual_page(0xFFFFF0F87C3E1000, current_cr3.address_of_page_directory << 12);
-		emulator->map_virtual_page(0xFFFFF0F87C3FF000, current_cr3.address_of_page_directory << 12);
 
 		kernel::driver_object = set_up_driver_entry(emulator);
 

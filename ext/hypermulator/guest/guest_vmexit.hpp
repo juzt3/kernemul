@@ -40,6 +40,9 @@ namespace hm
 	enum class exception_id_t : std::uint8_t
 	{
 		debug_trap = 1,
+		breakpoint = 3,
+		invalid_opcode = 6,
+		general_protection = 13,
 		page_fault = 14
 	};
 

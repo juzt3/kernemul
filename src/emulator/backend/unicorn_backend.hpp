@@ -74,6 +74,8 @@ public:
 	                                                     protection_type monitored_protection,
 	                                                     address_type start_address, address_type end_address) override;
 
+	std::expected<hook_type, emulator_err_t> hook_msr(const emulator_hook_t::msr_callback& callback) override;
+
 	void cancel_pending_single_step() override { }
 
 	[[nodiscard]] std::expected<msr_value_type, emulator_err_t> read_msr(x86::msr msr) const override;

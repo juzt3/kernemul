@@ -70,7 +70,8 @@ namespace hm
 
 		~guest_partition_t();
 
-		[[nodiscard]] bool set_up();
+		[[nodiscard]] bool configure();
+	[[nodiscard]] bool finalize();
 
 		[[nodiscard]] handle_type handle() const;
 
@@ -114,6 +115,7 @@ namespace hm
 		bool set_unimplemented_msr_action(WHV_MSR_ACTION action);
 
 		SET_EXCEPTION_EXITING(debug, WHvX64ExceptionTypeDebugTrapOrFault)
+		SET_EXCEPTION_EXITING(invalid_opcode, WHvX64ExceptionTypeInvalidOpcodeFault)
 		SET_EXCEPTION_EXITING(page_fault, WHvX64ExceptionTypePageFault)
 
 		SET_EXTENDED_VMEXIT_EXITING(cpuid, X64CpuidExit)

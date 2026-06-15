@@ -45,15 +45,15 @@ hm::guest_partition_t::~guest_partition_t()
 	delete_partition();
 }
 
-bool hm::guest_partition_t::set_up()
+bool hm::guest_partition_t::configure()
 {
 	const size_type processor_count = virtual_processors_.size();
 
-	if (!set_code_processor_count(processor_count))
-	{
-		return false;
-	}
+	return set_code_processor_count(processor_count);
+}
 
+bool hm::guest_partition_t::finalize()
+{
 	if (FAILED(WHvSetupPartition(handle_)))
 	{
 		return false;

@@ -471,6 +471,12 @@ emulator_err_t unicorn_emulator_t::write_msr_safe(const x86::msr msr, const msr_
 	return emulator_err_t{ uc_reg_write(backend_, UC_X86_REG_MSR, &uc_msr) };
 }
 
+std::expected<emulator_t::hook_type, emulator_err_t> unicorn_emulator_t::hook_msr(
+	const emulator_hook_t::msr_callback& callback)
+{
+	return std::unexpected(emulator_err_t{ false });
+}
+
 unicorn_emulator_t::backend_type unicorn_emulator_t::native_backend() const
 {
 	return backend_;

@@ -49,7 +49,6 @@ namespace hm
 		using memory_access_callback = std::function<void(address_type address, memory_vmexit_t::access access)>;
 		using invalid_memory_callback = std::function<bool(address_type address, memory_vmexit_t::access access)>; // returns true = has handled invalid access properly (e.g. mapping address in)
 		using msr_callback = std::function<void(std::uint32_t msr_number, bool write)>;
-
 		using callback_type = std::variant<instruction_callback, code_callback, memory_access_callback, invalid_memory_callback, msr_callback>;
 		using data_type = std::variant<hook_instruction_t, hook_memory_t, hook_basic_block_t>;
 
@@ -91,7 +90,6 @@ namespace hm
 		std::shared_ptr<hook_t> hook_invalid_memory(protection_type protection, const hook_t::invalid_memory_callback& callback, address_type start_address = default_start_address, address_type end_address = default_end_address);
 		std::shared_ptr<hook_t> hook_instruction(hook_instruction_t instruction, const hook_t::instruction_callback& callback, address_type start_address = default_start_address, address_type end_address = default_end_address);
 		std::shared_ptr<hook_t> hook_msr(const hook_t::msr_callback& callback);
-
 		bool monitor_msr(std::uint32_t msr_index);
 
 		bool remove_hook(const std::shared_ptr<hook_t>& hook);
@@ -160,6 +158,7 @@ namespace hm
 
 	protected:
 		bool configure_single_step();
+		void configure_msr_properties();
 		void reset_guest_exit_state();
 
 		void single_step(guest_virtual_processor_t& processor, vmexit_context_t& context);

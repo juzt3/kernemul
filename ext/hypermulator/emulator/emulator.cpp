@@ -38,9 +38,16 @@ hm::emulator_t::emulator_t(const machine_mode_t mode)
 		:	partition_(std::make_shared<guest_partition_t>(1)),
 			mode_(mode)
 {
-	if (!partition_->set_up())
+	if (!partition_->configure())
 	{
-		throw std::runtime_error("unable to set up partition");
+		throw std::runtime_error("unable to configure partition");
+	}
+
+	configure_msr_properties();
+
+	if (!partition_->finalize())
+	{
+		throw std::runtime_error("unable to finalize partition");
 	}
 
 	if (!load_cpu_mode_default_state())
@@ -119,6 +126,29 @@ bool hm::emulator_t::configure_single_step()
 	return partition_->set_debug_exception_exiting(true);
 }
 
+void hm::emulator_t::configure_msr_properties()
+{
+	partition_->set_msr_access_exiting(true);
+
+	WHV_PARTITION_PROPERTY property = {};
+	property.X64MsrExitBitmap.UnhandledMsrs = true;
+	property.X64MsrExitBitmap.TscMsrWrite = true;
+	property.X64MsrExitBitmap.TscMsrRead = true;
+	property.X64MsrExitBitmap.ApicBaseMsrWrite = true;
+	property.X64MsrExitBitmap.MiscEnableMsrRead = true;
+	property.X64MsrExitBitmap.McUpdatePatchLevelMsrRead = true;
+
+	if (!partition_->set_msr_bitmap(property))
+		__debugbreak();
+
+	if (!msr_exit_entries_.empty())
+	{
+		partition_->set_msr_action_list(msr_exit_entries_);
+	}
+
+	partition_->set_unimplemented_msr_action(WHvMsrActionExit);
+}
+
 void hm::emulator_t::reset_guest_exit_state()
 {
 	partition_->register_vmexit_callback(vmexit_reason_t::exception,
@@ -170,25 +200,6 @@ void hm::emulator_t::reset_guest_exit_state()
 
 	partition_->set_debug_exception_exiting(false);
 	partition_->set_page_fault_exception_exiting(true);
-	partition_->set_msr_access_exiting(true);
-
-	WHV_PARTITION_PROPERTY property = {};
-	property.X64MsrExitBitmap.UnhandledMsrs = true;
-	property.X64MsrExitBitmap.TscMsrWrite = true;
-	property.X64MsrExitBitmap.TscMsrRead = true;
-	property.X64MsrExitBitmap.ApicBaseMsrWrite = true;
-	property.X64MsrExitBitmap.MiscEnableMsrRead = true;
-	property.X64MsrExitBitmap.McUpdatePatchLevelMsrRead = true;
-
-	if (!partition_->set_msr_bitmap(property))
-		__debugbreak();
-
-	if (!msr_exit_entries_.empty())
-	{
-		partition_->set_msr_action_list(msr_exit_entries_);
-	}
-
-	partition_->set_unimplemented_msr_action(WHvMsrActionExit);
 }
 
 bool hm::emulator_t::monitor_msr(const std::uint32_t msr_index)

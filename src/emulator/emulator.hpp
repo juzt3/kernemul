@@ -182,7 +182,6 @@ public:
 	using msr_callback = std::function<void(std::uint32_t msr_number, bool write)>;
 	using code_callback = std::function<void()>;
 	using instruction_callback = std::function<bool()>; // returns true = instruction should be skipped
-
 	using callback_type = std::variant<invalid_memory_callback, memory_access_callback, code_callback, instruction_callback, msr_callback>;
 
 	emulator_hook_t() = default;
