@@ -782,13 +782,10 @@ static bool handle_system_secure_speculation_control(const std::shared_ptr<emula
 	return true;
 }
 
-static void handle_query_system_information(const std::shared_ptr<emulator_t>& emulator)
+static void handle_query_system_information(const std::shared_ptr<emulator_t>& emulator,
+	std::uint32_t info_class, emulator_t::address_type buffer_address,
+	std::uint32_t buffer_length, emulator_t::address_type return_length_address)
 {
-	const auto info_class = emulator->read_register<x86::reg::rcx, std::uint32_t>();
-	const auto buffer_address = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
-	const auto buffer_length = emulator->read_register<x86::reg::r8, std::uint32_t>();
-	const auto return_length_address = emulator->read_register<x86::reg::r9, emulator_t::address_type>();
-
 	THREAD_LOG("NtQuerySystemInformation called (class=0x{:X}, buffer=0x{:X}, length=0x{:X}, return_length=0x{:X})",
 		info_class, buffer_address, buffer_length, return_length_address);
 
@@ -987,20 +984,11 @@ static void handle_query_system_information(const std::shared_ptr<emulator_t>& e
 	write_nt_status(emulator, status);
 }
 
-static void handle_query_system_information_ex(const std::shared_ptr<emulator_t>& emulator)
+static void handle_query_system_information_ex(const std::shared_ptr<emulator_t>& emulator,
+	std::uint32_t info_class, emulator_t::address_type input_buffer_address,
+	std::uint32_t input_buffer_length, emulator_t::address_type buffer_address,
+	std::uint32_t buffer_length, emulator_t::address_type return_length_address)
 {
-	const auto info_class = emulator->read_register<x86::reg::rcx, std::uint32_t>();
-	const auto input_buffer_address = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
-	const auto input_buffer_length = emulator->read_register<x86::reg::r8, std::uint32_t>();
-	const auto buffer_address = emulator->read_register<x86::reg::r9, emulator_t::address_type>();
-
-	const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
-
-	std::uint32_t buffer_length = 0;
-	emulator_t::address_type return_length_address = 0;
-	static_cast<void>(emulator->read_virtual_memory(rsp + 0x28, &buffer_length, sizeof(buffer_length)));
-	static_cast<void>(emulator->read_virtual_memory(rsp + 0x30, &return_length_address, sizeof(return_length_address)));
-
 	THREAD_LOG("NtQuerySystemInformationEx called (class=0x{:X}, input=0x{:X}, input_len=0x{:X}, "
 		"buffer=0x{:X}, length=0x{:X}, return_length=0x{:X})",
 		info_class, input_buffer_address, input_buffer_length,
@@ -1096,27 +1084,8 @@ static void handle_query_system_information_ex(const std::shared_ptr<emulator_t>
 void redirect_ntoskrnl_sysinfo_functions(const std::shared_ptr<emulator_t>& emulator,
 	const kernel_image_t& mapped_image)
 {
-	redirect_function(
-		[emulator] { handle_query_system_information(emulator); },
-		mapped_image,
-		"NtQuerySystemInformation"
-	);
-
-	redirect_function(
-		[emulator] { handle_query_system_information(emulator); },
-		mapped_image,
-		"ZwQuerySystemInformation"
-	);
-
-	redirect_function(
-		[emulator] { handle_query_system_information_ex(emulator); },
-		mapped_image,
-		"NtQuerySystemInformationEx"
-	);
-
-	redirect_function(
-		[emulator] { handle_query_system_information_ex(emulator); },
-		mapped_image,
-		"ZwQuerySystemInformationEx"
-	);
+	redirect_handler<handle_query_system_information>(emulator, mapped_image, "NtQuerySystemInformation");
+	redirect_handler<handle_query_system_information>(emulator, mapped_image, "ZwQuerySystemInformation");
+	redirect_handler<handle_query_system_information_ex>(emulator, mapped_image, "NtQuerySystemInformationEx");
+	redirect_handler<handle_query_system_information_ex>(emulator, mapped_image, "ZwQuerySystemInformationEx");
 }
