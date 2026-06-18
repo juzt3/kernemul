@@ -28,6 +28,8 @@ constexpr std::uint32_t status_integer_overflow = 0xC0000095;
 constexpr std::uint32_t status_success = 0x00000000;
 
 constexpr std::uint32_t system_process_information = 0x05;
+constexpr std::uint32_t system_basic_information = 0x00;
+constexpr std::uint32_t system_emulation_basic_information = 0x3E;
 constexpr std::uint32_t system_module_information = 0x0B;
 constexpr std::uint32_t system_handle_information = 0x10;
 constexpr std::uint32_t system_page_file_information = 0x12;
@@ -789,6 +791,59 @@ static void handle_query_system_information(const std::shared_ptr<emulator_t>& e
 	THREAD_LOG("NtQuerySystemInformation called (class=0x{:X}, buffer=0x{:X}, length=0x{:X}, return_length=0x{:X})",
 		info_class, buffer_address, buffer_length, return_length_address);
 
+	// SystemBasicInformation / SystemEmulationBasicInformation - hardcoded like sogen
+	if (info_class == system_basic_information || info_class == system_emulation_basic_information)
+	{
+		struct system_basic_info
+		{
+			std::uint32_t reserved;
+			std::uint32_t timer_resolution;
+			std::uint32_t page_size;
+			std::uint32_t number_of_physical_pages;
+			std::uint32_t lowest_physical_page_number;
+			std::uint32_t highest_physical_page_number;
+			std::uint32_t allocation_granularity;
+			std::uint64_t minimum_user_mode_address;
+			std::uint64_t maximum_user_mode_address;
+			std::uint64_t active_processors_affinity_mask;
+			std::uint8_t number_of_processors;
+		};
+
+		constexpr std::uint32_t required_size = 0x40;
+		if (buffer_length < required_size)
+		{
+			if (return_length_address)
+			{
+				static_cast<void>(emulator->write_virtual_memory(return_length_address, &required_size, sizeof(required_size)));
+			}
+			write_nt_status(emulator, status_info_length_mismatch);
+			return;
+		}
+
+		std::array<std::uint8_t, required_size> buf{};
+		auto& info = *reinterpret_cast<system_basic_info*>(buf.data());
+		info.reserved = 0;
+		info.timer_resolution = 0x0002625A;
+		info.page_size = 0x1000;
+		info.number_of_physical_pages = 0;
+		info.lowest_physical_page_number = 0x00000001;
+		info.highest_physical_page_number = 0x00C9C7FF;
+		info.allocation_granularity = 0x10000;
+		info.minimum_user_mode_address = 0x10000;
+		info.maximum_user_mode_address = 0x7FFFFFFEFFFF;
+		info.active_processors_affinity_mask = 0x0F;
+		info.number_of_processors = 4;
+
+		static_cast<void>(emulator->write_virtual_memory(buffer_address, buf.data(), required_size));
+		if (return_length_address)
+		{
+			static_cast<void>(emulator->write_virtual_memory(return_length_address, &required_size, sizeof(required_size)));
+		}
+		THREAD_LOG("NtQuerySystemInformation: SystemBasicInformation -> hardcoded (MaxUserAddr=0x7FFFFFFEFFFF, Processors=4)");
+		write_nt_status(emulator, status_success);
+		return;
+	}
+
 	// handle classes we can serve from emulated state
 	if (info_class == system_module_information)
 	{
@@ -862,12 +917,53 @@ static void handle_query_system_information(const std::shared_ptr<emulator_t>& e
 		}
 	}
 
+	// SystemNumaProcessorMap (0x37) - SYSTEM_NUMA_INFORMATION64
+	// Layout: HighestNodeNumber (ULONG) + Reserved (ULONG) + union of arrays[MAXIMUM_NODE_COUNT=64]
+	// Union: GROUP_AFFINITY[64] (each 16 bytes) / ULONGLONG AvailableMemory[64] / ULONGLONG Pad[128]
+	// Total size: 8 + max(64*16, 64*8, 128*8) = 8 + 1024 = 0x408
+	if (info_class == 0x37)
+	{
+		constexpr std::uint32_t required_size = 0x408;
+		if (buffer_length < required_size)
+		{
+			if (return_length_address)
+			{
+				static_cast<void>(emulator->write_virtual_memory(return_length_address, &required_size, sizeof(required_size)));
+			}
+			write_nt_status(emulator, status_info_length_mismatch);
+			return;
+		}
+
+		std::array<std::uint8_t, required_size> buf{};
+		// HighestNodeNumber = 0 (single NUMA node), Reserved = 0
+		// ActiveProcessorsGroupAffinity[0].Mask at offset 8
+		const std::uint64_t mask = 0xFFF;
+		std::memcpy(buf.data() + 0x08, &mask, sizeof(mask));
+
+		static_cast<void>(emulator->write_virtual_memory(buffer_address, buf.data(), required_size));
+		if (return_length_address)
+		{
+			static_cast<void>(emulator->write_virtual_memory(return_length_address, &required_size, sizeof(required_size)));
+		}
+		THREAD_LOG("NtQuerySystemInformation: class 0x37 (NUMA) -> hardcoded (size=0x{:X})", required_size);
+		write_nt_status(emulator, status_success);
+		return;
+	}
+
 	// intercept remaining classes that may leak host state
-	if (info_class == 0x5B || info_class == 0xC5)
+	if (info_class == 0x5B)
 	{
 		THREAD_LOG("NtQuerySystemInformation(0x{:X}): returning STATUS_ACCESS_DENIED", info_class);
 		constexpr std::uint32_t status_access_denied = 0xC0000022;
 		write_nt_status(emulator, status_access_denied);
+		return;
+	}
+
+	if (info_class == 0xC5)
+	{
+		THREAD_LOG("NtQuerySystemInformation(0x{:X}): returning STATUS_NOT_SUPPORTED", info_class);
+		constexpr std::uint32_t status_not_supported = 0xC00000BB;
+		write_nt_status(emulator, status_not_supported);
 		return;
 	}
 
@@ -886,6 +982,13 @@ static void handle_query_system_information(const std::shared_ptr<emulator_t>& e
 			static_cast<void>(emulator->write_virtual_memory(return_length_address, &ret_len, sizeof(ret_len)));
 		}
 		write_nt_status(emulator, status_success);
+		return;
+	}
+
+	if (info_class == 0xC0)
+	{
+		THREAD_LOG("NtQuerySystemInformation(0xC0): returning STATUS_NOT_IMPLEMENTED");
+		write_nt_status(emulator, status_not_implemented);
 		return;
 	}
 
@@ -994,6 +1097,143 @@ static void handle_query_system_information_ex(const std::shared_ptr<emulator_t>
 		info_class, input_buffer_address, input_buffer_length,
 		buffer_address, buffer_length, return_length_address);
 
+	// SystemLogicalProcessorAndGroupInformation (0x6B) - return emulated data like sogen
+	if (info_class == 0x6B)
+	{
+		std::uint16_t relationship = 0;
+		if (input_buffer_length >= sizeof(relationship) && input_buffer_address)
+		{
+			static_cast<void>(emulator->read_virtual_memory(input_buffer_address, &relationship, sizeof(relationship)));
+		}
+
+		THREAD_LOG("NtQuerySystemInformationEx: class 0x6B (LogicalProcessorAndGroupInfo), relationship=0x{:X}", relationship);
+
+		if (relationship == 4) // RelationGroup
+		{
+			constexpr std::uint32_t required_size = 0x50;
+			if (buffer_length < required_size)
+			{
+				if (return_length_address)
+				{
+					static_cast<void>(emulator->write_virtual_memory(return_length_address, &required_size, sizeof(required_size)));
+				}
+				write_nt_status(emulator, status_info_length_mismatch);
+				return;
+			}
+
+			std::array<std::uint8_t, required_size> buf{};
+			// GROUP_RELATIONSHIP: MaximumGroupCount(2) + ActiveGroupCount(2) + Reserved(20) + GROUP_AFFINITY[]
+			*reinterpret_cast<std::uint16_t*>(buf.data() + 0x00) = 1; // MaximumGroupCount
+			*reinterpret_cast<std::uint16_t*>(buf.data() + 0x02) = 1; // ActiveGroupCount
+			// GroupInfo[0]: MaximumProcessorCount, ActiveProcessorCount, Reserved, ActiveProcessorMask
+			buf[0x18] = static_cast<std::uint8_t>(kernel::processor_count);
+			buf[0x19] = static_cast<std::uint8_t>(kernel::processor_count);
+			*reinterpret_cast<std::uint64_t*>(buf.data() + 0x20) = (1ULL << kernel::processor_count) - 1;
+
+			static_cast<void>(emulator->write_virtual_memory(buffer_address, buf.data(), required_size));
+			if (return_length_address)
+			{
+				static_cast<void>(emulator->write_virtual_memory(return_length_address, &required_size, sizeof(required_size)));
+			}
+			write_nt_status(emulator, status_success);
+			return;
+		}
+
+		if (relationship == 1 || relationship == 5) // RelationNumaNode or RelationNumaNodeEx
+		{
+			// header: Relationship (DWORD) + Size (DWORD) = 8 bytes, then NUMA_NODE_RELATIONSHIP body
+			// body: NodeNumber (DWORD=4) + Reserved (18) + GroupCount (WORD=2) + GROUP_AFFINITY (UINT64+WORD+WORD[3]=16) = 40
+			constexpr std::uint32_t root_size = 8;
+			constexpr std::uint32_t body_size = 40;
+			constexpr std::uint32_t required_size = root_size + body_size;
+
+			if (return_length_address)
+			{
+				static_cast<void>(emulator->write_virtual_memory(return_length_address, &required_size, sizeof(required_size)));
+			}
+
+			if (buffer_length < required_size)
+			{
+				write_nt_status(emulator, status_info_length_mismatch);
+				return;
+			}
+
+			// write header: Relationship=RelationNumaNode, Size=required_size
+			struct
+			{
+				std::uint32_t relationship;
+				std::uint32_t size;
+			} header{};
+			header.relationship = 1; // RelationNumaNode
+			header.size = required_size;
+			static_cast<void>(emulator->write_virtual_memory(buffer_address, &header, root_size));
+
+			// write zeroed NUMA_NODE_RELATIONSHIP body
+			std::array<std::uint8_t, body_size> numa_body{};
+			static_cast<void>(emulator->write_virtual_memory(buffer_address + root_size, numa_body.data(), body_size));
+
+			THREAD_LOG("NtQuerySystemInformationEx: class 0x6B RelationNumaNode -> SUCCESS (size=0x{:X})", required_size);
+			write_nt_status(emulator, status_success);
+			return;
+		}
+
+		if (relationship == 0) // RelationProcessorCore
+		{
+			constexpr std::uint32_t root_size = 8;
+			constexpr std::uint32_t body_size = 38; // Flags(1) + EfficiencyClass(1) + Reserved(20) + GroupCount(2) + GROUP_AFFINITY(16) - wait let me match sogen
+			// EMU_PROCESSOR_RELATIONSHIP64: Flags(1) + EfficiencyClass(1) + Reserved(20) + GroupCount(WORD=2) + GroupMask[1](GROUP_AFFINITY=16) = 40
+			constexpr std::uint32_t proc_body_size = 40;
+			constexpr std::uint32_t required_size = root_size + proc_body_size;
+
+			if (return_length_address)
+			{
+				static_cast<void>(emulator->write_virtual_memory(return_length_address, &required_size, sizeof(required_size)));
+			}
+
+			if (buffer_length < required_size)
+			{
+				write_nt_status(emulator, status_info_length_mismatch);
+				return;
+			}
+
+			struct
+			{
+				std::uint32_t relationship;
+				std::uint32_t size;
+			} header{};
+			header.relationship = 0;
+			header.size = required_size;
+			static_cast<void>(emulator->write_virtual_memory(buffer_address, &header, root_size));
+
+			std::array<std::uint8_t, proc_body_size> proc_body{};
+			// GroupCount = 1
+			*reinterpret_cast<std::uint16_t*>(proc_body.data() + 22) = 1;
+			// GroupMask[0].Mask = 0x1 (one processor)
+			*reinterpret_cast<std::uint64_t*>(proc_body.data() + 24) = 0x1;
+			static_cast<void>(emulator->write_virtual_memory(buffer_address + root_size, proc_body.data(), proc_body_size));
+
+			THREAD_LOG("NtQuerySystemInformationEx: class 0x6B RelationProcessorCore -> SUCCESS");
+			write_nt_status(emulator, status_success);
+			return;
+		}
+
+		if (relationship == 2) // RelationCache
+		{
+			constexpr std::uint32_t required_size = 0;
+			if (return_length_address)
+			{
+				static_cast<void>(emulator->write_virtual_memory(return_length_address, &required_size, sizeof(required_size)));
+			}
+			write_nt_status(emulator, status_info_length_mismatch);
+			return;
+		}
+
+		THREAD_LOG("NtQuerySystemInformationEx: class 0x6B relationship 0x{:X} -> STATUS_NOT_SUPPORTED", relationship);
+		constexpr std::uint32_t status_not_supported = 0xC00000BB;
+		write_nt_status(emulator, status_not_supported);
+		return;
+	}
+
 	// todo: implement needed classes and remove host passthrough
 	const auto host_fn = get_host_nt_query_system_information_ex();
 
@@ -1082,7 +1322,7 @@ static void handle_query_system_information_ex(const std::shared_ptr<emulator_t>
 }
 
 void redirect_ntoskrnl_sysinfo_functions(const std::shared_ptr<emulator_t>& emulator,
-	const kernel_image_t& mapped_image)
+	const image_t& mapped_image)
 {
 	redirect_handler<handle_query_system_information>(emulator, mapped_image, "NtQuerySystemInformation");
 	redirect_handler<handle_query_system_information>(emulator, mapped_image, "ZwQuerySystemInformation");

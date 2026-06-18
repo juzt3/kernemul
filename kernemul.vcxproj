@@ -206,6 +206,7 @@
     <ClCompile Include="src\impl\cng\cng_bcrypt.cpp" />
     <ClCompile Include="src\impl\fltmgr\flt_misc.cpp" />
     <ClCompile Include="src\impl\tbs\tbs_misc.cpp" />
+    <ClCompile Include="src\impl\win32k\w32_user.cpp" />
     <ClCompile Include="src\impl\tdi\tdi_misc.cpp" />
     <ClCompile Include="src\impl\ndis\ndis_misc.cpp" />
     <ClCompile Include="src\impl\ntoskrnl\nt_crashdump.cpp" />
@@ -224,6 +225,11 @@
     <ClCompile Include="src\kernel\thread.cpp" />
     <ClCompile Include="src\kernel\segments.cpp" />
     <ClCompile Include="src\main.cpp" />
+    <ClCompile Include="src\impl\ntoskrnl\nt_syscall.cpp" />
+    <ClCompile Include="src\user\syscall_table.cpp" />
+    <ClCompile Include="src\user\user.cpp" />
+    <ClCompile Include="src\user\user_memory.cpp" />
+    <ClCompile Include="src\user\exception_dispatch.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="ext\hypermulator\arch\decoder.hpp" />
@@ -296,6 +302,7 @@
     <ClInclude Include="src\emulator\object.hpp" />
     <ClInclude Include="src\filesystem\filesystem.hpp" />
     <ClInclude Include="src\impl\tbs\tbs_helpers.hpp" />
+    <ClInclude Include="src\impl\win32k\w32_helpers.hpp" />
     <ClInclude Include="src\impl\tbs\tbs_misc.hpp" />
     <ClInclude Include="src\registry\registry.hpp" />
     <ClInclude Include="src\image\mapped_image.hpp" />
@@ -324,6 +331,12 @@
     <ClInclude Include="src\util\file.hpp" />
     <ClInclude Include="src\util\logs.hpp" />
     <ClInclude Include="src\util\util.hpp" />
+    <ClInclude Include="src\impl\ntoskrnl\nt_syscall.hpp" />
+    <ClInclude Include="src\user\syscall_table.hpp" />
+    <ClInclude Include="src\user\user.hpp" />
+    <ClInclude Include="src\user\user_defs.hpp" />
+    <ClInclude Include="src\user\user_memory.hpp" />
+    <ClInclude Include="src\user\exception_dispatch.hpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

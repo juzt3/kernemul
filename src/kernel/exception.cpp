@@ -1,5 +1,7 @@
 #include "exception.hpp"
+#include "exception_common.hpp"
 #include "kernel.hpp"
+
 #include <portable_executable/image.hpp>
 #include "../util/logs.hpp"
 
@@ -337,16 +339,16 @@ static std::optional<unwind_result_t> unwind_rip_in_function(const std::shared_p
 static EXCEPTION_RECORD build_exception_record(const emulator_t::address_type faulting_rip,
 	const std::uint32_t code, const emulator_t::address_type faulting_address)
 {
-	EXCEPTION_RECORD record = { };
+	EXCEPTION_RECORD record{};
 
-	record.ExceptionCode = code;
-	record.ExceptionAddress = reinterpret_cast<PVOID>(faulting_rip);
-
-	if (code == 0xC0000005)
+	if (code == exception_common::status_access_violation)
 	{
-		record.NumberParameters = 2;
-		record.ExceptionInformation[0] = 0;
-		record.ExceptionInformation[1] = faulting_address;
+		const std::uint64_t params[] = { 0, faulting_address };
+		exception_common::build_exception_record(record, code, faulting_rip, params, 2);
+	}
+	else
+	{
+		exception_common::build_exception_record(record, code, faulting_rip, nullptr, 0);
 	}
 
 	return record;
@@ -354,27 +356,11 @@ static EXCEPTION_RECORD build_exception_record(const emulator_t::address_type fa
 
 static CONTEXT build_context(const std::shared_ptr<emulator_t>& emulator)
 {
-	CONTEXT ctx = { };
-
+	CONTEXT ctx{};
 	ctx.ContextFlags = CONTEXT_FULL;
-	ctx.Rax = emulator->read_register<x86::reg::rax, std::uint64_t>();
-	ctx.Rcx = emulator->read_register<x86::reg::rcx, std::uint64_t>();
-	ctx.Rdx = emulator->read_register<x86::reg::rdx, std::uint64_t>();
-	ctx.Rbx = emulator->read_register<x86::reg::rbx, std::uint64_t>();
-	ctx.Rsp = emulator->read_register<x86::reg::rsp, std::uint64_t>();
-	ctx.Rbp = emulator->read_register<x86::reg::rbp, std::uint64_t>();
-	ctx.Rsi = emulator->read_register<x86::reg::rsi, std::uint64_t>();
-	ctx.Rdi = emulator->read_register<x86::reg::rdi, std::uint64_t>();
-	ctx.R8 = emulator->read_register<x86::reg::r8, std::uint64_t>();
-	ctx.R9 = emulator->read_register<x86::reg::r9, std::uint64_t>();
-	ctx.R10 = emulator->read_register<x86::reg::r10, std::uint64_t>();
-	ctx.R11 = emulator->read_register<x86::reg::r11, std::uint64_t>();
-	ctx.R12 = emulator->read_register<x86::reg::r12, std::uint64_t>();
-	ctx.R13 = emulator->read_register<x86::reg::r13, std::uint64_t>();
-	ctx.R14 = emulator->read_register<x86::reg::r14, std::uint64_t>();
-	ctx.R15 = emulator->read_register<x86::reg::r15, std::uint64_t>();
+
+	exception_common::read_gprs(emulator, ctx);
 	ctx.Rip = emulator->read_register<x86::reg::rip, std::uint64_t>();
-	ctx.EFlags = emulator->read_register<x86::reg::rflags, std::uint32_t>();
 
 	return ctx;
 }
@@ -397,14 +383,6 @@ static DISPATCHER_CONTEXT build_dispatcher_context(const unwind_result_t& unwind
 	return dispatch;
 }
 
-struct scope_entry_t
-{
-	std::uint32_t begin_address;
-	std::uint32_t end_address;
-	std::uint32_t handler_address;
-	std::uint32_t jump_target;
-};
-
 static bool call_exception_handler(const std::shared_ptr<emulator_t>& emulator,
 	const unwind_result_t& unwind,
 	const emulator_t::address_type original_rip,
@@ -426,9 +404,11 @@ static bool call_exception_handler(const std::shared_ptr<emulator_t>& emulator,
 	const auto handler_data_rva = static_cast<std::uint32_t>(unwind.handler_data_address - image_base);
 	const auto* scope_table_ptr = reinterpret_cast<const std::uint32_t*>(module_base + handler_data_rva);
 	const auto scope_count = scope_table_ptr[0];
-	const auto* scopes = reinterpret_cast<const scope_entry_t*>(&scope_table_ptr[1]);
+	const auto* scopes = reinterpret_cast<const exception_common::scope_entry_t*>(&scope_table_ptr[1]);
 
 	const auto control_pc_rva = static_cast<std::uint32_t>(control_pc - image_base);
+
+	THREAD_LOG("    scope_count={}, control_pc_rva=0x{:X}", scope_count, control_pc_rva);
 
 	for (std::uint32_t i = 0; i < scope_count; ++i)
 	{
@@ -436,11 +416,20 @@ static bool call_exception_handler(const std::shared_ptr<emulator_t>& emulator,
 
 		if (control_pc_rva < scope.begin_address || control_pc_rva >= scope.end_address)
 		{
+			if (i < 5)
+			{
+				THREAD_LOG("    scope[{}]: [0x{:X},0x{:X}) handler=0x{:X} target=0x{:X} - SKIP (pc not in range)",
+					i, scope.begin_address, scope.end_address, scope.handler_address, scope.jump_target);
+			}
+
 			continue;
 		}
 
 		if (!scope.jump_target)
 		{
+			THREAD_LOG("    scope[{}]: [0x{:X},0x{:X}) handler=0x{:X} target=0 - __finally, skipping",
+				i, scope.begin_address, scope.end_address, scope.handler_address);
+
 			continue;
 		}
 
@@ -466,7 +455,8 @@ static bool call_exception_handler(const std::shared_ptr<emulator_t>& emulator,
 
 		constexpr emulator_t::size_type filter_stack_size = 0x4000;
 		constexpr std::size_t data_offset = 0x100;
-		const auto allocation = emulator->heap_allocate(filter_stack_size, prot_read_write, true);
+		const bool is_usermode = kernel::current_thread && kernel::current_thread->state().is_usermode;
+		const auto allocation = emulator->heap_allocate(filter_stack_size, prot_read_write, true, is_usermode);
 		emulator_err_t error = allocation.error_or({});
 		error.throw_if("allocate filter context");
 
@@ -554,6 +544,15 @@ bool kernel::handle_exception(const std::shared_ptr<emulator_t>& emulator, const
 
 			break;
 		}
+
+		const auto faulting_module = kernel::find_module_from_rip(current_rip);
+		const auto frame_rva = faulting_module
+			? static_cast<std::uint32_t>(current_rip - faulting_module->base_address())
+			: 0u;
+
+		THREAD_LOG("  frame[{}]: rip=0x{:X} (rva=0x{:X}), handler=0x{:X}, ret=0x{:X}",
+			depth, current_rip, frame_rva,
+			unwind->handler_address, unwind->return_address);
 
 		if (unwind->handler_address)
 		{

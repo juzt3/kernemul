@@ -262,6 +262,7 @@ public:
 
 	[[nodiscard]] virtual emulator_err_t map_physical_memory(address_type address, size_type size, protection_type protection) = 0;
 	[[nodiscard]] virtual emulator_err_t unmap_physical_memory(address_type address, size_type size) = 0;
+	[[nodiscard]] virtual emulator_err_t protect_physical_memory(address_type address, size_type size, protection_type protection) = 0;
 
 	[[nodiscard]] virtual emulator_err_t read_physical_memory(address_type address, void* buffer, size_type size) const = 0;
 	[[nodiscard]] emulator_err_t read_physical_memory(address_type address, std::span<std::uint8_t> buffer) const;
@@ -273,8 +274,11 @@ public:
 	                                                  protection_type protection);
 
 
-	[[nodiscard]] emulator_err_t map_virtual_memory(address_type address, size_type size, protection_type protection);
+	[[nodiscard]] emulator_err_t map_virtual_memory(address_type address, size_type size, protection_type protection,
+	                                                bool supervisor = false);
 	[[nodiscard]] emulator_err_t unmap_virtual_memory(address_type address, size_type size);
+
+	[[nodiscard]] emulator_err_t protect_virtual_memory(address_type address, size_type size, protection_type protection);
 
 	[[nodiscard]] emulator_err_t write_virtual_memory(address_type address, const void* buffer, size_type size);
 	[[nodiscard]] emulator_err_t write_virtual_memory(address_type address, std::span<const std::uint8_t> buffer);
@@ -284,7 +288,8 @@ public:
 
 	[[nodiscard]] emulator_err_t load_virtual_memory(address_type address,
 	                                                 std::span<const std::uint8_t> buffer,
-	                                                 protection_type protection);
+	                                                 protection_type protection,
+	                                                 bool supervisor = false);
 
 	std::optional<address_type> translate_virtual_address(address_type address);
 
@@ -295,7 +300,7 @@ public:
 	[[nodiscard]] std::vector<physical_memory_range_t> physical_memory_ranges() const;
 
 	[[nodiscard]] std::expected<address_type, emulator_err_t> heap_allocate(
-		size_type size, protection_type protection, bool page_aligned = false);
+		size_type size, protection_type protection, bool page_aligned = false, bool supervisor = false);
 
 	[[nodiscard]] virtual emulator_err_t read_register(x86::register_t reg, void* value) const = 0;
 	[[nodiscard]] virtual emulator_err_t write_register(x86::register_t reg, const void* value) = 0;
@@ -385,13 +390,15 @@ public:
 		error.throw_if("write register");
 	}
 
-	emulator_err_t map_virtual_page(address_type page_address, address_type page_physical_address);
+	emulator_err_t map_virtual_page(address_type page_address, address_type page_physical_address,
+	                                bool supervisor = false);
 
 protected:
 	std::expected<address_type, emulator_err_t> allocate_physical_memory(size_type size, protection_type protection);
 
 	emulator_err_t copy_virtual_memory(address_type address, void* buffer, size_type size, bool is_write);
 	emulator_err_t unmap_virtual_page(address_type page_address);
+	emulator_err_t protect_virtual_page(address_type page_address, protection_type protection);
 	emulator_err_t set_up_page_tables();
 
 	void push_hook(std::shared_ptr<emulator_hook_t> hook)

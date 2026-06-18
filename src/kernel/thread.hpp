@@ -41,6 +41,11 @@ struct thread_state_t
 	xmm_state_register_t xmm4, xmm5, xmm6, xmm7;
 	xmm_state_register_t xmm8, xmm9, xmm10, xmm11;
 	xmm_state_register_t xmm12, xmm13, xmm14, xmm15;
+
+	std::uint16_t cs_selector;
+	std::uint16_t ss_selector;
+	std::uint64_t gs_base;
+	bool is_usermode;
 };
 
 class thread_t
@@ -137,7 +142,8 @@ namespace kernel
 		std::function<void(const std::shared_ptr<thread_t>&)> on_thread_done = {});
 
 	[[nodiscard]] std::shared_ptr<thread_t> create_thread_at(const std::shared_ptr<emulator_t>& emulator,
-		emulator_t::address_type target_address, std::span<const std::uint64_t> arguments = {});
+		emulator_t::address_type target_address, std::span<const std::uint64_t> arguments = {},
+		emulator_t::address_type stack_base = 0, emulator_t::address_type teb_address = 0);
 
 	std::uint64_t run_thread_immediately(const std::shared_ptr<emulator_t>& emulator,
 		const std::shared_ptr<thread_t>& thread);

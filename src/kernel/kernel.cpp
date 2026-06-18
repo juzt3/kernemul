@@ -1,17 +1,17 @@
 #include "kernel.hpp"
 #include "../util/logs.hpp"
 
-std::shared_ptr<kernel_image_t> kernel::find_module(const std::string_view name)
+std::shared_ptr<image_t> kernel::find_module(const std::string_view name)
 {
-	const auto it = std::ranges::find(module_entries, name, &kernel_image_t::name);
+	const auto it = std::ranges::find(module_entries, name, &image_t::name);
 
 	return it != std::ranges::end(module_entries) ? *it : nullptr;
 }
 
-std::shared_ptr<kernel_image_t> kernel::find_module_from_rip(const emulator_t::address_type rip)
+std::shared_ptr<image_t> kernel::find_module_from_rip(const emulator_t::address_type rip)
 {
 	const auto it = std::ranges::find_if(module_entries,
-		[rip](const std::shared_ptr<kernel_image_t>& image) -> bool
+		[rip](const std::shared_ptr<image_t>& image) -> bool
 		{
 			const emulator_t::address_type start = image->base_address();
 			const emulator_t::address_type end = start + image->size();

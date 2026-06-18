@@ -1,5 +1,8 @@
 #include "nt_helpers.hpp"
 #include "../../util/util.hpp"
+#include "../../user/user.hpp"
+
+#include <cstdio>
 
 constexpr std::size_t file_object_body_size = 0x1d8;
 
@@ -80,6 +83,21 @@ static std::string normalize_path(const std::wstring& guest_path)
 				}
 			}
 		}
+	}
+
+	// strip drive letter prefix (e.g. "c:/")
+	if (path.size() >= 3
+		&& std::isalpha(static_cast<unsigned char>(path[0]))
+		&& path[1] == ':'
+		&& path[2] == '/')
+	{
+		path = path.substr(3);
+	}
+
+	// strip "windows/" prefix to normalize to system32-relative paths
+	if (path.starts_with("windows/"))
+	{
+		path = path.substr(8);
 	}
 
 	// handle bare /systemroot with no trailing slash
@@ -214,6 +232,54 @@ static void iop_create_file(const std::shared_ptr<emulator_t>& emulator,
 	if (!resolve_object_name(emulator, object_attributes_address, normalized, caller_name))
 	{
 		return;
+	}
+
+	// intercept console device paths and return pseudo-handles
+	{
+		std::string upper = normalized;
+
+		for (auto& c : upper)
+		{
+			c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+		}
+
+		if (upper == "CONOUT$" || upper == "CON"
+			|| upper.ends_with("/CONOUT$") || upper.ends_with("/CON")
+			|| upper.ends_with("/CONSOLE"))
+		{
+			THREAD_LOG("{}: console output device '{}' -> pseudo-handle 0x{:X}",
+				caller_name, normalized, user::stdout_handle);
+
+			write_handle_result(emulator, handle_out_address, static_cast<object_manager_t::handle_type>(user::stdout_handle));
+			write_io_status(emulator, io_status_block_address, 0, file_opened);
+			write_nt_success(emulator);
+
+			return;
+		}
+
+		if (upper == "CONIN$" || upper.ends_with("/CONIN$"))
+		{
+			THREAD_LOG("{}: console input device '{}' -> pseudo-handle 0x{:X}",
+				caller_name, normalized, user::stdin_handle);
+
+			write_handle_result(emulator, handle_out_address, static_cast<object_manager_t::handle_type>(user::stdin_handle));
+			write_io_status(emulator, io_status_block_address, 0, file_opened);
+			write_nt_success(emulator);
+
+			return;
+		}
+
+		if (upper == "NUL" || upper.ends_with("/NUL"))
+		{
+			THREAD_LOG("{}: NUL device '{}' -> pseudo-handle 0x{:X}",
+				caller_name, normalized, user::nul_handle);
+
+			write_handle_result(emulator, handle_out_address, static_cast<object_manager_t::handle_type>(user::nul_handle));
+			write_io_status(emulator, io_status_block_address, 0, file_opened);
+			write_nt_success(emulator);
+
+			return;
+		}
 	}
 
 	const auto& filesystem = kernel::filesystem;
@@ -398,7 +464,7 @@ static void iop_create_file(const std::shared_ptr<emulator_t>& emulator,
 }
 
 void redirect_ntoskrnl_file_functions(const std::shared_ptr<emulator_t>& emulator,
-	const kernel_image_t& mapped_image)
+	const image_t& mapped_image)
 {
 	redirect_function(
 		[emulator]
@@ -577,6 +643,32 @@ void redirect_ntoskrnl_file_functions(const std::shared_ptr<emulator_t>& emulato
 			THREAD_LOG("{} called (handle=0x{:X}, event=0x{:X}, apc_routine=0x{:X}, apc_context=0x{:X}, io_status_block=0x{:X}, buffer=0x{:X}, length=0x{:X}, byte_offset_ptr=0x{:X}, key_ptr=0x{:X})",
 				caller_name, file_handle, event, apc_routine, apc_context, io_status_block, buffer_address, length, byte_offset_ptr, key_ptr);
 
+			if (file_handle == user::stdout_handle || file_handle == user::stderr_handle)
+			{
+				if (buffer_address && length)
+				{
+					std::vector<std::uint8_t> buffer(length);
+					error = emulator->read_virtual_memory(buffer_address, buffer.data(), length);
+					error.throw_if("read write buffer from guest");
+
+					std::fwrite(buffer.data(), 1, length, stdout);
+					std::fflush(stdout);
+				}
+
+				write_io_status(emulator, io_status_block, 0, length);
+				write_nt_success(emulator);
+
+				return;
+			}
+
+			if (file_handle == user::nul_handle)
+			{
+				write_io_status(emulator, io_status_block, 0, length);
+				write_nt_success(emulator);
+
+				return;
+			}
+
 			const auto entry = kernel::object_manager->lookup_handle(file_handle);
 
 			if (!entry)
@@ -677,6 +769,15 @@ void redirect_ntoskrnl_file_functions(const std::shared_ptr<emulator_t>& emulato
 
 			THREAD_LOG("{} called (handle=0x{:X}, event=0x{:X}, apc_routine=0x{:X}, apc_context=0x{:X}, io_status_block=0x{:X}, buffer=0x{:X}, length=0x{:X}, byte_offset_ptr=0x{:X}, key_ptr=0x{:X})",
 				caller_name, file_handle, event, apc_routine, apc_context, io_status_block, buffer_address, length, byte_offset_ptr, key_ptr);
+
+			if (user::is_console_handle(file_handle))
+			{
+				constexpr std::uint32_t status_end_of_file = 0xC0000011;
+				write_io_status(emulator, io_status_block, static_cast<std::int32_t>(status_end_of_file), 0);
+				write_nt_status(emulator, status_end_of_file);
+
+				return;
+			}
 
 			const auto entry = kernel::object_manager->lookup_handle(file_handle);
 
@@ -1242,5 +1343,94 @@ void redirect_ntoskrnl_file_functions(const std::shared_ptr<emulator_t>& emulato
 		},
 		mapped_image,
 		"NtQueryFullAttributesFile"
+	);
+
+	// NtQueryVolumeInformationFile(FileHandle, IoStatusBlock, FsInformation, Length, FsInformationClass)
+	redirect_function(
+		[emulator]
+		{
+			const auto file_handle = emulator->read_register<x86::reg::rcx, object_manager_t::handle_type>();
+			const auto io_status_block = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+			const auto fs_information = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
+			const auto length = emulator->read_register<x86::reg::r9, std::uint32_t>();
+
+			const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
+
+			std::uint32_t fs_info_class = 0;
+			emulator_err_t error = emulator->read_virtual_memory(rsp + 0x28, &fs_info_class, sizeof(fs_info_class));
+			error.throw_if("NtQueryVolumeInformationFile: read FsInformationClass");
+
+			THREAD_LOG("NtQueryVolumeInformationFile called (handle=0x{:X}, io_status=0x{:X}, buf=0x{:X}, len=0x{:X}, class=0x{:X})",
+				file_handle, io_status_block, fs_information, length, fs_info_class);
+
+			constexpr std::uint32_t file_fs_device_information = 4;
+			constexpr std::uint32_t file_fs_attribute_information = 5;
+
+			if (fs_info_class == file_fs_device_information && length >= 8)
+			{
+				struct
+				{
+					std::uint32_t device_type;
+					std::uint32_t characteristics;
+				} device_info{};
+
+				if (user::is_console_handle(file_handle))
+				{
+					device_info.device_type = 0x50;
+					device_info.characteristics = 0x20000;
+				}
+				else
+				{
+					device_info.device_type = 0x7;
+					device_info.characteristics = 0x20;
+				}
+
+				error = emulator->write_virtual_memory(fs_information, &device_info, sizeof(device_info));
+				error.throw_if("NtQueryVolumeInformationFile: write device info");
+
+				write_io_status(emulator, io_status_block, 0, sizeof(device_info));
+				write_nt_success(emulator);
+
+				return;
+			}
+
+			if (fs_info_class == file_fs_attribute_information && length >= 16)
+			{
+				const wchar_t fs_name[] = L"NTFS";
+				const auto name_bytes = static_cast<std::uint32_t>(4 * sizeof(wchar_t));
+
+				struct
+				{
+					std::uint32_t attributes;
+					std::int32_t max_component_length;
+					std::uint32_t name_length;
+				} attr_header{};
+
+				attr_header.attributes = 0x000700FF;
+				attr_header.max_component_length = 255;
+				attr_header.name_length = name_bytes;
+
+				error = emulator->write_virtual_memory(fs_information, &attr_header, sizeof(attr_header));
+				error.throw_if("NtQueryVolumeInformationFile: write attr header");
+
+				const auto name_offset = fs_information + sizeof(attr_header);
+				error = emulator->write_virtual_memory(name_offset, fs_name, name_bytes);
+				error.throw_if("NtQueryVolumeInformationFile: write fs name");
+
+				const auto total = static_cast<std::uint32_t>(sizeof(attr_header) + name_bytes);
+
+				write_io_status(emulator, io_status_block, 0, total);
+				write_nt_success(emulator);
+
+				return;
+			}
+
+			THREAD_WARN_LOG("NtQueryVolumeInformationFile: unsupported class 0x{:X}, returning STATUS_SUCCESS", fs_info_class);
+
+			write_io_status(emulator, io_status_block, 0, 0);
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"NtQueryVolumeInformationFile"
 	);
 }

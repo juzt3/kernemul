@@ -1,5 +1,6 @@
 #include "nt_helpers.hpp"
 #include "../../kernel/exception.hpp"
+#include "../../user/user.hpp"
 
 static emulator_object_t<_OBJECT_TYPE> create_object_type(const std::shared_ptr<emulator_t>& emulator,
                                                           const std::wstring_view name, const std::string& object_name)
@@ -15,7 +16,7 @@ static emulator_object_t<_OBJECT_TYPE> create_object_type(const std::shared_ptr<
 }
 
 void initialize_ntoskrnl_object_types(const std::shared_ptr<emulator_t>& emulator,
-	const kernel_image_t& mapped_image)
+	const image_t& mapped_image)
 {
 	auto process_type = create_object_type(emulator, L"Process", "PsProcessType");
 	auto thread_type = create_object_type(emulator, L"Thread", "PsThreadType");
@@ -44,7 +45,7 @@ void initialize_ntoskrnl_object_types(const std::shared_ptr<emulator_t>& emulato
 }
 
 void redirect_ntoskrnl_object_functions(const std::shared_ptr<emulator_t>& emulator,
-	const kernel_image_t& mapped_image)
+	const image_t& mapped_image)
 {
 	// todo: actually delete the symbolic link from the object namespace
 	redirect_function(
@@ -183,7 +184,10 @@ void redirect_ntoskrnl_object_functions(const std::shared_ptr<emulator_t>& emula
 
 		THREAD_LOG("{} called (handle=0x{:X})", caller_name, handle);
 
-		kernel::object_manager->close_handle(handle);
+		if (!user::is_console_handle(handle))
+		{
+			kernel::object_manager->close_handle(handle);
+		}
 
 		write_nt_success(emulator);
 	};
@@ -310,9 +314,11 @@ void redirect_ntoskrnl_object_functions(const std::shared_ptr<emulator_t>& emula
 			}
 		}
 
+		auto host_object = std::make_shared<directory_object_t>(directory_name);
+
 		constexpr std::size_t directory_body_size = 0x40;
 		std::array<std::uint8_t, directory_body_size> body{};
-		const auto body_address = kernel::object_manager->create_object(0, body.data(), body.size());
+		const auto body_address = kernel::object_manager->create_object(0, body.data(), body.size(), host_object);
 		const auto handle_value = kernel::object_manager->create_handle(body_address, desired_access);
 
 		if (handle_address)

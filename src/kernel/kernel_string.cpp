@@ -104,6 +104,26 @@ emulator_t::address_type kernel::allocate_wstring(emulator_t& emulator, const st
 	return allocate_basic_string(emulator, str, terminate);
 }
 
+emulator_t::address_type kernel::allocate_wstring(emulator_t& emulator, const std::wstring_view str,
+	const guest_allocator_t allocator)
+{
+	const auto byte_size = (str.size() + 1) * sizeof(wchar_t);
+	const auto address = allocator(byte_size);
+
+	if (!address)
+	{
+		return 0;
+	}
+
+	static_cast<void>(emulator.write_virtual_memory(address, str.data(), str.size() * sizeof(wchar_t)));
+
+	constexpr wchar_t terminator = L'\0';
+	static_cast<void>(emulator.write_virtual_memory(
+		address + str.size() * sizeof(wchar_t), &terminator, sizeof(terminator)));
+
+	return address;
+}
+
 UNICODE_STRING kernel::init_unicode_string(emulator_t& emulator, const std::wstring_view str)
 {
 	const emulator_t::address_type buffer = allocate_wstring(emulator, str, true);

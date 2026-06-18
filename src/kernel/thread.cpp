@@ -1,6 +1,8 @@
 #include "thread.hpp"
 #include "kernel.hpp"
+#include "segments.hpp"
 #include "../emulator/object.hpp"
+#include "../user/user_defs.hpp"
 
 #include "../util/logs.hpp"
 
@@ -22,6 +24,8 @@ std::shared_ptr<thread_t> kernel::create_thread(const std::shared_ptr<emulator_t
 	auto object = emulator_object_t<_ETHREAD>::allocate(emulator, contents, name);
 
 	auto thread = std::make_shared<thread_t>(thread_id, emulator, process, std::move(object));
+
+	object_manager->register_object(thread->address(), std::make_shared<thread_object_t>(thread));
 
 	GLOBAL_LOG("created thread (thread id={}, process id={}, object address=0x{:X})",
 		thread_id, process->id(), thread->address());
@@ -161,6 +165,25 @@ void thread_t::load_state()
 	LOAD_XMM(4);  LOAD_XMM(5);  LOAD_XMM(6);  LOAD_XMM(7);
 	LOAD_XMM(8);  LOAD_XMM(9);  LOAD_XMM(10); LOAD_XMM(11);
 	LOAD_XMM(12); LOAD_XMM(13); LOAD_XMM(14); LOAD_XMM(15);
+
+	if (state_.is_usermode)
+	{
+		kernel::swap_to_usermode_segments(emulator_);
+
+		if (state_.gs_base != 0)
+		{
+			kernel::swap_to_usermode_gs(emulator_, state_.gs_base);
+		}
+	}
+	else
+	{
+		kernel::swap_to_kernel_segments(emulator_);
+
+		if (state_.gs_base != 0)
+		{
+			kernel::swap_to_kernel_gs(emulator_);
+		}
+	}
 }
 
 static bool find_next_runnable_thread()
@@ -367,29 +390,37 @@ void kernel::run_all_threads(const std::shared_ptr<emulator_t>& emulator, const 
 }
 
 std::shared_ptr<thread_t> kernel::create_thread_at(const std::shared_ptr<emulator_t>& emulator,
-	const emulator_t::address_type target_address, const std::span<const std::uint64_t> arguments)
+	const emulator_t::address_type target_address, const std::span<const std::uint64_t> arguments,
+	const emulator_t::address_type stack_base, const emulator_t::address_type teb_address)
 {
 	const auto thread_id = object_manager->allocate_id();
 	const auto& process = process_entries.front();
 	auto thread = create_thread(emulator, thread_id, process);
 
-	constexpr emulator_t::size_type stack_size = 0x10000;
-	const auto stack_allocation = emulator->heap_allocate(stack_size, prot_read_write, true);
-	emulator_err_t error = stack_allocation.error_or({});
-	error.throw_if("create_thread_at: allocate stack");
+	emulator_t::address_type stack_top;
 
-	const emulator_t::address_type stack_top = *stack_allocation + stack_size - 0x1000;
+	if (stack_base != 0)
+	{
+		stack_top = stack_base - 0x1000;
+	}
+	else
+	{
+		constexpr emulator_t::size_type stack_size = 0x10000;
+		const auto stack_allocation = emulator->heap_allocate(stack_size, prot_read_write, true);
+		stack_allocation.error_or({}).throw_if("create_thread_at: allocate stack");
+		stack_top = *stack_allocation + stack_size - 0x1000;
+	}
+
 	const emulator_t::address_type sentinel = emulator_t::thread_return_address;
 	const emulator_t::address_type rsp = (stack_top & ~0xFull) - 8;
 
-	error = emulator->write_virtual_memory(rsp, &sentinel, sizeof(sentinel));
-	error.throw_if("create_thread_at: write sentinel");
+	emulator->write_virtual_memory(rsp, &sentinel, sizeof(sentinel))
+		.throw_if("create_thread_at: write sentinel");
 
 	thread->state().rip = target_address;
 	thread->state().rsp = rsp;
 	thread->state().rflags = 0x202;
 
-	// store start address in ETHREAD for ZwQueryInformationThread
 	emulator->write_virtual_memory(thread->address() + offsetof(_ETHREAD, StartAddress), &target_address, sizeof(target_address))
 		.throw_if("create_thread_at: write StartAddress");
 	emulator->write_virtual_memory(thread->address() + offsetof(_ETHREAD, Win32StartAddress), &target_address, sizeof(target_address))
@@ -418,11 +449,25 @@ std::shared_ptr<thread_t> kernel::create_thread_at(const std::shared_ptr<emulato
 	for (std::size_t i = 4; i < arguments.size(); ++i)
 	{
 		const emulator_t::address_type slot_address = rsp + 0x28 + (i - 4) * sizeof(std::uint64_t);
-		error = emulator->write_virtual_memory(slot_address, &arguments[i], sizeof(std::uint64_t));
-		error.throw_if("create_thread_at: write stack argument");
+		emulator->write_virtual_memory(slot_address, &arguments[i], sizeof(std::uint64_t))
+			.throw_if("create_thread_at: write stack argument");
 	}
 
-	GLOBAL_LOG("create_thread_at (tid={}, target=0x{:X}, args={})", thread_id, target_address, arguments.size());
+	if (teb_address != 0)
+	{
+		auto& state = thread->state();
+		state.cs_selector = user_cs_selector;
+		state.ss_selector = user_ds_selector;
+		state.gs_base = teb_address;
+		state.is_usermode = true;
+
+		static_cast<void>(emulator->write_virtual_memory(
+			teb_address + offsetof(user::teb64_t, ClientId.UniqueThread),
+			&thread_id, sizeof(thread_id)));
+	}
+
+	GLOBAL_LOG("create_thread_at (tid={}, target=0x{:X}, args={}, usermode={})",
+		thread_id, target_address, arguments.size(), teb_address != 0);
 
 	return thread;
 }

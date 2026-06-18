@@ -1,8 +1,11 @@
 #include "segments.hpp"
 #include "exception.hpp"
+#include "exception_common.hpp"
 #include "../emulator/object.hpp"
 #include "../impl/ntoskrnl/nt_helpers.hpp"
 #include "kernel.hpp"
+#include "../user/user_memory.hpp"
+#include "../user/exception_dispatch.hpp"
 
 #include <ia32-doc/ia32.hpp>
 #include "../util/logs.hpp"
@@ -22,10 +25,23 @@ constexpr std::uint16_t data_segment_attributes =
 	| (kernel::kernelmode_cpl << 5)
 	| (1 << 7);
 
+constexpr std::uint16_t user_data_segment_attributes =
+	SEGMENT_DESCRIPTOR_TYPE_DATA_READ_WRITE_ACCESSED
+	| (1 << 4)
+	| (kernel::usermode_cpl << 5)
+	| (1 << 7);
+
 constexpr std::uint16_t code_segment_attributes =
 	SEGMENT_DESCRIPTOR_TYPE_CODE_EXECUTE_READ_ACCESSED
 	| (1 << 4)
 	| (kernel::kernelmode_cpl << 5)
+	| (1 << 7)
+	| (1 << 13);
+
+constexpr std::uint16_t user_code_segment_attributes =
+	SEGMENT_DESCRIPTOR_TYPE_CODE_EXECUTE_READ_ACCESSED
+	| (1 << 4)
+	| (kernel::usermode_cpl << 5)
 	| (1 << 7)
 	| (1 << 13);
 
@@ -135,7 +151,7 @@ void kernel::set_up_gdt(const std::shared_ptr<emulator_t>& emulator)
 		make_data_gdt_descriptor(kernelmode_cpl),          // 3: kernel DS (selector 0x18)
 		null_descriptor,                                             // 4: reserved (contains similar to user CS)
 		make_data_gdt_descriptor(usermode_cpl),        // 5: user DS
-		make_code_gdt_descriptor(usermode_cpl, false), // 6: user CS (compat)
+		make_code_gdt_descriptor(usermode_cpl, true),  // 6: user CS (64-bit)
 		null_descriptor,                               // 7: reserved
 		tss_slots[0],                                  // 8: TSS64 (low)
 		tss_slots[1],                                  // 9: TSS64 (high)
@@ -163,7 +179,7 @@ void kernel::set_up_gdt(const std::shared_ptr<emulator_t>& emulator)
 		gdt_base, gdt_entries.size(), tss_address, tss_selector_value);
 }
 
-void kernel::set_up_idt(const std::shared_ptr<emulator_t>& emulator, const kernel_image_t& nt_image)
+void kernel::set_up_idt(const std::shared_ptr<emulator_t>& emulator, const image_t& nt_image)
 {
 	constexpr std::uint32_t handler_count = 256;
 	constexpr emulator_t::size_type idt_size = handler_count * sizeof(segment_descriptor_interrupt_gate_64);
@@ -261,16 +277,7 @@ void kernel::set_up_idt(const std::shared_ptr<emulator_t>& emulator, const kerne
 					rsp += 8;
 				}
 
-				struct interrupt_frame
-				{
-					std::uint64_t rip;
-					std::uint64_t cs;
-					std::uint64_t rflags;
-					std::uint64_t rsp;
-					std::uint64_t ss;
-				};
-
-				interrupt_frame frame = { };
+				exception_common::interrupt_frame_t frame = { };
 				emulator_err_t error = emulator->read_virtual_memory(rsp, &frame, sizeof(frame));
 				error.throw_if("read interrupt frame");
 
@@ -289,57 +296,62 @@ void kernel::set_up_idt(const std::shared_ptr<emulator_t>& emulator, const kerne
 				emulator->write_register<x86::reg::rsp>(frame.rsp);
 				emulator->write_register<x86::reg::rflags>(frame.rflags);
 
-				constexpr std::uint32_t status_integer_divide_by_zero = 0xC0000094;
-				constexpr std::uint32_t status_single_step = 0x80000004;
-				constexpr std::uint32_t status_breakpoint = 0x80000003;
-				constexpr std::uint32_t status_array_bounds_exceeded = 0xC000008C;
-				constexpr std::uint32_t status_illegal_instruction = 0xC000001D;
-				constexpr std::uint32_t status_access_violation = 0xC0000005;
+				const bool is_usermode = (frame.cs & 3) == 3;
+				const auto exception_code = exception_common::vector_to_exception_code(i);
 
-				switch (i)
-				{
-				case 0:
-					handle_exception(emulator, frame.rip, status_integer_divide_by_zero, frame.rip);
-					break;
-				case 1:
-				{
-					const bool handled = handle_exception(emulator, frame.rip, status_single_step, frame.rip, true);
+				auto fault_address = static_cast<emulator_t::address_type>(frame.rip);
 
-					if (!handled)
+				if (i == 14)
+				{
+					fault_address = emulator->read_register<x86::reg::cr2, emulator_t::address_type>();
+				}
+
+				if (is_usermode && user::ki_user_exception_dispatcher_address)
+				{
+					if (exception_code)
 					{
-						// todo: restore ss and cs
-						// clear TF to prevent infinite single-step traps
-						emulator->write_register<x86::reg::rip>(frame.rip);
-						emulator->write_register<x86::reg::rsp>(frame.rsp);
-						emulator->write_register<x86::reg::rflags>(frame.rflags & ~static_cast<std::uint64_t>(0x100));
-					}
+						THREAD_LOG("exception dispatch: code=0x{:X}, rip=0x{:X}, faulting_address=0x{:X}",
+							exception_code, frame.rip, fault_address);
 
-					break;
+						if (i == 14)
+						{
+							const bool is_write = (error_code & 2) != 0;
+							user::dispatch_access_violation(emulator, fault_address, is_write);
+						}
+						else
+						{
+							user::dispatch_exception(emulator, exception_code, fault_address, nullptr, 0);
+						}
+					}
+					else
+					{
+						THREAD_WARN_LOG("unhandled usermode interrupt vector 0x{:X} at rip=0x{:X}", i, frame.rip);
+					}
 				}
-				case 3:
-					handle_exception(emulator, frame.rip, status_breakpoint, frame.rip);
-					break;
-				case 5:
-					handle_exception(emulator, frame.rip, status_array_bounds_exceeded, frame.rip);
-					break;
-				case 6:
-					handle_exception(emulator, frame.rip, status_illegal_instruction, frame.rip);
-					break;
-				case 13:
-					handle_exception(emulator, frame.rip, status_access_violation, frame.rip);
-					break;
-				case 14:
+				else
 				{
-					const auto cr2 = emulator->read_register<x86::reg::cr2, emulator_t::address_type>();
-					handle_exception(emulator, frame.rip, status_access_violation, cr2);
-					break;
-				}
-				case 17:
-					handle_exception(emulator, frame.rip, status_access_violation, frame.rip);
-					break;
-				default:
-					THREAD_WARN_LOG("unhandled interrupt vector 0x{:X} at rip=0x{:X}", i, frame.rip);
-					break;
+					if (exception_code)
+					{
+						if (i == 1)
+						{
+							const bool handled = handle_exception(emulator, frame.rip, exception_code, frame.rip, true);
+
+							if (!handled)
+							{
+								emulator->write_register<x86::reg::rip>(frame.rip);
+								emulator->write_register<x86::reg::rsp>(frame.rsp);
+								emulator->write_register<x86::reg::rflags>(frame.rflags & ~static_cast<std::uint64_t>(0x100));
+							}
+						}
+						else
+						{
+							handle_exception(emulator, frame.rip, exception_code, fault_address);
+						}
+					}
+					else
+					{
+						THREAD_WARN_LOG("unhandled interrupt vector 0x{:X} at rip=0x{:X}", i, frame.rip);
+					}
 				}
 			};
 
@@ -363,4 +375,43 @@ void kernel::set_up_idt(const std::shared_ptr<emulator_t>& emulator, const kerne
 
 	error = emulator->write_idt(*idt_base_address, idt_size - 1);
 	error.throw_if("load IDT");
+}
+
+void kernel::swap_to_kernel_gs(const std::shared_ptr<emulator_t>& emulator)
+{
+	const emulator_err_t error = emulator->write_segment(
+		x86::segment_reg::gs, kernel_ds_selector, kpcr_address, segment_limit, data_segment_attributes);
+
+	error.throw_if("swap to kernel gs");
+}
+
+void kernel::swap_to_usermode_gs(const std::shared_ptr<emulator_t>& emulator,
+                                 const emulator_t::address_type teb_address)
+{
+	const emulator_err_t error = emulator->write_segment(
+		x86::segment_reg::gs, user_ds_selector, teb_address, segment_limit, user_data_segment_attributes);
+
+	error.throw_if("swap to usermode gs");
+}
+
+void kernel::swap_to_kernel_segments(const std::shared_ptr<emulator_t>& emulator)
+{
+	auto error = emulator->write_segment(
+		x86::segment_reg::cs, kernel_cs_selector, 0, segment_limit, code_segment_attributes);
+	error.throw_if("swap to kernel cs");
+
+	error = emulator->write_segment(
+		x86::segment_reg::ss, kernel_ds_selector, 0, segment_limit, data_segment_attributes);
+	error.throw_if("swap to kernel ss");
+}
+
+void kernel::swap_to_usermode_segments(const std::shared_ptr<emulator_t>& emulator)
+{
+	auto error = emulator->write_segment(
+		x86::segment_reg::cs, user_cs_selector, 0, segment_limit, user_code_segment_attributes);
+	error.throw_if("swap to usermode cs");
+
+	error = emulator->write_segment(
+		x86::segment_reg::ss, user_ds_selector, 0, segment_limit, user_data_segment_attributes);
+	error.throw_if("swap to usermode ss");
 }

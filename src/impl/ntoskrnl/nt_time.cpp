@@ -139,7 +139,7 @@ static _TIME_FIELDS time_to_time_fields(const std::int64_t time)
 }
 
 void redirect_ntoskrnl_time_functions(const std::shared_ptr<emulator_t>& emulator,
-	const kernel_image_t& mapped_image)
+	const image_t& mapped_image)
 {
 	redirect_function(
 		[emulator]

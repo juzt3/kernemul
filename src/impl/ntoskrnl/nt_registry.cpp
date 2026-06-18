@@ -234,7 +234,7 @@ static void write_value_info_response(const std::shared_ptr<emulator_t>& emulato
 }
 
 void redirect_ntoskrnl_registry_functions(const std::shared_ptr<emulator_t>& emulator,
-	const kernel_image_t& mapped_image)
+	const image_t& mapped_image)
 {
 	// RtlWriteRegistryValue
 	redirect_function(

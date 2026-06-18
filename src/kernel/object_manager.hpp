@@ -56,9 +56,19 @@ struct device_object_t final : object_t
 {
 };
 
+struct directory_object_t final : object_t
+{
+	std::string name;
+
+	explicit directory_object_t(std::string name)
+			:	name(std::move(name)) { }
+};
+
 struct section_object_t final : object_t
 {
 	std::shared_ptr<file_t> file;
+	bool is_image = false;
+	std::uint64_t preferred_base = 0;
 
 	explicit section_object_t(std::shared_ptr<file_t> file)
 			:	file(std::move(file)) { }

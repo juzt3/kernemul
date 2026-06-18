@@ -134,6 +134,14 @@ emulator_err_t hypermulator_t::unmap_physical_memory(const address_type address,
 	return emulator_err_t{ backend_->unmap_physical_memory(aligned_address, aligned_size) };
 }
 
+emulator_err_t hypermulator_t::protect_physical_memory(const address_type address, const size_type size, const protection_type protection)
+{
+	const address_type aligned_address = align_down(address, page_size);
+	const size_type aligned_size = align_up(size, page_size);
+
+	return emulator_err_t{ backend_->protect_physical_memory(aligned_address, aligned_size, protection) };
+}
+
 emulator_err_t hypermulator_t::read_physical_memory(const address_type address, void* const buffer, const size_type size) const
 {
 	return emulator_err_t{ backend_->read_physical_memory(address, buffer, size) };

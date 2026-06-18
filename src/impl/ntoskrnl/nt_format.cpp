@@ -538,7 +538,7 @@ std::string guest_vsprintf(const emulator_t& emulator, const std::string_view fo
 }
 
 void redirect_ntoskrnl_format_functions(const std::shared_ptr<emulator_t>& emulator,
-	const kernel_image_t& mapped_image)
+	const image_t& mapped_image)
 {
 	redirect_function(
 		[emulator]

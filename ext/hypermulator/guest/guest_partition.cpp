@@ -4,10 +4,16 @@
 
 #include <spdlog/spdlog.h>
 #include <ranges>
+#include <cstring>
 
 static void* aligned_mem_alloc(const std::size_t size)
 {
-	return VirtualAlloc(nullptr, size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+	void* const buffer = VirtualAlloc(nullptr, size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+	if (buffer)
+	{
+		std::memset(buffer, 0, size);
+	}
+	return buffer;
 }
 
 static void mem_free(void* const buffer)

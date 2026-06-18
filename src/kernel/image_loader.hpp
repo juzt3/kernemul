@@ -10,7 +10,28 @@
 
 namespace kernel
 {
-	std::shared_ptr<kernel_image_t> map_kernel_image(const std::shared_ptr<emulator_t>& emulator, std::string_view name,
+	struct image_load_options_t
+	{
+		bool fix_imports = false;
+		bool user_accessible = false;
+		bool load_pdb = false;
+		bool add_to_module_list = true;
+		bool register_redirections = true;
+		bool monitor_data = true;
+		std::wstring_view directory = L"\\SystemRoot\\system32\\";
+	};
+
+	std::shared_ptr<image_t> map_image(const std::shared_ptr<emulator_t>& emulator,
+	                                          std::string_view name,
+	                                          const image_load_options_t& options);
+
+	std::shared_ptr<image_t> map_kernel_image(const std::shared_ptr<emulator_t>& emulator,
+	                                                 std::string_view name,
 	                                                 bool fix_imports = true,
 	                                                 std::wstring_view directory = L"\\SystemRoot\\system32\\");
+
+	std::shared_ptr<image_t> map_user_image(const std::shared_ptr<emulator_t>& emulator,
+	                                               std::string_view name,
+	                                               bool fix_imports = false,
+	                                               bool load_pdb = false);
 }

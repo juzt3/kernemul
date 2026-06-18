@@ -30,6 +30,7 @@ public:
 
 	[[nodiscard]] emulator_err_t map_physical_memory(address_type address, size_type size, protection_type protection) override;
 	[[nodiscard]] emulator_err_t unmap_physical_memory(address_type address, size_type size) override;
+	[[nodiscard]] emulator_err_t protect_physical_memory(address_type address, size_type size, protection_type protection) override;
 
 	[[nodiscard]] emulator_err_t read_physical_memory(address_type address, void* buffer, size_type size) const override;
 	[[nodiscard]] emulator_err_t write_physical_memory(address_type address, const void* buffer, size_type size) override;

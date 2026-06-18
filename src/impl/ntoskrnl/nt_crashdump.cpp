@@ -7,7 +7,7 @@ constexpr std::uint32_t machine_amd64 = 34404;
 constexpr std::uint32_t dump_buffer_size = 0x40000;
 
 void redirect_ntoskrnl_crashdump_functions(const std::shared_ptr<emulator_t>& emulator,
-	const kernel_image_t& mapped_image)
+	const image_t& mapped_image)
 {
 	redirect_function(
 		[emulator]

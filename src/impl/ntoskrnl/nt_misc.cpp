@@ -1,12 +1,28 @@
 #include "nt_helpers.hpp"
 #include "../../kernel/thread.hpp"
+#include "../../kernel/segments.hpp"
+#include "../../kernel/exception_common.hpp"
 #include "../../util/util.hpp"
 #include "../../kernel/exception.hpp"
+#include "../../user/user.hpp"
+#include "../../user/user_memory.hpp"
+#include "../../user/exception_dispatch.hpp"
 
+#include <Windows.h>
 #include <numeric>
 #include <thread>
 #include <atomic>
 #include <chrono>
+
+using nt_query_information_process_fn = NTSTATUS(NTAPI*)(HANDLE, ULONG, PVOID, ULONG, PULONG);
+
+static nt_query_information_process_fn get_host_nt_query_information_process()
+{
+	static const auto fn = reinterpret_cast<nt_query_information_process_fn>(
+		GetProcAddress(GetModuleHandleA("ntdll.dll"), "NtQueryInformationProcess"));
+
+	return fn;
+}
 
 static std::uint8_t get_guest_irql(const std::shared_ptr<emulator_t>& emulator)
 {
@@ -14,7 +30,7 @@ static std::uint8_t get_guest_irql(const std::shared_ptr<emulator_t>& emulator)
 }
 
 void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulator,
-	const kernel_image_t& mapped_image)
+	const image_t& mapped_image)
 {
 	// todo: actually register callbacks into a list and invoke on bugcheck
 	redirect_function(
@@ -820,15 +836,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 			const auto* scope_table_ptr = reinterpret_cast<const std::uint32_t*>(module_base + handler_data_rva);
 			const auto scope_count = scope_table_ptr[0];
 
-			struct scope_entry_t
-			{
-				std::uint32_t begin_address;
-				std::uint32_t end_address;
-				std::uint32_t handler_address;
-				std::uint32_t jump_target;
-			};
-
-			const auto* scopes = reinterpret_cast<const scope_entry_t*>(&scope_table_ptr[1]);
+			const auto* scopes = reinterpret_cast<const exception_common::scope_entry_t*>(&scope_table_ptr[1]);
 
 			THREAD_LOG("__C_specific_handler: control_pc_rva=0x{:X}, flags=0x{:X}, scope_count={}, scope_index={}",
 				control_pc_rva, record.ExceptionFlags, scope_count, scope_index);
@@ -2835,39 +2843,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 			ctx.MxCsr = 0x1F80;
 			ctx.FltSave.MxCsr = 0x1F80;
 
-			const auto xmm0 = emulator->read_register<x86::reg::xmm0, xmm_state_register_t>();
-			const auto xmm1 = emulator->read_register<x86::reg::xmm1, xmm_state_register_t>();
-			const auto xmm2 = emulator->read_register<x86::reg::xmm2, xmm_state_register_t>();
-			const auto xmm3 = emulator->read_register<x86::reg::xmm3, xmm_state_register_t>();
-			const auto xmm4 = emulator->read_register<x86::reg::xmm4, xmm_state_register_t>();
-			const auto xmm5 = emulator->read_register<x86::reg::xmm5, xmm_state_register_t>();
-			const auto xmm6 = emulator->read_register<x86::reg::xmm6, xmm_state_register_t>();
-			const auto xmm7 = emulator->read_register<x86::reg::xmm7, xmm_state_register_t>();
-			const auto xmm8 = emulator->read_register<x86::reg::xmm8, xmm_state_register_t>();
-			const auto xmm9 = emulator->read_register<x86::reg::xmm9, xmm_state_register_t>();
-			const auto xmm10 = emulator->read_register<x86::reg::xmm10, xmm_state_register_t>();
-			const auto xmm11 = emulator->read_register<x86::reg::xmm11, xmm_state_register_t>();
-			const auto xmm12 = emulator->read_register<x86::reg::xmm12, xmm_state_register_t>();
-			const auto xmm13 = emulator->read_register<x86::reg::xmm13, xmm_state_register_t>();
-			const auto xmm14 = emulator->read_register<x86::reg::xmm14, xmm_state_register_t>();
-			const auto xmm15 = emulator->read_register<x86::reg::xmm15, xmm_state_register_t>();
-
-			std::memcpy(&ctx.FltSave.XmmRegisters[0], &xmm0, sizeof(xmm_state_register_t));
-			std::memcpy(&ctx.FltSave.XmmRegisters[1], &xmm1, sizeof(xmm_state_register_t));
-			std::memcpy(&ctx.FltSave.XmmRegisters[2], &xmm2, sizeof(xmm_state_register_t));
-			std::memcpy(&ctx.FltSave.XmmRegisters[3], &xmm3, sizeof(xmm_state_register_t));
-			std::memcpy(&ctx.FltSave.XmmRegisters[4], &xmm4, sizeof(xmm_state_register_t));
-			std::memcpy(&ctx.FltSave.XmmRegisters[5], &xmm5, sizeof(xmm_state_register_t));
-			std::memcpy(&ctx.FltSave.XmmRegisters[6], &xmm6, sizeof(xmm_state_register_t));
-			std::memcpy(&ctx.FltSave.XmmRegisters[7], &xmm7, sizeof(xmm_state_register_t));
-			std::memcpy(&ctx.FltSave.XmmRegisters[8], &xmm8, sizeof(xmm_state_register_t));
-			std::memcpy(&ctx.FltSave.XmmRegisters[9], &xmm9, sizeof(xmm_state_register_t));
-			std::memcpy(&ctx.FltSave.XmmRegisters[10], &xmm10, sizeof(xmm_state_register_t));
-			std::memcpy(&ctx.FltSave.XmmRegisters[11], &xmm11, sizeof(xmm_state_register_t));
-			std::memcpy(&ctx.FltSave.XmmRegisters[12], &xmm12, sizeof(xmm_state_register_t));
-			std::memcpy(&ctx.FltSave.XmmRegisters[13], &xmm13, sizeof(xmm_state_register_t));
-			std::memcpy(&ctx.FltSave.XmmRegisters[14], &xmm14, sizeof(xmm_state_register_t));
-			std::memcpy(&ctx.FltSave.XmmRegisters[15], &xmm15, sizeof(xmm_state_register_t));
+			exception_common::read_xmms(emulator, ctx);
 
 			static_cast<void>(emulator->write_virtual_memory(context_address, &ctx, sizeof(ctx)));
 
@@ -3139,24 +3115,28 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 				}
 			}
 
-			// allocate a fake PEB so callers don't crash dereferencing null
-			static emulator_t::address_type fake_peb_address = 0;
-			if (!fake_peb_address)
+			if (user::usermode_peb_address)
 			{
-				// PEB is ~0x7C8 bytes; allocate enough zeroed memory
-				const auto peb_alloc = emulator->heap_allocate(0x1000, prot_read_write, true);
-				peb_alloc.error_or({}).throw_if("NtQueryInformationProcess: allocate fake PEB");
-				fake_peb_address = *peb_alloc;
-
-				// allocate fake RTL_USER_PROCESS_PARAMETERS at PEB+0x20
-				const auto params_alloc = emulator->heap_allocate(0x400, prot_read_write, true);
-				params_alloc.error_or({}).throw_if("NtQueryInformationProcess: allocate fake ProcessParameters");
-				const auto params_addr = *params_alloc;
-
-				emulator->write_virtual_memory(fake_peb_address + 0x20, &params_addr, sizeof(params_addr))
-					.throw_if("NtQueryInformationProcess: write PEB->ProcessParameters");
+				basic_info.peb_base_address = user::usermode_peb_address;
 			}
-			basic_info.peb_base_address = fake_peb_address;
+			else
+			{
+				static emulator_t::address_type fake_peb_address = 0;
+				if (!fake_peb_address)
+				{
+					const auto peb_alloc = emulator->heap_allocate(0x1000, prot_read_write, true);
+					peb_alloc.error_or({}).throw_if("NtQueryInformationProcess: allocate fake PEB");
+					fake_peb_address = *peb_alloc;
+
+					const auto params_alloc = emulator->heap_allocate(0x400, prot_read_write, true);
+					params_alloc.error_or({}).throw_if("NtQueryInformationProcess: allocate fake ProcessParameters");
+					const auto params_addr = *params_alloc;
+
+					emulator->write_virtual_memory(fake_peb_address + 0x20, &params_addr, sizeof(params_addr))
+						.throw_if("NtQueryInformationProcess: write PEB->ProcessParameters");
+				}
+				basic_info.peb_base_address = fake_peb_address;
+			}
 
 			const auto write_size = std::min(static_cast<std::size_t>(buffer_length), sizeof(basic_info));
 			if (buffer_address && write_size)
@@ -3232,10 +3212,41 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 				write_nt_success(emulator);
 			}
 		}
+		else if (info_class == 0x24)
+		{
+			// ProcessCookie (36 = 0x24) - used by CRT __security_init_cookie
+			constexpr std::uint32_t process_cookie = 0x01234567;
+
+			if (buffer_address && buffer_length >= sizeof(process_cookie))
+			{
+				static_cast<void>(emulator->write_virtual_memory(buffer_address, &process_cookie, sizeof(process_cookie)));
+			}
+			if (return_length_address)
+			{
+				const std::uint32_t ret_len = sizeof(process_cookie);
+				static_cast<void>(emulator->write_virtual_memory(return_length_address, &ret_len, sizeof(ret_len)));
+			}
+
+			THREAD_LOG("NtQueryInformationProcess: ProcessCookie -> 0x{:X}", process_cookie);
+			write_nt_success(emulator);
+		}
+		else if (info_class == 0x25)
+		{
+			THREAD_LOG("NtQueryInformationProcess: class 0x25 (ProcessMitigationPolicy) -> zeroed buffer");
+
+			if (buffer_address && buffer_length > 0)
+			{
+				std::vector<std::uint8_t> zeros(buffer_length, 0);
+				static_cast<void>(emulator->write_virtual_memory(buffer_address, zeros.data(), buffer_length));
+			}
+
+			write_nt_success(emulator);
+		}
 		else
 		{
-			THREAD_WARN_LOG("NtQueryInformationProcess: unhandled class 0x{:X}", info_class);
 			constexpr std::uint32_t status_invalid_info_class = 0xC0000003;
+			THREAD_LOG("NtQueryInformationProcess: unhandled class 0x{:X}, returning STATUS_INVALID_INFO_CLASS",
+				info_class);
 			write_nt_status(emulator, status_invalid_info_class);
 		}
 	};
@@ -3359,7 +3370,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 	{
 		const auto group_number = emulator->read_register<x86::reg::rcx, std::uint16_t>();
 
-		constexpr std::uint32_t count = 8;
+		constexpr std::uint32_t count = kernel::processor_count;
 
 		THREAD_LOG("KeQueryActiveProcessorCountEx called (group=0x{:X}) -> {}", group_number, count);
 
@@ -3391,5 +3402,1693 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 		},
 		mapped_image,
 		"SeRegisterImageVerificationCallback"
+	);
+
+	// NtSetInformationThread(ThreadHandle, InfoClass, Buffer, Length)
+	const auto set_information_thread = [emulator]
+	{
+		const auto thread_handle = read_raw_arg(emulator, 0);
+		const auto info_class = static_cast<std::uint32_t>(read_raw_arg(emulator, 1));
+		const auto buffer_address = read_raw_arg(emulator, 2);
+		const auto buffer_length = static_cast<std::uint32_t>(read_raw_arg(emulator, 3));
+
+		THREAD_LOG("NtSetInformationThread called (handle=0x{:X}, class=0x{:X}, buf=0x{:X}, len=0x{:X})",
+			thread_handle, info_class, buffer_address, buffer_length);
+
+		constexpr std::uint32_t thread_hide_from_debugger = 0x11;
+		constexpr std::uint32_t thread_zero_tls_cell = 0x17;
+		constexpr std::uint32_t thread_base_priority = 0x03;
+		constexpr std::uint32_t thread_scheduler_shared_data_slot = 0x23;
+
+		if (info_class == thread_hide_from_debugger)
+		{
+			THREAD_LOG("NtSetInformationThread: ThreadHideFromDebugger (ignored)");
+		}
+		else if (info_class == thread_zero_tls_cell)
+		{
+			THREAD_LOG("NtSetInformationThread: ThreadZeroTlsCell (ignored)");
+		}
+		else if (info_class == thread_base_priority)
+		{
+			THREAD_LOG("NtSetInformationThread: ThreadBasePriority (ignored)");
+		}
+		else if (info_class == thread_scheduler_shared_data_slot)
+		{
+			THREAD_LOG("NtSetInformationThread: ThreadSchedulerSharedDataSlot (ignored)");
+		}
+		else
+		{
+			THREAD_WARN_LOG("NtSetInformationThread: unhandled class 0x{:X}", info_class);
+		}
+
+		write_nt_success(emulator);
+	};
+
+	redirect_function(set_information_thread, mapped_image, "NtSetInformationThread");
+	redirect_function(set_information_thread, mapped_image, "ZwSetInformationThread");
+
+	// NtSetInformationProcess(ProcessHandle, InfoClass, Buffer, Length)
+	const auto set_information_process = [emulator]
+	{
+		const auto process_handle = read_raw_arg(emulator, 0);
+		const auto info_class = static_cast<std::uint32_t>(read_raw_arg(emulator, 1));
+		const auto buffer_address = read_raw_arg(emulator, 2);
+		const auto buffer_length = static_cast<std::uint32_t>(read_raw_arg(emulator, 3));
+
+		THREAD_LOG("NtSetInformationProcess called (handle=0x{:X}, class=0x{:X}, buf=0x{:X}, len=0x{:X})",
+			process_handle, info_class, buffer_address, buffer_length);
+
+		write_nt_success(emulator);
+	};
+
+	redirect_function(set_information_process, mapped_image, "NtSetInformationProcess");
+	redirect_function(set_information_process, mapped_image, "ZwSetInformationProcess");
+
+	// NtContinue(ContextRecord*, RaiseAlert)
+	redirect_function(
+		kernel::function_implementation_t(
+			[emulator](bool& skip_return)
+			{
+				skip_return = true;
+
+				const auto context_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+				const auto raise_alert = emulator->read_register<x86::reg::rdx, std::uint32_t>();
+
+				THREAD_LOG("NtContinue called (context=0x{:X}, raise_alert={})", context_address, raise_alert);
+
+				CONTEXT ctx{};
+				static_cast<void>(emulator->read_virtual_memory(context_address, &ctx, sizeof(ctx)));
+
+				emulator->write_register<x86::reg::rax>(ctx.Rax);
+				emulator->write_register<x86::reg::rcx>(ctx.Rcx);
+				emulator->write_register<x86::reg::rdx>(ctx.Rdx);
+				emulator->write_register<x86::reg::rbx>(ctx.Rbx);
+				emulator->write_register<x86::reg::rsp>(ctx.Rsp);
+				emulator->write_register<x86::reg::rbp>(ctx.Rbp);
+				emulator->write_register<x86::reg::rsi>(ctx.Rsi);
+				emulator->write_register<x86::reg::rdi>(ctx.Rdi);
+				emulator->write_register<x86::reg::r8>(ctx.R8);
+				emulator->write_register<x86::reg::r9>(ctx.R9);
+				emulator->write_register<x86::reg::r10>(ctx.R10);
+				emulator->write_register<x86::reg::r11>(ctx.R11);
+				emulator->write_register<x86::reg::r12>(ctx.R12);
+				emulator->write_register<x86::reg::r13>(ctx.R13);
+				emulator->write_register<x86::reg::r14>(ctx.R14);
+				emulator->write_register<x86::reg::r15>(ctx.R15);
+				emulator->write_register<x86::reg::rip>(ctx.Rip);
+
+				rflags flags = { .flags = static_cast<std::uint64_t>(ctx.EFlags) };
+				flags.read_as_1 = 1;
+				emulator->write_register<x86::reg::rflags>(flags.flags);
+
+				const auto cs_sel = static_cast<std::uint16_t>(ctx.SegCs);
+				const auto ss_sel = static_cast<std::uint16_t>(ctx.SegSs);
+
+				if (cs_sel == kernel::user_cs_selector)
+				{
+					kernel::swap_to_usermode_segments(emulator);
+
+					const auto gs_base = kernel::current_thread->state().gs_base;
+					kernel::swap_to_usermode_gs(emulator, gs_base);
+				}
+
+				THREAD_LOG("NtContinue: restoring to RIP=0x{:X}, RSP=0x{:X}, CS=0x{:X}",
+					ctx.Rip, ctx.Rsp, cs_sel);
+
+				user::clear_exception_dispatch_guard();
+			}
+		),
+		mapped_image,
+		"NtContinue"
+	);
+
+	// NtYieldExecution()
+	redirect_function(
+		[emulator]
+		{
+			THREAD_LOG("NtYieldExecution called");
+			write_nt_status(emulator, 0x40000024); // STATUS_NO_YIELD_PERFORMED
+		},
+		mapped_image,
+		"NtYieldExecution"
+	);
+
+	// NtOpenDirectoryObject(DirectoryHandle*, DesiredAccess, ObjectAttributes*)
+	redirect_function(
+		[emulator]
+		{
+			const auto handle_out = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto desired_access = emulator->read_register<x86::reg::rdx, std::uint32_t>();
+			const auto oa_address = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
+
+			std::string dir_name;
+
+			if (oa_address)
+			{
+				auto oa = emulator_object_t<OBJECT_ATTRIBUTES>::view_at(emulator, oa_address);
+				const auto oa_val = oa.read();
+				const auto name_addr = reinterpret_cast<emulator_t::address_type>(oa_val.ObjectName);
+
+				if (name_addr)
+				{
+					auto us = emulator_object_t<UNICODE_STRING>::view_at(emulator, name_addr);
+					const auto us_val = us.read();
+					const auto buf = reinterpret_cast<emulator_t::address_type>(us_val.Buffer);
+
+					if (buf && us_val.Length > 0)
+					{
+						dir_name = util::narrow_wstring(kernel::read_guest_wstring(*emulator, buf));
+					}
+				}
+			}
+
+			THREAD_LOG("NtOpenDirectoryObject called (handle_out=0x{:X}, access=0x{:X}, name='{}')",
+				handle_out, desired_access, dir_name);
+
+			constexpr std::size_t dir_body_size = 0x10;
+			std::array<std::uint8_t, dir_body_size> body{};
+
+			const auto body_address = kernel::object_manager->create_object(0, body.data(), body.size());
+			const auto dir_handle = kernel::object_manager->create_handle(body_address, desired_access);
+
+			kernel::object_manager->register_named_object(dir_name, body_address);
+
+			if (handle_out)
+			{
+				static_cast<void>(emulator->write_virtual_memory(handle_out, &dir_handle, sizeof(dir_handle)));
+			}
+
+			THREAD_LOG("NtOpenDirectoryObject: created handle 0x{:X} for '{}'", dir_handle, dir_name);
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"NtOpenDirectoryObject"
+	);
+
+	// NtOpenSymbolicLinkObject(LinkHandle*, DesiredAccess, ObjectAttributes*)
+	redirect_function(
+		[emulator]
+		{
+			const auto handle_out = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto desired_access = emulator->read_register<x86::reg::rdx, std::uint32_t>();
+			const auto oa_address = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
+
+			std::string link_name;
+
+			if (oa_address)
+			{
+				auto oa = emulator_object_t<OBJECT_ATTRIBUTES>::view_at(emulator, oa_address);
+				const auto oa_val = oa.read();
+				const auto name_addr = reinterpret_cast<emulator_t::address_type>(oa_val.ObjectName);
+
+				if (name_addr)
+				{
+					auto us = emulator_object_t<UNICODE_STRING>::view_at(emulator, name_addr);
+					const auto us_val = us.read();
+					const auto buf = reinterpret_cast<emulator_t::address_type>(us_val.Buffer);
+
+					if (buf && us_val.Length > 0)
+					{
+						link_name = util::narrow_wstring(kernel::read_guest_wstring(*emulator, buf));
+					}
+				}
+			}
+
+			THREAD_LOG("NtOpenSymbolicLinkObject called (handle_out=0x{:X}, access=0x{:X}, name='{}')",
+				handle_out, desired_access, link_name);
+
+			constexpr std::size_t body_size = 0x10;
+			std::array<std::uint8_t, body_size> body{};
+
+			const auto body_address = kernel::object_manager->create_object(0, body.data(), body.size());
+			const auto link_handle = kernel::object_manager->create_handle(body_address, desired_access);
+
+			if (handle_out)
+			{
+				static_cast<void>(emulator->write_virtual_memory(handle_out, &link_handle, sizeof(link_handle)));
+			}
+
+			THREAD_LOG("NtOpenSymbolicLinkObject: created handle 0x{:X} for '{}'", link_handle, link_name);
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"NtOpenSymbolicLinkObject"
+	);
+
+	// NtQuerySymbolicLinkObject(LinkHandle, LinkTarget*, ReturnedLength*)
+	redirect_function(
+		[emulator]
+		{
+			const auto link_handle = emulator->read_register<x86::reg::rcx, std::uint64_t>();
+			const auto target_address = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+			const auto return_length_ptr = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
+
+			THREAD_LOG("NtQuerySymbolicLinkObject called (handle=0x{:X}, target=0x{:X})",
+				link_handle, target_address);
+
+			// return the System32 path for KnownDllPath
+			constexpr std::wstring_view system32_path = L"C:\\Windows\\System32";
+
+			if (target_address)
+			{
+				auto us = emulator_object_t<UNICODE_STRING>::view_at(emulator, target_address);
+				auto us_val = us.read();
+
+				const auto buf_addr = reinterpret_cast<emulator_t::address_type>(us_val.Buffer);
+				const auto max_len = us_val.MaximumLength;
+				const auto needed = static_cast<std::uint16_t>(system32_path.size() * sizeof(wchar_t));
+
+				if (buf_addr && max_len >= needed)
+				{
+					static_cast<void>(emulator->write_virtual_memory(buf_addr, system32_path.data(), needed));
+					us_val.Length = needed;
+					us.write(us_val);
+				}
+			}
+
+			if (return_length_ptr)
+			{
+				const auto len = static_cast<std::uint32_t>(system32_path.size() * sizeof(wchar_t));
+				static_cast<void>(emulator->write_virtual_memory(return_length_ptr, &len, sizeof(len)));
+			}
+
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"NtQuerySymbolicLinkObject"
+	);
+
+	// NtQueryAttributesFile(ObjectAttributes*, FileBasicInformation*)
+	redirect_function(
+		[emulator]
+		{
+			const auto oa_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto info_address = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+
+			std::string file_path;
+
+			if (oa_address)
+			{
+				auto oa = emulator_object_t<OBJECT_ATTRIBUTES>::view_at(emulator, oa_address);
+				const auto oa_val = oa.read();
+				const auto name_addr = reinterpret_cast<emulator_t::address_type>(oa_val.ObjectName);
+
+				if (name_addr)
+				{
+					auto us = emulator_object_t<UNICODE_STRING>::view_at(emulator, name_addr);
+					const auto us_val = us.read();
+					const auto buf = reinterpret_cast<emulator_t::address_type>(us_val.Buffer);
+
+					if (buf && us_val.Length > 0)
+					{
+						file_path = util::narrow_wstring(kernel::read_guest_wstring(*emulator, buf));
+					}
+				}
+			}
+
+			THREAD_LOG("NtQueryAttributesFile called (path='{}')", file_path);
+
+			// normalize and check if file exists in our vfs
+			auto normalized = file_path;
+			for (auto& c : normalized)
+			{
+				if (c == '\\') c = '/';
+				c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+			}
+
+			auto strip_prefix = [](std::string& s, std::string_view prefix)
+			{
+				std::string lower(prefix);
+				for (auto& c : lower)
+				{
+					if (c == '\\') c = '/';
+					c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+				}
+				if (s.starts_with(lower))
+				{
+					s = s.substr(lower.size());
+				}
+			};
+
+			strip_prefix(normalized, "\\device\\");
+			strip_prefix(normalized, "\\??\\");
+			strip_prefix(normalized, "\\dosdevices\\");
+			strip_prefix(normalized, "\\systemroot\\");
+
+			if (const auto hdv_pos = normalized.find("harddiskvolume"); hdv_pos == 0)
+			{
+				if (const auto slash = normalized.find('/', hdv_pos); slash != std::string::npos)
+				{
+					normalized = normalized.substr(slash + 1);
+					if (normalized.starts_with("windows/"))
+					{
+						normalized = normalized.substr(8);
+					}
+				}
+			}
+
+			if (normalized.size() >= 3
+				&& std::isalpha(static_cast<unsigned char>(normalized[0]))
+				&& normalized[1] == ':'
+				&& normalized[2] == '/')
+			{
+				normalized = normalized.substr(3);
+			}
+
+			if (normalized.starts_with("windows/"))
+			{
+				normalized = normalized.substr(8);
+			}
+
+			const auto file = kernel::filesystem->open_at(normalized);
+
+			if (file)
+			{
+				// write basic info - all zeros except file exists
+				if (info_address)
+				{
+					struct
+					{
+						std::int64_t creation_time;
+						std::int64_t last_access_time;
+						std::int64_t last_write_time;
+						std::int64_t change_time;
+						std::uint32_t file_attributes;
+					} basic_info = {};
+
+					basic_info.file_attributes = 0x20; // FILE_ATTRIBUTE_ARCHIVE
+					static_cast<void>(emulator->write_virtual_memory(info_address, &basic_info, sizeof(basic_info)));
+				}
+
+				THREAD_LOG("NtQueryAttributesFile: found '{}'", normalized);
+				write_nt_success(emulator);
+			}
+			else
+			{
+				THREAD_LOG("NtQueryAttributesFile: not found '{}'", normalized);
+				write_nt_status(emulator, 0xC0000034); // STATUS_OBJECT_NAME_NOT_FOUND
+			}
+		},
+		mapped_image,
+		"NtQueryAttributesFile"
+	);
+
+	// NtQueryPerformanceCounter(PerformanceCounter*, PerformanceFrequency*)
+	redirect_function(
+		[emulator]
+		{
+			const auto counter_ptr = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto frequency_ptr = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+
+			THREAD_LOG("NtQueryPerformanceCounter called");
+
+			if (counter_ptr)
+			{
+				LARGE_INTEGER counter;
+				QueryPerformanceCounter(&counter);
+				static_cast<void>(emulator->write_virtual_memory(counter_ptr, &counter, sizeof(counter)));
+			}
+
+			if (frequency_ptr)
+			{
+				LARGE_INTEGER frequency;
+				QueryPerformanceFrequency(&frequency);
+				static_cast<void>(emulator->write_virtual_memory(frequency_ptr, &frequency, sizeof(frequency)));
+			}
+
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"NtQueryPerformanceCounter"
+	);
+
+	// NtQuerySystemTime(SystemTime*)
+	redirect_function(
+		[emulator]
+		{
+			const auto time_ptr = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+
+			THREAD_LOG("NtQuerySystemTime called");
+
+			if (time_ptr)
+			{
+				LARGE_INTEGER time;
+				GetSystemTimeAsFileTime(reinterpret_cast<FILETIME*>(&time));
+				static_cast<void>(emulator->write_virtual_memory(time_ptr, &time, sizeof(time)));
+			}
+
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"NtQuerySystemTime"
+	);
+
+	// NtSetThreadExecutionState(NewFlags, PreviousFlags*)
+	redirect_function(
+		[emulator]
+		{
+			const auto new_flags = emulator->read_register<x86::reg::rcx, std::uint32_t>();
+			const auto prev_ptr = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+
+			THREAD_LOG("NtSetThreadExecutionState called (flags=0x{:X})", new_flags);
+
+			if (prev_ptr)
+			{
+				const std::uint32_t prev = 0;
+				static_cast<void>(emulator->write_virtual_memory(prev_ptr, &prev, sizeof(prev)));
+			}
+
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"NtSetThreadExecutionState"
+	);
+
+	// NtNotifyChangeKey(KeyHandle, Event, ...)
+	redirect_function(
+		[emulator]
+		{
+			THREAD_LOG("NtNotifyChangeKey called (stubbed)");
+			write_nt_status(emulator, 0x00000103); // STATUS_PENDING
+		},
+		mapped_image,
+		"NtNotifyChangeKey"
+	);
+
+	// NtFlushBuffersFile(FileHandle, IoStatusBlock*)
+	redirect_function(
+		[emulator]
+		{
+			const auto file_handle = emulator->read_register<x86::reg::rcx, std::uint64_t>();
+			THREAD_LOG("NtFlushBuffersFile called (handle=0x{:X})", file_handle);
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"NtFlushBuffersFile"
+	);
+
+	// NtQueryDefaultLocale(UserProfile, DefaultLocaleId*)
+	redirect_function(
+		[emulator]
+		{
+			const auto user_profile = emulator->read_register<x86::reg::rcx, std::uint32_t>();
+			const auto locale_id_ptr = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+
+			THREAD_LOG("NtQueryDefaultLocale called (user_profile={})", user_profile);
+
+			if (locale_id_ptr)
+			{
+				constexpr std::uint32_t en_us = 0x0409;
+				static_cast<void>(emulator->write_virtual_memory(locale_id_ptr, &en_us, sizeof(en_us)));
+			}
+
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"NtQueryDefaultLocale"
+	);
+
+	// NtQueryDefaultUILanguage(DefaultUILanguageId*)
+	redirect_function(
+		[emulator]
+		{
+			const auto lang_ptr = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+
+			THREAD_LOG("NtQueryDefaultUILanguage called");
+
+			if (lang_ptr)
+			{
+				constexpr std::uint16_t en_us = 0x0409;
+				static_cast<void>(emulator->write_virtual_memory(lang_ptr, &en_us, sizeof(en_us)));
+			}
+
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"NtQueryDefaultUILanguage"
+	);
+
+	// NtQueryInstallUILanguage(InstallUILanguageId*)
+	redirect_function(
+		[emulator]
+		{
+			const auto lang_ptr = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+
+			THREAD_LOG("NtQueryInstallUILanguage called");
+
+			if (lang_ptr)
+			{
+				constexpr std::uint16_t en_us = 0x0409;
+				static_cast<void>(emulator->write_virtual_memory(lang_ptr, &en_us, sizeof(en_us)));
+			}
+
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"NtQueryInstallUILanguage"
+	);
+
+	// NtCreateEvent(EventHandle*, DesiredAccess, ObjectAttributes*, EventType, InitialState)
+	redirect_function(
+		[emulator]
+		{
+			const auto handle_out = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto desired_access = emulator->read_register<x86::reg::rdx, std::uint32_t>();
+			const auto oa_address = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
+			const auto event_type = emulator->read_register<x86::reg::r9, std::uint32_t>();
+
+			const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
+			std::uint32_t initial_state = 0;
+			static_cast<void>(emulator->read_virtual_memory(rsp + 0x28, &initial_state, sizeof(initial_state)));
+
+			THREAD_LOG("NtCreateEvent called (handle_out=0x{:X}, access=0x{:X}, type={}, initial={})",
+				handle_out, desired_access, event_type, initial_state);
+
+			constexpr std::size_t event_body_size = 0x18;
+			std::array<std::uint8_t, event_body_size> body{};
+			body[0] = static_cast<std::uint8_t>(event_type);
+			body[1] = static_cast<std::uint8_t>(initial_state);
+
+			const auto body_address = kernel::object_manager->create_object(0, body.data(), body.size());
+			const auto event_handle = kernel::object_manager->create_handle(body_address, desired_access);
+
+			if (handle_out)
+			{
+				static_cast<void>(emulator->write_virtual_memory(handle_out, &event_handle, sizeof(event_handle)));
+			}
+
+			THREAD_LOG("NtCreateEvent: created handle 0x{:X}", event_handle);
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"NtCreateEvent"
+	);
+
+	// NtOpenEvent(EventHandle*, DesiredAccess, ObjectAttributes*)
+	redirect_function(
+		[emulator]
+		{
+			const auto handle_out = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto desired_access = emulator->read_register<x86::reg::rdx, std::uint32_t>();
+			const auto oa_address = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
+
+			std::string event_name;
+
+			if (oa_address)
+			{
+				emulator_t::address_type name_address = 0;
+				static_cast<void>(emulator->read_virtual_memory(
+					oa_address + offsetof(OBJECT_ATTRIBUTES, ObjectName), &name_address, sizeof(name_address)));
+
+				if (name_address)
+				{
+					const auto us = emulator_object_t<UNICODE_STRING>::view_at(emulator, name_address).read();
+					const auto buffer_address = reinterpret_cast<emulator_t::address_type>(us.Buffer);
+
+					if (buffer_address && us.Length)
+					{
+						event_name = util::narrow_wstring(kernel::read_guest_wstring(*emulator, buffer_address));
+					}
+				}
+			}
+
+			THREAD_LOG("NtOpenEvent called (handle_out=0x{:X}, access=0x{:X}, name='{}')",
+				handle_out, desired_access, event_name);
+
+			constexpr std::size_t event_body_size = 0x18;
+			std::array<std::uint8_t, event_body_size> body{};
+
+			const auto body_address = kernel::object_manager->create_object(0, body.data(), body.size());
+			const auto event_handle = kernel::object_manager->create_handle(body_address, desired_access);
+
+			if (handle_out)
+			{
+				static_cast<void>(emulator->write_virtual_memory(handle_out, &event_handle, sizeof(event_handle)));
+			}
+
+			THREAD_LOG("NtOpenEvent: created handle 0x{:X}", event_handle);
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"NtOpenEvent"
+	);
+
+	// NtDuplicateObject(SourceProcess, SourceHandle, TargetProcess, TargetHandle*, DesiredAccess, HandleAttributes, Options)
+	redirect_function(
+		[emulator]
+		{
+			const auto source_process = emulator->read_register<x86::reg::rcx, std::uint64_t>();
+			const auto source_handle = emulator->read_register<x86::reg::rdx, std::uint64_t>();
+			const auto target_process = emulator->read_register<x86::reg::r8, std::uint64_t>();
+			const auto target_handle_out = emulator->read_register<x86::reg::r9, emulator_t::address_type>();
+
+			const auto desired_access = static_cast<std::uint32_t>(read_raw_arg(emulator, 4));
+			const auto handle_attributes = static_cast<std::uint32_t>(read_raw_arg(emulator, 5));
+			const auto options = static_cast<std::uint32_t>(read_raw_arg(emulator, 6));
+
+			constexpr std::uint32_t duplicate_close_source = 0x1;
+			constexpr std::uint32_t duplicate_same_access = 0x2;
+
+			THREAD_LOG("NtDuplicateObject called (src_proc=0x{:X}, src_handle=0x{:X}, tgt_proc=0x{:X}, tgt_out=0x{:X}, access=0x{:X}, attr=0x{:X}, opts=0x{:X})",
+				source_process, source_handle, target_process, target_handle_out, desired_access, handle_attributes, options);
+
+			if (target_handle_out)
+			{
+				emulator_t::address_type body_address = 0;
+				object_manager_t::access_type access = 0x1F0FFF;
+
+				constexpr auto nt_current_process = static_cast<std::uint64_t>(-1);
+				constexpr auto nt_current_thread = static_cast<std::uint64_t>(-2);
+
+				if (source_handle == nt_current_process)
+				{
+					body_address = kernel::current_thread->process()->address();
+					THREAD_LOG("NtDuplicateObject: resolving NtCurrentProcess pseudo-handle -> body 0x{:X}", body_address);
+				}
+				else if (source_handle == nt_current_thread)
+				{
+					body_address = kernel::current_thread->address();
+					THREAD_LOG("NtDuplicateObject: resolving NtCurrentThread pseudo-handle -> body 0x{:X}", body_address);
+				}
+				else
+				{
+					const auto entry = kernel::object_manager->lookup_handle(
+						static_cast<object_manager_t::handle_type>(source_handle));
+
+					if (entry)
+					{
+						body_address = entry->body_address;
+						access = entry->access;
+					}
+				}
+
+				if (!(options & duplicate_same_access) && desired_access != 0)
+				{
+					access = desired_access;
+				}
+
+				std::uint64_t new_handle = 0;
+
+				if (body_address)
+				{
+					kernel::object_manager->reference_object(body_address);
+					new_handle = kernel::object_manager->create_handle(body_address, access);
+					THREAD_LOG("NtDuplicateObject: duplicated 0x{:X} -> 0x{:X}", source_handle, new_handle);
+				}
+				else
+				{
+					new_handle = source_handle;
+					THREAD_WARN_LOG("NtDuplicateObject: source handle 0x{:X} not found, returning same value", source_handle);
+				}
+
+				static_cast<void>(emulator->write_virtual_memory(target_handle_out, &new_handle, sizeof(new_handle)));
+			}
+
+			if (options & duplicate_close_source)
+			{
+				kernel::object_manager->close_handle(static_cast<object_manager_t::handle_type>(source_handle));
+				THREAD_LOG("NtDuplicateObject: closed source handle 0x{:X} (DUPLICATE_CLOSE_SOURCE)", source_handle);
+			}
+
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"NtDuplicateObject"
+	);
+
+	// NtTerminateProcess(ProcessHandle, ExitStatus)
+	redirect_function(
+		kernel::function_implementation_t(
+			[emulator](bool& skip_return)
+			{
+				skip_return = true;
+
+				const auto process_handle = emulator->read_register<x86::reg::rcx, std::uint64_t>();
+				const auto exit_status = emulator->read_register<x86::reg::rdx, std::uint32_t>();
+
+				THREAD_LOG("NtTerminateProcess called (handle=0x{:X}, status=0x{:X})", process_handle, exit_status);
+
+				emulator->write_register<x86::reg::rax>(static_cast<std::uint64_t>(0));
+				emulator->write_register<x86::reg::rip>(0xFFFFFFFFFFFFFFFF);
+			}
+		),
+		mapped_image,
+		"NtTerminateProcess"
+	);
+
+	// NtRaiseException(ExceptionRecord*, Context*, FirstChance)
+	redirect_function(
+		kernel::function_implementation_t(
+			[emulator](bool& skip_return)
+			{
+				skip_return = true;
+
+				const auto exception_record = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+				const auto context_record = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+				const auto first_chance = emulator->read_register<x86::reg::r8, std::uint32_t>();
+
+				std::uint32_t exception_code = 0;
+				static_cast<void>(emulator->read_virtual_memory(exception_record, &exception_code, sizeof(exception_code)));
+
+				THREAD_ERR_LOG("NtRaiseException called (record=0x{:X}, context=0x{:X}, first_chance={}, code=0x{:X})",
+					exception_record, context_record, first_chance, exception_code);
+				THREAD_ERR_LOG("NtRaiseException: unhandled exception, terminating thread");
+
+				user::clear_exception_dispatch_guard();
+
+				emulator->write_register<x86::reg::rax>(static_cast<std::uint64_t>(0));
+				emulator->write_register<x86::reg::rip>(0xFFFFFFFFFFFFFFFF);
+			}
+		),
+		mapped_image,
+		"NtRaiseException"
+	);
+
+	// NtRaiseHardError(ErrorStatus, NumberOfParameters, UnicodeStringParameterMask, Parameters, ValidResponseOptions, Response)
+	redirect_function(
+		[emulator]
+		{
+			const auto error_status = emulator->read_register<x86::reg::rcx, std::uint32_t>();
+			const auto num_params = emulator->read_register<x86::reg::rdx, std::uint32_t>();
+			const auto unicode_mask = emulator->read_register<x86::reg::r8, std::uint32_t>();
+			const auto params_array = emulator->read_register<x86::reg::r9, emulator_t::address_type>();
+
+			THREAD_ERR_LOG("NtRaiseHardError called (status=0x{:X}, params={}, unicode_mask=0x{:X})",
+				error_status, num_params, unicode_mask);
+
+			if (params_array && num_params > 0)
+			{
+				for (std::uint32_t i = 0; i < num_params; ++i)
+				{
+					emulator_t::address_type param_value = 0;
+					static_cast<void>(emulator->read_virtual_memory(
+						params_array + i * sizeof(emulator_t::address_type), &param_value, sizeof(param_value)));
+
+					if ((unicode_mask >> i) & 1)
+					{
+						const auto us = emulator_object_t<UNICODE_STRING>::view_at(emulator, param_value).read();
+						const auto buf = reinterpret_cast<emulator_t::address_type>(us.Buffer);
+
+						if (buf && us.Length)
+						{
+							const auto str = util::narrow_wstring(kernel::read_guest_wstring(*emulator, buf));
+							THREAD_ERR_LOG("NtRaiseHardError param[{}] (string): '{}'", i, str);
+						}
+					}
+					else
+					{
+						THREAD_ERR_LOG("NtRaiseHardError param[{}]: 0x{:X}", i, param_value);
+					}
+				}
+			}
+
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"NtRaiseHardError"
+	);
+
+	// NtSetEvent(EventHandle, PreviousState)
+	redirect_function(
+		[emulator]
+		{
+			const auto event_handle = emulator->read_register<x86::reg::rcx, std::uint64_t>();
+			const auto prev_state_out = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+
+			THREAD_LOG("NtSetEvent called (handle=0x{:X})", event_handle);
+
+			if (prev_state_out)
+			{
+				constexpr std::int32_t zero = 0;
+				static_cast<void>(emulator->write_virtual_memory(prev_state_out, &zero, sizeof(zero)));
+			}
+
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"NtSetEvent"
+	);
+
+	// NtWaitForSingleObject(Handle, Alertable, Timeout)
+	redirect_function(
+		[emulator]
+		{
+			const auto handle = emulator->read_register<x86::reg::rcx, std::uint64_t>();
+			const auto alertable = emulator->read_register<x86::reg::rdx, std::uint32_t>();
+			const auto timeout_ptr = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
+
+			THREAD_LOG("NtWaitForSingleObject called (handle=0x{:X}, alertable={}, timeout=0x{:X})",
+				handle, alertable, timeout_ptr);
+
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"NtWaitForSingleObject"
+	);
+
+	// NtTraceEvent(...)
+	redirect_function(
+		[emulator]
+		{
+			THREAD_LOG("NtTraceEvent called (stub)");
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"NtTraceEvent"
+	);
+
+	// NtCreateIoCompletion(IoCompletionHandle*, DesiredAccess, ObjectAttributes*, NumberOfConcurrentThreads)
+	redirect_function(
+		[emulator]
+		{
+			const auto handle_out = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto desired_access = emulator->read_register<x86::reg::rdx, std::uint32_t>();
+
+			THREAD_LOG("NtCreateIoCompletion called (handle_out=0x{:X}, access=0x{:X})",
+				handle_out, desired_access);
+
+			constexpr std::size_t body_size = 0x40;
+			std::array<std::uint8_t, body_size> body{};
+
+			const auto body_address = kernel::object_manager->create_object(0, body.data(), body.size());
+			const auto handle = kernel::object_manager->create_handle(body_address, desired_access);
+
+			if (handle_out)
+			{
+				static_cast<void>(emulator->write_virtual_memory(handle_out, &handle, sizeof(handle)));
+			}
+
+			THREAD_LOG("NtCreateIoCompletion: created handle 0x{:X}", handle);
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"NtCreateIoCompletion"
+	);
+
+	// NtSetIoCompletion(IoCompletionHandle, KeyContext, ApcContext, IoStatus, IoStatusInformation)
+	redirect_function(
+		[emulator]
+		{
+			const auto handle = emulator->read_register<x86::reg::rcx, std::uint32_t>();
+
+			THREAD_LOG("NtSetIoCompletion called (handle=0x{:X})", handle);
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"NtSetIoCompletion"
+	);
+
+	// NtSetIoCompletionEx(IoCompletionHandle, IoCompletionPacketHandle, KeyContext, ApcContext, IoStatus, IoStatusInformation)
+	redirect_function(
+		[emulator]
+		{
+			const auto handle = emulator->read_register<x86::reg::rcx, std::uint32_t>();
+
+			THREAD_LOG("NtSetIoCompletionEx called (handle=0x{:X})", handle);
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"NtSetIoCompletionEx"
+	);
+
+	// NtRemoveIoCompletion(IoCompletionHandle, KeyContext*, ApcContext*, IoStatusBlock*, Timeout*)
+	redirect_function(
+		[emulator]
+		{
+			const auto handle = emulator->read_register<x86::reg::rcx, std::uint32_t>();
+
+			THREAD_LOG("NtRemoveIoCompletion called (handle=0x{:X}, returning STATUS_TIMEOUT)", handle);
+			write_nt_status(emulator, 0x00000102); // STATUS_TIMEOUT
+		},
+		mapped_image,
+		"NtRemoveIoCompletion"
+	);
+
+	// NtRemoveIoCompletionEx(IoCompletionHandle, IoCompletionInformation, Count, NumEntriesRemoved*, Timeout*, Alertable)
+	redirect_function(
+		[emulator]
+		{
+			const auto handle = emulator->read_register<x86::reg::rcx, std::uint32_t>();
+			const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
+			emulator_t::address_type num_entries_removed_ptr = 0;
+			static_cast<void>(emulator->read_virtual_memory(rsp + 0x28, &num_entries_removed_ptr, sizeof(num_entries_removed_ptr)));
+
+			THREAD_LOG("NtRemoveIoCompletionEx called (handle=0x{:X}, returning STATUS_TIMEOUT)", handle);
+
+			if (num_entries_removed_ptr)
+			{
+				std::uint32_t zero = 0;
+				static_cast<void>(emulator->write_virtual_memory(num_entries_removed_ptr, &zero, sizeof(zero)));
+			}
+
+			write_nt_status(emulator, 0x00000102); // STATUS_TIMEOUT
+		},
+		mapped_image,
+		"NtRemoveIoCompletionEx"
+	);
+
+	// NtCancelWaitCompletionPacket(WaitCompletionPacketHandle, RemoveSignaledPacket)
+	redirect_function(
+		[emulator]
+		{
+			const auto handle = emulator->read_register<x86::reg::rcx, std::uint32_t>();
+
+			THREAD_LOG("NtCancelWaitCompletionPacket called (handle=0x{:X})", handle);
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"NtCancelWaitCompletionPacket"
+	);
+
+	// NtCreateWaitCompletionPacket(WaitCompletionPacketHandle*, DesiredAccess, ObjectAttributes*)
+	redirect_function(
+		[emulator]
+		{
+			const auto handle_out = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto desired_access = emulator->read_register<x86::reg::rdx, std::uint32_t>();
+
+			THREAD_LOG("NtCreateWaitCompletionPacket called (handle_out=0x{:X}, access=0x{:X})",
+				handle_out, desired_access);
+
+			constexpr std::size_t body_size = 0x10;
+			std::array<std::uint8_t, body_size> body{};
+
+			const auto body_address = kernel::object_manager->create_object(0, body.data(), body.size());
+			const auto handle = kernel::object_manager->create_handle(body_address, desired_access);
+
+			if (handle_out)
+			{
+				static_cast<void>(emulator->write_virtual_memory(handle_out, &handle, sizeof(handle)));
+			}
+
+			THREAD_LOG("NtCreateWaitCompletionPacket: created handle 0x{:X}", handle);
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"NtCreateWaitCompletionPacket"
+	);
+
+	// NtAssociateWaitCompletionPacket(WaitCompletionPacketHandle, IoCompletionHandle, TargetObjectHandle, KeyContext, ApcContext, IoStatus, IoStatusInformation, AlreadySignaled*)
+	redirect_function(
+		[emulator]
+		{
+			THREAD_LOG("NtAssociateWaitCompletionPacket called (stub)");
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"NtAssociateWaitCompletionPacket"
+	);
+
+	// NtCreateWorkerFactory(WorkerFactoryHandle*, DesiredAccess, ObjectAttributes*, IoCompletionHandle, WorkerProcessHandle, StartRoutine, StartParameter, MaxThreadCount, StackReserve, StackCommit)
+	redirect_function(
+		[emulator]
+		{
+			const auto handle_out = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto desired_access = emulator->read_register<x86::reg::rdx, std::uint32_t>();
+			const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
+
+			emulator_t::address_type start_routine = 0;
+			std::uint32_t max_thread_count = 0;
+			static_cast<void>(emulator->read_virtual_memory(rsp + 0x30, &start_routine, sizeof(start_routine)));
+			static_cast<void>(emulator->read_virtual_memory(rsp + 0x40, &max_thread_count, sizeof(max_thread_count)));
+
+			THREAD_LOG("NtCreateWorkerFactory called (handle_out=0x{:X}, access=0x{:X}, start=0x{:X}, max_threads={})",
+				handle_out, desired_access, start_routine, max_thread_count);
+
+			constexpr std::size_t body_size = 0x80;
+			std::array<std::uint8_t, body_size> body{};
+
+			const auto body_address = kernel::object_manager->create_object(0, body.data(), body.size());
+			const auto handle = kernel::object_manager->create_handle(body_address, desired_access);
+
+			if (handle_out)
+			{
+				static_cast<void>(emulator->write_virtual_memory(handle_out, &handle, sizeof(handle)));
+			}
+
+			THREAD_LOG("NtCreateWorkerFactory: created handle 0x{:X}", handle);
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"NtCreateWorkerFactory"
+	);
+
+	// NtSetInformationWorkerFactory(WorkerFactoryHandle, InfoClass, Buffer, BufferLength)
+	redirect_function(
+		[emulator]
+		{
+			const auto handle = emulator->read_register<x86::reg::rcx, std::uint32_t>();
+			const auto info_class = emulator->read_register<x86::reg::rdx, std::uint32_t>();
+
+			THREAD_LOG("NtSetInformationWorkerFactory called (handle=0x{:X}, class=0x{:X})", handle, info_class);
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"NtSetInformationWorkerFactory"
+	);
+
+	// NtWorkerFactoryWorkerReady(WorkerFactoryHandle)
+	redirect_function(
+		[emulator]
+		{
+			const auto handle = emulator->read_register<x86::reg::rcx, std::uint32_t>();
+
+			THREAD_LOG("NtWorkerFactoryWorkerReady called (handle=0x{:X})", handle);
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"NtWorkerFactoryWorkerReady"
+	);
+
+	// NtQueryInformationWorkerFactory(WorkerFactoryHandle, InfoClass, Buffer, BufferLength, ReturnLength*)
+	redirect_function(
+		[emulator]
+		{
+			const auto handle = emulator->read_register<x86::reg::rcx, std::uint32_t>();
+			const auto info_class = emulator->read_register<x86::reg::rdx, std::uint32_t>();
+			const auto buffer = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
+			const auto buffer_length = emulator->read_register<x86::reg::r9, std::uint32_t>();
+
+			THREAD_LOG("NtQueryInformationWorkerFactory called (handle=0x{:X}, class=0x{:X}, buf=0x{:X}, len=0x{:X})",
+				handle, info_class, buffer, buffer_length);
+
+			if (buffer && buffer_length)
+			{
+				std::vector<std::uint8_t> zeroed(buffer_length, 0);
+				static_cast<void>(emulator->write_virtual_memory(buffer, zeroed.data(), zeroed.size()));
+			}
+
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"NtQueryInformationWorkerFactory"
+	);
+
+	// NtCreateTimer2(TimerHandle*, Reserved1, ObjectAttributes*, Attributes, DesiredAccess)
+	redirect_function(
+		[emulator]
+		{
+			const auto handle_out = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto desired_access = emulator->read_register<x86::reg::r9, std::uint32_t>();
+
+			THREAD_LOG("NtCreateTimer2 called (handle_out=0x{:X})", handle_out);
+
+			constexpr std::size_t body_size = 0x20;
+			std::array<std::uint8_t, body_size> body{};
+
+			const auto body_address = kernel::object_manager->create_object(0, body.data(), body.size());
+			const auto handle = kernel::object_manager->create_handle(body_address, desired_access);
+
+			if (handle_out)
+			{
+				static_cast<void>(emulator->write_virtual_memory(handle_out, &handle, sizeof(handle)));
+			}
+
+			THREAD_LOG("NtCreateTimer2: created handle 0x{:X}", handle);
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"NtCreateTimer2"
+	);
+
+	// NtSetTimer2(TimerHandle, DueTime, Period, Parameters)
+	redirect_function(
+		[emulator]
+		{
+			const auto handle = emulator->read_register<x86::reg::rcx, std::uint32_t>();
+
+			THREAD_LOG("NtSetTimer2 called (handle=0x{:X})", handle);
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"NtSetTimer2"
+	);
+
+	// NtCancelTimer2(TimerHandle, Parameters)
+	redirect_function(
+		[emulator]
+		{
+			const auto handle = emulator->read_register<x86::reg::rcx, std::uint32_t>();
+
+			THREAD_LOG("NtCancelTimer2 called (handle=0x{:X})", handle);
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"NtCancelTimer2"
+	);
+
+	// NtShutdownWorkerFactory(WorkerFactoryHandle, PendingWorkerCount*)
+	redirect_function(
+		[emulator]
+		{
+			const auto handle = emulator->read_register<x86::reg::rcx, std::uint32_t>();
+			const auto pending_count_ptr = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+
+			THREAD_LOG("NtShutdownWorkerFactory called (handle=0x{:X})", handle);
+
+			if (pending_count_ptr)
+			{
+				std::int32_t zero = 0;
+				static_cast<void>(emulator->write_virtual_memory(pending_count_ptr, &zero, sizeof(zero)));
+			}
+
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"NtShutdownWorkerFactory"
+	);
+
+	// NtReleaseWorkerFactoryWorker(WorkerFactoryHandle)
+	redirect_function(
+		[emulator]
+		{
+			const auto handle = emulator->read_register<x86::reg::rcx, std::uint32_t>();
+
+			THREAD_LOG("NtReleaseWorkerFactoryWorker called (handle=0x{:X})", handle);
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"NtReleaseWorkerFactoryWorker"
+	);
+
+	// NtTraceControl(FunctionCode, InBuffer, InBufferLen, OutBuffer, OutBufferLen, ReturnLength*)
+	redirect_function(
+		[emulator]
+		{
+			const auto function_code = emulator->read_register<x86::reg::rcx, std::uint32_t>();
+
+			THREAD_LOG("NtTraceControl called (function=0x{:X})", function_code);
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"NtTraceControl"
+	);
+
+	// NtQuerySecurityAttributesToken(TokenHandle, Attributes, NumAttributes, Buffer, Length, ReturnLength*)
+	redirect_function(
+		[emulator]
+		{
+			const auto token_handle = emulator->read_register<x86::reg::rcx, std::uint64_t>();
+
+			THREAD_LOG("NtQuerySecurityAttributesToken called (token=0x{:X})", token_handle);
+			write_nt_status(emulator, 0xC0000225); // STATUS_NOT_FOUND
+		},
+		mapped_image,
+		"NtQuerySecurityAttributesToken"
+	);
+
+	// NtSetInformationVirtualMemory(ProcessHandle, InfoClass, NumberOfEntries, AddressEntries, VirtualMemoryInformationBuffer, VirtualMemoryInformationLength)
+	redirect_function(
+		[emulator]
+		{
+			const auto info_class = static_cast<std::uint32_t>(read_raw_arg(emulator, 1));
+			THREAD_LOG("NtSetInformationVirtualMemory called (class=0x{:X}, stub)", info_class);
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"NtSetInformationVirtualMemory"
+	);
+
+	// NtQueryWnfStateNameInformation(...)
+	redirect_function(
+		[emulator]
+		{
+			THREAD_LOG("NtQueryWnfStateNameInformation called (stub)");
+			write_nt_status(emulator, 0xC0000225); // STATUS_NOT_FOUND
+		},
+		mapped_image,
+		"NtQueryWnfStateNameInformation"
+	);
+
+	// NtAlpcConnectPort(PortHandle*, PortName, ObjectAttributes, PortAttributes, Flags, RequiredServerSid, ConnectionMessage, BufferLength, OutMessageAttributes, InMessageAttributes, Timeout)
+	redirect_function(
+		[emulator]
+		{
+			const auto port_handle_out = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto port_name_addr = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+
+			std::string port_name;
+
+			if (port_name_addr)
+			{
+				const auto us = emulator_object_t<UNICODE_STRING>::view_at(emulator, port_name_addr).read();
+				const auto buffer_address = reinterpret_cast<emulator_t::address_type>(us.Buffer);
+
+				if (buffer_address && us.Length)
+				{
+					port_name = util::narrow_wstring(kernel::read_guest_wstring(*emulator, buffer_address));
+				}
+			}
+
+			THREAD_LOG("NtAlpcConnectPort called (handle_out=0x{:X}, port='{}')", port_handle_out, port_name);
+
+			constexpr std::size_t alpc_port_body_size = 0x20;
+			std::array<std::uint8_t, alpc_port_body_size> body{};
+			const auto body_address = kernel::object_manager->create_object(0, body.data(), body.size());
+			const auto port_handle = kernel::object_manager->create_handle(body_address, 0x1F0001);
+
+			if (port_handle_out)
+			{
+				static_cast<void>(emulator->write_virtual_memory(port_handle_out, &port_handle, sizeof(port_handle)));
+			}
+
+			THREAD_LOG("NtAlpcConnectPort: created dummy handle 0x{:X}", port_handle);
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"NtAlpcConnectPort"
+	);
+
+	// NtAlpcSendWaitReceivePort(PortHandle, Flags, SendMessage, SendMessageAttributes, ReceiveMessage, BufferLength, ReceiveMessageAttributes, Timeout)
+	redirect_function(
+		[emulator]
+		{
+			const auto port_handle = emulator->read_register<x86::reg::rcx, std::uint64_t>();
+
+			THREAD_LOG("NtAlpcSendWaitReceivePort called (handle=0x{:X}, stub)", port_handle);
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"NtAlpcSendWaitReceivePort"
+	);
+
+	// NtApphelpCacheControl(Command, Data)
+	redirect_function(
+		[emulator]
+		{
+			const auto command = emulator->read_register<x86::reg::rcx, std::uint32_t>();
+			const auto data = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+
+			THREAD_LOG("NtApphelpCacheControl called (command=0x{:X}, data=0x{:X}, stub)", command, data);
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"NtApphelpCacheControl"
+	);
+
+	// NtConnectPort(PortHandle, PortName, SecurityQos, ClientView, ServerView, MaxMessageLength, ConnectionInfo, ConnectionInfoLength)
+	redirect_function(
+		[emulator]
+		{
+			const auto port_handle_out = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto port_name_ptr = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+			const auto client_view_ptr = emulator->read_register<x86::reg::r9, emulator_t::address_type>();
+			const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
+
+			std::string port_name;
+			if (port_name_ptr)
+			{
+				auto us_object = emulator_object_t<UNICODE_STRING>::view_at(emulator, port_name_ptr);
+				const auto us = us_object.read();
+				const auto buffer_address = reinterpret_cast<emulator_t::address_type>(us.Buffer);
+
+				if (buffer_address && us.Length > 0)
+				{
+					const auto char_count = us.Length / sizeof(wchar_t);
+					std::wstring wide_name(char_count, L'\0');
+					emulator->read_virtual_memory(buffer_address, wide_name.data(), us.Length)
+						.throw_if("NtConnectPort: read port name");
+					port_name = util::narrow_wstring(wide_name);
+				}
+			}
+
+			emulator_t::address_type server_view_ptr = 0;
+			emulator->read_virtual_memory(rsp + 0x28, &server_view_ptr, sizeof(server_view_ptr)).throw_if("NtConnectPort: read ServerView ptr");
+
+			emulator_t::address_type max_msg_len_ptr = 0;
+			emulator->read_virtual_memory(rsp + 0x30, &max_msg_len_ptr, sizeof(max_msg_len_ptr)).throw_if("NtConnectPort: read MaxMessageLength ptr");
+
+			emulator_t::address_type connection_info_ptr = 0;
+			emulator->read_virtual_memory(rsp + 0x38, &connection_info_ptr, sizeof(connection_info_ptr)).throw_if("NtConnectPort: read ConnectionInfo ptr");
+
+			emulator_t::address_type connection_info_len_ptr = 0;
+			emulator->read_virtual_memory(rsp + 0x40, &connection_info_len_ptr, sizeof(connection_info_len_ptr)).throw_if("NtConnectPort: read ConnectionInfoLength ptr");
+
+			THREAD_LOG("NtConnectPort called (handle_out=0x{:X}, name='{}', client_view=0x{:X}, conn_info=0x{:X})",
+				port_handle_out, port_name, client_view_ptr, connection_info_ptr);
+
+			if (port_handle_out)
+			{
+				const auto dummy_handle = static_cast<object_manager_t::handle_type>(0xDEAD0001);
+				emulator->write_virtual_memory(port_handle_out, &dummy_handle, sizeof(dummy_handle))
+					.throw_if("NtConnectPort: write handle");
+			}
+
+			if (client_view_ptr)
+			{
+				struct port_view64
+				{
+					std::uint32_t length;
+					std::uint32_t pad0;
+					std::uint64_t section_handle;
+					std::uint32_t section_offset;
+					std::uint32_t pad1;
+					std::int64_t view_size;
+					std::uint64_t view_base;
+					std::uint64_t view_remote_base;
+				};
+
+				port_view64 view{};
+				emulator->read_virtual_memory(client_view_ptr, &view, sizeof(view))
+					.throw_if("NtConnectPort: read client view");
+
+				if (view.view_size > 0)
+				{
+					const auto alloc_size = static_cast<emulator_t::size_type>(view.view_size);
+					emulator_t::address_type view_base = 0;
+
+					if (user::memory_manager)
+					{
+						auto region = alloc_size;
+						user::memory_manager->allocate(view_base, region, 0x3000, 0x04);
+					}
+					else
+					{
+						const auto result = emulator->heap_allocate(alloc_size, prot_read_write, true);
+						if (result)
+						{
+							view_base = *result;
+						}
+					}
+
+					if (view_base)
+					{
+						view.view_base = view_base;
+						view.view_remote_base = view_base;
+						emulator->write_virtual_memory(client_view_ptr, &view, sizeof(view))
+							.throw_if("NtConnectPort: write client view");
+
+						THREAD_LOG("NtConnectPort: allocated client view at 0x{:X} (size=0x{:X})", view_base, alloc_size);
+					}
+				}
+			}
+
+			if (server_view_ptr)
+			{
+				struct remote_port_view
+				{
+					std::uint32_t length;
+					std::uint32_t pad0;
+					std::int64_t view_size;
+					emulator_t::address_type view_base;
+				};
+
+				remote_port_view view{};
+				emulator->read_virtual_memory(server_view_ptr, &view, sizeof(view))
+					.throw_if("NtConnectPort: read server view");
+
+				if (view.length >= sizeof(remote_port_view))
+				{
+					view.view_size = 0x10000;
+					view.view_base = 0;
+					emulator->write_virtual_memory(server_view_ptr, &view, sizeof(view))
+						.throw_if("NtConnectPort: write server view");
+				}
+			}
+
+			if (max_msg_len_ptr)
+			{
+				const std::uint32_t max_msg = 0x148;
+				emulator->write_virtual_memory(max_msg_len_ptr, &max_msg, sizeof(max_msg))
+					.throw_if("NtConnectPort: write MaxMessageLength");
+			}
+
+			if (connection_info_ptr && connection_info_len_ptr)
+			{
+				std::uint32_t conn_info_len = 0;
+				emulator->read_virtual_memory(connection_info_len_ptr, &conn_info_len, sizeof(conn_info_len))
+					.throw_if("NtConnectPort: read connection info length");
+
+				if (conn_info_len > 0 && conn_info_len < 0x10000)
+				{
+					std::vector<std::uint8_t> zeroed(conn_info_len, 0);
+					emulator->write_virtual_memory(connection_info_ptr, zeroed.data(), zeroed.size())
+						.throw_if("NtConnectPort: zero connection info");
+				}
+			}
+
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"NtConnectPort"
+	);
+
+	// NtSecureConnectPort(PortHandle, PortName, SecurityQos, ClientView, RequiredServerSid, ServerView, MaxMessageLength, ConnectionInfo, ConnectionInfoLength)
+	redirect_function(
+		[emulator]
+		{
+			const auto port_handle_out = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto port_name_ptr = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+			const auto client_view_ptr = emulator->read_register<x86::reg::r9, emulator_t::address_type>();
+			const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
+
+			std::string port_name;
+			if (port_name_ptr)
+			{
+				auto us_object = emulator_object_t<UNICODE_STRING>::view_at(emulator, port_name_ptr);
+				const auto us = us_object.read();
+				const auto buffer_address = reinterpret_cast<emulator_t::address_type>(us.Buffer);
+
+				if (buffer_address && us.Length > 0)
+				{
+					const auto char_count = us.Length / sizeof(wchar_t);
+					std::wstring wide_name(char_count, L'\0');
+					emulator->read_virtual_memory(buffer_address, wide_name.data(), us.Length)
+						.throw_if("NtSecureConnectPort: read port name");
+					port_name = util::narrow_wstring(wide_name);
+				}
+			}
+
+			emulator_t::address_type server_view_ptr = 0;
+			emulator->read_virtual_memory(rsp + 0x30, &server_view_ptr, sizeof(server_view_ptr)).throw_if("NtSecureConnectPort: read ServerView ptr");
+
+			emulator_t::address_type max_msg_len_ptr = 0;
+			emulator->read_virtual_memory(rsp + 0x38, &max_msg_len_ptr, sizeof(max_msg_len_ptr)).throw_if("NtSecureConnectPort: read MaxMessageLength ptr");
+
+			emulator_t::address_type connection_info_ptr = 0;
+			emulator->read_virtual_memory(rsp + 0x40, &connection_info_ptr, sizeof(connection_info_ptr)).throw_if("NtSecureConnectPort: read ConnectionInfo ptr");
+
+			emulator_t::address_type connection_info_len_ptr = 0;
+			emulator->read_virtual_memory(rsp + 0x48, &connection_info_len_ptr, sizeof(connection_info_len_ptr)).throw_if("NtSecureConnectPort: read ConnectionInfoLength ptr");
+
+			THREAD_LOG("NtSecureConnectPort called (handle_out=0x{:X}, name='{}', client_view=0x{:X}, conn_info=0x{:X})",
+				port_handle_out, port_name, client_view_ptr, connection_info_ptr);
+
+			if (port_handle_out)
+			{
+				const auto dummy_handle = static_cast<object_manager_t::handle_type>(0xDEAD0002);
+				emulator->write_virtual_memory(port_handle_out, &dummy_handle, sizeof(dummy_handle))
+					.throw_if("NtSecureConnectPort: write handle");
+			}
+
+			if (client_view_ptr)
+			{
+				struct port_view64
+				{
+					std::uint32_t length;
+					std::uint32_t pad0;
+					std::uint64_t section_handle;
+					std::uint32_t section_offset;
+					std::uint32_t pad1;
+					std::int64_t view_size;
+					std::uint64_t view_base;
+					std::uint64_t view_remote_base;
+				};
+
+				port_view64 view{};
+				emulator->read_virtual_memory(client_view_ptr, &view, sizeof(view))
+					.throw_if("NtSecureConnectPort: read client view");
+
+				if (view.view_size > 0)
+				{
+					const auto alloc_size = static_cast<emulator_t::size_type>(view.view_size);
+					emulator_t::address_type view_base = 0;
+
+					if (user::memory_manager)
+					{
+						auto region = alloc_size;
+						user::memory_manager->allocate(view_base, region, 0x3000, 0x04);
+					}
+					else
+					{
+						const auto result = emulator->heap_allocate(alloc_size, prot_read_write, true);
+						if (result)
+						{
+							view_base = *result;
+						}
+					}
+
+					if (view_base)
+					{
+						view.view_base = view_base;
+						view.view_remote_base = view_base;
+						emulator->write_virtual_memory(client_view_ptr, &view, sizeof(view))
+							.throw_if("NtSecureConnectPort: write client view");
+
+						THREAD_LOG("NtSecureConnectPort: allocated client view at 0x{:X} (size=0x{:X})", view_base, alloc_size);
+					}
+				}
+			}
+
+			if (server_view_ptr)
+			{
+				struct remote_port_view
+				{
+					std::uint32_t length;
+					std::uint32_t pad0;
+					std::int64_t view_size;
+					emulator_t::address_type view_base;
+				};
+
+				remote_port_view view{};
+				emulator->read_virtual_memory(server_view_ptr, &view, sizeof(view))
+					.throw_if("NtSecureConnectPort: read server view");
+
+				if (view.length >= sizeof(remote_port_view))
+				{
+					view.view_size = 0x10000;
+					view.view_base = 0;
+					emulator->write_virtual_memory(server_view_ptr, &view, sizeof(view))
+						.throw_if("NtSecureConnectPort: write server view");
+				}
+			}
+
+			if (max_msg_len_ptr)
+			{
+				const std::uint32_t max_msg = 0x148;
+				emulator->write_virtual_memory(max_msg_len_ptr, &max_msg, sizeof(max_msg))
+					.throw_if("NtSecureConnectPort: write MaxMessageLength");
+			}
+
+			if (connection_info_ptr && connection_info_len_ptr)
+			{
+				std::uint32_t conn_info_len = 0;
+				emulator->read_virtual_memory(connection_info_len_ptr, &conn_info_len, sizeof(conn_info_len))
+					.throw_if("NtSecureConnectPort: read connection info length");
+
+				if (conn_info_len > 0 && conn_info_len < 0x10000)
+				{
+					std::vector<std::uint8_t> zeroed(conn_info_len, 0);
+					emulator->write_virtual_memory(connection_info_ptr, zeroed.data(), zeroed.size())
+						.throw_if("NtSecureConnectPort: zero connection info");
+				}
+			}
+
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"NtSecureConnectPort"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto base_address_out = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto default_locale_out = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+
+			THREAD_LOG("NtInitializeNlsFiles called (base_out=0x{:X}, locale_out=0x{:X})",
+				base_address_out, default_locale_out);
+
+			const auto file = kernel::filesystem->open_at("system32/locale.nls");
+
+			if (!file)
+			{
+				THREAD_WARN_LOG("NtInitializeNlsFiles: locale.nls not found in VFS");
+				constexpr std::uint32_t status_file_invalid = 0xC0000098;
+				write_nt_status(emulator, status_file_invalid);
+				return;
+			}
+
+			const auto data = file->read();
+			const auto alloc_size = (data.size() + 0xFFF) & ~static_cast<std::size_t>(0xFFF);
+			const auto base = user::memory_manager->allocate_pages(alloc_size);
+
+			if (!base)
+			{
+				THREAD_WARN_LOG("NtInitializeNlsFiles: failed to allocate {} bytes", alloc_size);
+				constexpr std::uint32_t status_no_memory = 0xC0000017;
+				write_nt_status(emulator, status_no_memory);
+				return;
+			}
+
+			static_cast<void>(emulator->write_virtual_memory(base, data.data(), data.size()));
+			static_cast<void>(emulator->write_virtual_memory(base_address_out, &base, sizeof(base)));
+
+			constexpr std::uint32_t default_locale = 0x0409;
+			static_cast<void>(emulator->write_virtual_memory(default_locale_out, &default_locale, sizeof(default_locale)));
+
+			THREAD_LOG("NtInitializeNlsFiles: loaded locale.nls ({} bytes) at 0x{:X}", data.size(), base);
+
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"NtInitializeNlsFiles"
+	);
+
+	redirect_function(
+		[emulator]
+		{
+			const auto section_type = emulator->read_register<x86::reg::rcx, std::uint32_t>();
+			const auto section_data = emulator->read_register<x86::reg::rdx, std::uint32_t>();
+			const auto context_data = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
+			const auto section_pointer_out = emulator->read_register<x86::reg::r9, emulator_t::address_type>();
+
+			const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
+			emulator_t::address_type section_size_out = 0;
+			static_cast<void>(emulator->read_virtual_memory(rsp + 0x28, &section_size_out, sizeof(section_size_out)));
+
+			THREAD_LOG("NtGetNlsSectionPtr called (type={}, data={}, context=0x{:X}, ptr_out=0x{:X}, size_out=0x{:X})",
+				section_type, section_data, context_data, section_pointer_out, section_size_out);
+
+			if (section_type != 11)
+			{
+				THREAD_WARN_LOG("NtGetNlsSectionPtr: unsupported section type {}", section_type);
+				constexpr std::uint32_t status_not_supported = 0xC00000BB;
+				write_nt_status(emulator, status_not_supported);
+				return;
+			}
+
+			const auto path = "system32/c_" + std::to_string(section_data) + ".nls";
+			const auto file = kernel::filesystem->open_at(path);
+
+			if (!file)
+			{
+				THREAD_WARN_LOG("NtGetNlsSectionPtr: {} not found in VFS", path);
+				constexpr std::uint32_t status_object_name_not_found = 0xC0000034;
+				write_nt_status(emulator, status_object_name_not_found);
+				return;
+			}
+
+			const auto data = file->read();
+			const auto alloc_size = (data.size() + 0xFFF) & ~static_cast<std::size_t>(0xFFF);
+			const auto base = user::memory_manager->allocate_pages(alloc_size);
+
+			if (!base)
+			{
+				THREAD_WARN_LOG("NtGetNlsSectionPtr: failed to allocate {} bytes for {}", alloc_size, path);
+				constexpr std::uint32_t status_no_memory = 0xC0000017;
+				write_nt_status(emulator, status_no_memory);
+				return;
+			}
+
+			static_cast<void>(emulator->write_virtual_memory(base, data.data(), data.size()));
+
+			if (section_pointer_out)
+			{
+				static_cast<void>(emulator->write_virtual_memory(section_pointer_out, &base, sizeof(base)));
+			}
+
+			if (section_size_out)
+			{
+				const auto size = static_cast<std::uint32_t>(alloc_size);
+				static_cast<void>(emulator->write_virtual_memory(section_size_out, &size, sizeof(size)));
+			}
+
+			THREAD_LOG("NtGetNlsSectionPtr: loaded {} ({} bytes) at 0x{:X}", path, data.size(), base);
+
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"NtGetNlsSectionPtr"
 	);
 }

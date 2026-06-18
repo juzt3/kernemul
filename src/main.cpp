@@ -9,6 +9,9 @@
 #include "kernel/process_loader.hpp"
 #include "kernel/segments.hpp"
 #include "config.hpp"
+#include "user/exception_dispatch.hpp"
+#include "user/user.hpp"
+#include "user/user_memory.hpp"
 
 #include <ia32-doc/ia32.hpp>
 
@@ -18,12 +21,23 @@
 
 static void set_up_user_shared_data(const std::shared_ptr<emulator_t>& emulator)
 {
-	const auto contents = reinterpret_cast<const _KUSER_SHARED_DATA*>(0x7FFE0000);
+	_KUSER_SHARED_DATA contents;
+	std::memcpy(&contents, reinterpret_cast<const void*>(0x7FFE0000), sizeof(contents));
 
-	emulator_object_t<_KUSER_SHARED_DATA>::allocate_at(emulator, *contents, 0xFFFFF78000000000);
+	contents.Cookie = 0;
+	contents.ActiveProcessorCount = kernel::processor_count;
+	contents.ActiveGroupCount = 1;
+
+	emulator_object_t<_KUSER_SHARED_DATA>::allocate_at(emulator, contents, 0xFFFFF78000000000);
+
+	constexpr emulator_t::address_type user_shared_data_address = 0x7FFE0000;
+	const auto error = emulator->map_virtual_memory(user_shared_data_address, sizeof(_KUSER_SHARED_DATA), prot_read, true);
+	error.throw_if("map user-mode KUSER_SHARED_DATA");
+	const auto write_error = emulator->write_virtual_memory(user_shared_data_address, &contents, sizeof(_KUSER_SHARED_DATA));
+	write_error.throw_if("write user-mode KUSER_SHARED_DATA");
 }
 
-static emulator_object_t<_DRIVER_OBJECT> set_up_driver_object(const std::shared_ptr<emulator_t>& emulator, const kernel_image_t& image)
+static emulator_object_t<_DRIVER_OBJECT> set_up_driver_object(const std::shared_ptr<emulator_t>& emulator, const image_t& image)
 {
 	_DRIVER_OBJECT contents = { };
 
@@ -83,7 +97,7 @@ struct lock_array_t
 	std::uint8_t pad1[0xF90];
 };
 
-static emulator_object_t<lock_array_t> set_up_lock_array(const std::shared_ptr<emulator_t>& emulator, const std::shared_ptr<kernel_image_t>& nt_image)
+static emulator_object_t<lock_array_t> set_up_lock_array(const std::shared_ptr<emulator_t>& emulator, const std::shared_ptr<image_t>& nt_image)
 {
 	lock_array_t contents = { };
 
@@ -93,7 +107,7 @@ static emulator_object_t<lock_array_t> set_up_lock_array(const std::shared_ptr<e
 }
 
 static emulator_object_t<_KPCR> set_up_kpcr(const std::shared_ptr<emulator_t>& emulator,
-	const std::shared_ptr<kernel_image_t>& nt_image,
+	const std::shared_ptr<image_t>& nt_image,
 	const std::shared_ptr<thread_t>& thread)
 {
 	const auto kprcb = set_up_kprcb(emulator, thread);
@@ -112,7 +126,7 @@ static emulator_object_t<_KPCR> set_up_kpcr(const std::shared_ptr<emulator_t>& e
 	return kpcr;
 }
 
-static void set_up_ntoskrnl_globals(const std::shared_ptr<emulator_t>& emulator, const std::shared_ptr<kernel_image_t>& nt_image)
+static void set_up_ntoskrnl_globals(const std::shared_ptr<emulator_t>& emulator, const std::shared_ptr<image_t>& nt_image)
 {
 	// MmPfnDatabase - allocate a fake PFN database and write its address
 	if (const auto symbol = nt_image->find_symbol("MmPfnDatabase"))
@@ -199,13 +213,28 @@ static void set_up_ntoskrnl_globals(const std::shared_ptr<emulator_t>& emulator,
 	}
 }
 
-static void set_up_lstar_msr(const std::shared_ptr<emulator_t>& emulator, const std::shared_ptr<kernel_image_t>& nt_image)
+static void set_up_lstar_msr(const std::shared_ptr<emulator_t>& emulator, const std::shared_ptr<image_t>& nt_image)
 {
 	if (const auto ki_system_call = nt_image->find_symbol("KiSystemCall64"))
 	{
 		const emulator_err_t error = emulator->write_msr(x86::msr::lstar, *ki_system_call);
 		error.throw_if("write LSTAR MSR");
 	}
+}
+
+static void set_up_syscall_msrs(const std::shared_ptr<emulator_t>& emulator)
+{
+	ia32_efer_register efer = { .flags = *emulator->read_msr(x86::msr::efer) };
+	efer.syscall_enable = 1;
+	emulator->write_msr(x86::msr::efer, efer.flags).throw_if("write EFER with SCE");
+
+	constexpr std::uint64_t star_value = (0x0020ULL << 48) | (0x0010ULL << 32);
+	emulator->write_msr(x86::msr::star, star_value).throw_if("write STAR MSR");
+
+	constexpr std::uint64_t sfmask_value = 0;
+	emulator->write_msr(x86::msr::sfmask, sfmask_value).throw_if("write SFMASK MSR");
+
+	GLOBAL_LOG("configured SYSCALL MSRs: EFER.SCE=1, STAR=0x{:X}, SFMASK=0x{:X}", star_value, sfmask_value);
 }
 
 static void set_up_interrupt_flag(const std::shared_ptr<emulator_t>& emulator)
@@ -258,6 +287,11 @@ std::int32_t main()
 		kernel::registry->create_key("system/currentcontrolset/control/ci")->set_dword("Protected", 0);
 		static_cast<void>(kernel::registry->create_key("system/currentcontrolset/control/wmi/restrictions"));
 
+		// disable segment heap - on build 19045 it is the default when the key is absent,
+		// and it requires ProcessPrng (bcryptprimitives.dll) for encoding keys
+		kernel::registry->create_key("system/currentcontrolset/control/session manager/segment heap")
+			->set_dword("Enabled", 0);
+
 		// software version key
 		{
 			const auto winver_key = kernel::registry->create_key("software/microsoft/windows/currentversion");
@@ -296,6 +330,11 @@ std::int32_t main()
 		kernel::filesystem->load_at("win32k.sys", "system32/win32k.sys");
 		kernel::filesystem->load_at("win32u.dll", "system32/win32u.dll");
 		kernel::filesystem->load_directory_at("cat_root", "system32/catroot/");
+
+		kernel::filesystem->load_at("locale.nls", "system32/locale.nls");
+		kernel::filesystem->load_at("c_1252.nls", "system32/c_1252.nls");
+		kernel::filesystem->load_at("c_437.nls", "system32/c_437.nls");
+		kernel::filesystem->load_at("c_850.nls", "system32/c_850.nls");
 
 		// load the emulated driver file so it can find itself on disk
 		kernel::filesystem->load_at(EMULATED_MODULE_NAME,
@@ -445,6 +484,11 @@ std::int32_t main()
 		}
 
 		set_up_lstar_msr(emulator, nt_image);
+		set_up_syscall_msrs(emulator);
+
+#ifdef EMULATED_USERMODE_MODULE
+		user::initialize(emulator, nt_image, EMULATED_USERMODE_MODULE);
+#endif
 
 		const emulator_t::address_type base_address = kernel::emulated_module->base_address();
 		const emulator_t::address_type entry_point_address = kernel::emulated_module->entry_point();
@@ -569,10 +613,41 @@ std::int32_t main()
 		error = emulator->hook_invalid_memory(
 			[emulator](const emulator_t::address_type faulting_address, const protection_t access) -> bool
 			{
+				const bool is_write = (access & prot_write) != 0;
+
+				if (kernel::current_thread && kernel::current_thread->state().is_usermode)
+				{
+					if (user::memory_manager
+						&& (user::memory_manager->try_demand_commit(faulting_address)
+							|| user::memory_manager->try_handle_guard_page(faulting_address)))
+					{
+						return true;
+					}
+
+					if (user::ki_user_exception_dispatcher_address)
+					{
+						user::dispatch_access_violation(emulator, faulting_address, is_write);
+						return true;
+					}
+				}
+
 				const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
 
-				THREAD_ERR_LOG("invalid memory access at 0x{:X} (rip=0x{:X}, access={})",
-					faulting_address, rip, static_cast<std::uint32_t>(access));
+				std::string symbol_name = "unknown";
+				if (const auto mod = kernel::find_module_from_rip(rip))
+				{
+					if (const auto sym = mod->find_symbol_by_address(rip))
+					{
+						symbol_name = mod->name() + "!" + sym->first;
+					}
+					else
+					{
+						symbol_name = mod->name();
+					}
+				}
+
+				THREAD_ERR_LOG("invalid memory access at 0x{:X} (rip=0x{:X} [{}], access={})",
+					faulting_address, rip, symbol_name, static_cast<std::uint32_t>(access));
 				THREAD_ERR_LOG("  rax=0x{:X} rbx=0x{:X} rcx=0x{:X} rdx=0x{:X}",
 					emulator->read_register<x86::reg::rax, std::uint64_t>(),
 					emulator->read_register<x86::reg::rbx, std::uint64_t>(),
@@ -583,6 +658,15 @@ std::int32_t main()
 					emulator->read_register<x86::reg::rdi, std::uint64_t>(),
 					emulator->read_register<x86::reg::rbp, std::uint64_t>(),
 					emulator->read_register<x86::reg::rsp, std::uint64_t>());
+				THREAD_ERR_LOG("  r8=0x{:X} r9=0x{:X} r10=0x{:X} r11=0x{:X} r12=0x{:X} r13=0x{:X} r14=0x{:X} r15=0x{:X}",
+					emulator->read_register<x86::reg::r8, std::uint64_t>(),
+					emulator->read_register<x86::reg::r9, std::uint64_t>(),
+					emulator->read_register<x86::reg::r10, std::uint64_t>(),
+					emulator->read_register<x86::reg::r11, std::uint64_t>(),
+					emulator->read_register<x86::reg::r12, std::uint64_t>(),
+					emulator->read_register<x86::reg::r13, std::uint64_t>(),
+					emulator->read_register<x86::reg::r14, std::uint64_t>(),
+					emulator->read_register<x86::reg::r15, std::uint64_t>());
 
 				return false;
 			},

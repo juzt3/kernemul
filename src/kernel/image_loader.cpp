@@ -12,6 +12,7 @@
 #include "../impl/ntoskrnl/nt_helpers.hpp"
 #include "../impl/ntoskrnl/nt_object.hpp"
 #include "../filesystem/filesystem.hpp"
+#include "../user/user_memory.hpp"
 #include "kernel.hpp"
 #include "kernel_string.hpp"
 
@@ -46,21 +47,21 @@ static void fix_image_imports(portable_executable::image_t* const image)
 
 		if (!import_module)
 		{
-			throw std::runtime_error("unable to find import module");
+			throw std::runtime_error("unable to find import module: " + current_import.module_name);
 		}
 
 		const auto module_symbol = import_module->find_symbol(current_import.import_name);
 
 		if (!module_symbol)
 		{
-			throw std::runtime_error("unable to find symbol in module");
+			throw std::runtime_error("unable to find symbol in module: " + current_import.import_name);
 		}
 
 		current_import.address = reinterpret_cast<std::uint8_t*>(*module_symbol);
 	}
 }
 
-static emulator_t::address_type get_in_load_order_links_address(const kernel_image_t& image)
+static emulator_t::address_type get_in_load_order_links_address(const image_t& image)
 {
 	return image.table_entry().address() + offsetof(_KLDR_DATA_TABLE_ENTRY, InLoadOrderLinks);
 }
@@ -81,7 +82,7 @@ static void write_list_entry_blink(const std::shared_ptr<emulator_t>& emulator,
 }
 
 static void set_module_flink(const std::shared_ptr<emulator_t>& emulator,
-	const kernel_image_t& image, const emulator_t::address_type flink)
+	const image_t& image, const emulator_t::address_type flink)
 {
 	const auto links_address = get_in_load_order_links_address(image);
 
@@ -90,7 +91,7 @@ static void set_module_flink(const std::shared_ptr<emulator_t>& emulator,
 }
 
 static void set_module_blink(const std::shared_ptr<emulator_t>& emulator,
-	const kernel_image_t& image, const emulator_t::address_type blink)
+	const image_t& image, const emulator_t::address_type blink)
 {
 	const auto links_address = get_in_load_order_links_address(image) + sizeof(emulator_t::address_type);
 
@@ -98,7 +99,7 @@ static void set_module_blink(const std::shared_ptr<emulator_t>& emulator,
 	error.throw_if("write module Blink");
 }
 
-static void collect_module_symbols(portable_executable::image_t* const pe_image, kernel_image_t& mapped_image,
+static void collect_module_symbols(portable_executable::image_t* const pe_image, image_t& mapped_image,
 	const bool load_pdb)
 {
 	const auto local_image_address = pe_image->as<const std::uint8_t*>();
@@ -139,7 +140,7 @@ static void collect_module_symbols(portable_executable::image_t* const pe_image,
 }
 
 static void monitor_data_sections(const std::shared_ptr<emulator_t>& emulator,
-                                  const std::shared_ptr<kernel_image_t>& mapped_image,
+                                  const std::shared_ptr<image_t>& mapped_image,
                                   const portable_executable::image_t* const pe_image)
 {
 	return;
@@ -223,7 +224,7 @@ static void monitor_data_sections(const std::shared_ptr<emulator_t>& emulator,
 	}
 }
 
-static void add_to_loaded_module_list(const std::shared_ptr<emulator_t>& emulator, const std::shared_ptr<kernel_image_t>& mapped_image,
+static void add_to_loaded_module_list(const std::shared_ptr<emulator_t>& emulator, const std::shared_ptr<image_t>& mapped_image,
 	const std::wstring_view directory = L"C:\\Windows\\System32\\")
 {
 	_KLDR_DATA_TABLE_ENTRY contents = { };
@@ -272,9 +273,8 @@ static void add_to_loaded_module_list(const std::shared_ptr<emulator_t>& emulato
 	kernel::module_entries.push_back(mapped_image);
 }
 
-std::shared_ptr<kernel_image_t> kernel::map_kernel_image(const std::shared_ptr<emulator_t>& emulator,
-	const std::string_view name, const bool fix_imports,
-	const std::wstring_view directory)
+std::shared_ptr<image_t> kernel::map_image(const std::shared_ptr<emulator_t>& emulator,
+	const std::string_view name, const image_load_options_t& options)
 {
 	const std::filesystem::path vfs_path = std::filesystem::path("vfs\\").append(name);
 
@@ -292,13 +292,61 @@ std::shared_ptr<kernel_image_t> kernel::map_kernel_image(const std::shared_ptr<e
 
 	const auto image_size = nt_headers->optional_header.size_of_image;
 
-	const auto base_address = emulator->heap_allocate(image_size, prot_all, true);
+	emulator_t::address_type mapped_base = 0;
 
-	if (!base_address)
+	if (options.user_accessible)
 	{
-		GLOBAL_ERR_LOG("unable to map kernel memory");
+		constexpr std::uint16_t image_dllcharacteristics_dynamic_base = 0x0040;
+		const bool aslr_enabled = (nt_headers->optional_header.dll_characteristics & image_dllcharacteristics_dynamic_base) != 0;
 
-		return { };
+		if (!aslr_enabled)
+		{
+			const emulator_t::address_type preferred_base = nt_headers->optional_header.image_base;
+
+			if (!emulator->translate_virtual_address(preferred_base).has_value())
+			{
+				const emulator_err_t error = emulator->map_virtual_memory(preferred_base, image_size, prot_all, true);
+
+				if (!error)
+				{
+					mapped_base = preferred_base;
+				}
+			}
+		}
+
+		if (!mapped_base)
+		{
+			if (!user::memory_manager)
+			{
+				GLOBAL_ERR_LOG("unable to map usermode image '{}' without memory manager", name);
+				return { };
+			}
+
+			mapped_base = user::memory_manager->allocate_pages(image_size, user::page_execute_readwrite);
+
+			if (!mapped_base)
+			{
+				GLOBAL_ERR_LOG("unable to allocate usermode memory for '{}'", name);
+				return { };
+			}
+		}
+	}
+	else
+	{
+		const auto base_address = emulator->heap_allocate(image_size, prot_all, true);
+
+		if (!base_address)
+		{
+			GLOBAL_ERR_LOG("unable to map kernel memory");
+			return { };
+		}
+
+		mapped_base = *base_address;
+	}
+
+	if (options.user_accessible && user::memory_manager)
+	{
+		user::memory_manager->register_image(mapped_base, image_size);
 	}
 
 	if (const auto load_config = pe_image->load_config())
@@ -307,13 +355,13 @@ std::shared_ptr<kernel_image_t> kernel::map_kernel_image(const std::shared_ptr<e
 		{
 			const auto security_cookie_rva = security_cookie_absolute - nt_headers->optional_header.image_base;
 
-			*reinterpret_cast<std::uint64_t*>(pe_image->as<std::uint64_t>() + security_cookie_rva) += *base_address;
+			*reinterpret_cast<std::uint64_t*>(pe_image->as<std::uint64_t>() + security_cookie_rva) += mapped_base;
 		}
 	}
 
-	relocate_image(pe_image, *base_address);
+	relocate_image(pe_image, mapped_base);
 
-	if (fix_imports)
+	if (options.fix_imports)
 	{
 		fix_image_imports(pe_image);
 	}
@@ -321,22 +369,20 @@ std::shared_ptr<kernel_image_t> kernel::map_kernel_image(const std::shared_ptr<e
 	const auto image_start = pe_image->as<const std::uint8_t*>();
 	const std::vector image_buffer(image_start, image_start + nt_headers->optional_header.size_of_image);
 
-	if (const auto error = emulator->write_virtual_memory(*base_address, image_buffer))
+	if (const auto error = emulator->write_virtual_memory(mapped_base, image_buffer))
 	{
-		GLOBAL_ERR_LOG("unable to write kernel memory");
+		GLOBAL_ERR_LOG("unable to write image memory");
 
 		return { };
 	}
 
-	const kernel_image_t::address_type entry_point = *base_address + nt_headers->optional_header.address_of_entry_point;
+	const image_t::address_type entry_point = mapped_base + nt_headers->optional_header.address_of_entry_point;
 
-	auto mapped_image = std::make_shared<kernel_image_t>(std::string(name), *base_address, entry_point, image_buffer);
+	auto mapped_image = std::make_shared<image_t>(std::string(name), mapped_base, entry_point, image_buffer);
 
-	GLOBAL_LOG("loaded '{}' at 0x{:X} (size=0x{:X})", name, *base_address, image_buffer.size());
+	GLOBAL_LOG("loaded '{}' at 0x{:X} (size=0x{:X}, user_accessible={})", name, mapped_base, image_buffer.size(), options.user_accessible);
 
-	const bool is_main_emulated_image = fix_imports;
-
-	collect_module_symbols(pe_image, *mapped_image, !is_main_emulated_image);
+	collect_module_symbols(pe_image, *mapped_image, options.load_pdb);
 
 	const bool is_ntoskrnl = name == "ntoskrnl.exe";
 
@@ -348,60 +394,97 @@ std::shared_ptr<kernel_image_t> kernel::map_kernel_image(const std::shared_ptr<e
 		}
 	}
 
-	add_to_loaded_module_list(emulator, mapped_image, directory);
+	if (options.add_to_module_list)
+	{
+		add_to_loaded_module_list(emulator, mapped_image, options.directory);
+	}
 
-	if (!is_main_emulated_image)
+	if (options.monitor_data)
 	{
 		monitor_data_sections(emulator, mapped_image, pe_image);
 	}
 
-	if (name == "CI.dll")
+	if (options.register_redirections)
 	{
-		redirect_ci_sign_functions(emulator, *mapped_image);
-	}
+		if (name == "CI.dll")
+		{
+			redirect_ci_sign_functions(emulator, *mapped_image);
+		}
 
-	if (name == "cng.sys")
-	{
-		redirect_cng_bcrypt_functions(emulator, *mapped_image);
-	}
+		if (name == "cng.sys")
+		{
+			redirect_cng_bcrypt_functions(emulator, *mapped_image);
+		}
 
-	if (name == "FLTMGR.SYS")
-	{
-		redirect_fltmgr_misc_functions(emulator, *mapped_image);
-	}
+		if (name == "FLTMGR.SYS")
+		{
+			redirect_fltmgr_misc_functions(emulator, *mapped_image);
+		}
 
-	if (name == "tbs.sys")
-	{
-		redirect_tbs_misc_functions(emulator, *mapped_image);
-	}
+		if (name == "tbs.sys")
+		{
+			redirect_tbs_misc_functions(emulator, *mapped_image);
+		}
 
-	if (name == "tdi.sys")
-	{
-		redirect_tdi_misc_functions(emulator, *mapped_image);
-	}
+		if (name == "tdi.sys")
+		{
+			redirect_tdi_misc_functions(emulator, *mapped_image);
+		}
 
-	if (name == "ndis.sys")
-	{
-		redirect_ndis_misc_functions(emulator, *mapped_image);
-	}
+		if (name == "ndis.sys")
+		{
+			redirect_ndis_misc_functions(emulator, *mapped_image);
+		}
 
-	if (is_ntoskrnl)
-	{
-		initialize_ntoskrnl_debugger_state(emulator, *mapped_image);
-		initialize_ntoskrnl_object_types(emulator, *mapped_image);
+		if (is_ntoskrnl)
+		{
+			initialize_ntoskrnl_debugger_state(emulator, *mapped_image);
+			initialize_ntoskrnl_object_types(emulator, *mapped_image);
 
-		redirect_ntoskrnl_string_functions(emulator, *mapped_image);
-		redirect_ntoskrnl_memory_functions(emulator, *mapped_image);
-		redirect_ntoskrnl_time_functions(emulator, *mapped_image);
-		redirect_ntoskrnl_registry_functions(emulator, *mapped_image);
-		redirect_ntoskrnl_format_functions(emulator, *mapped_image);
-		redirect_ntoskrnl_misc_functions(emulator, *mapped_image);
-		redirect_ntoskrnl_file_functions(emulator, *mapped_image);
-		redirect_ntoskrnl_sysinfo_functions(emulator, *mapped_image);
-		redirect_ntoskrnl_object_functions(emulator, *mapped_image);
-		redirect_ntoskrnl_debugger_functions(emulator, *mapped_image);
-		redirect_ntoskrnl_crashdump_functions(emulator, *mapped_image);
+			redirect_ntoskrnl_string_functions(emulator, *mapped_image);
+			redirect_ntoskrnl_memory_functions(emulator, *mapped_image);
+			redirect_ntoskrnl_time_functions(emulator, *mapped_image);
+			redirect_ntoskrnl_registry_functions(emulator, *mapped_image);
+			redirect_ntoskrnl_format_functions(emulator, *mapped_image);
+			redirect_ntoskrnl_misc_functions(emulator, *mapped_image);
+			redirect_ntoskrnl_file_functions(emulator, *mapped_image);
+			redirect_ntoskrnl_sysinfo_functions(emulator, *mapped_image);
+			redirect_ntoskrnl_object_functions(emulator, *mapped_image);
+			redirect_ntoskrnl_debugger_functions(emulator, *mapped_image);
+			redirect_ntoskrnl_crashdump_functions(emulator, *mapped_image);
+		}
 	}
 
 	return mapped_image;
+}
+
+std::shared_ptr<image_t> kernel::map_kernel_image(const std::shared_ptr<emulator_t>& emulator,
+	const std::string_view name, const bool fix_imports, const std::wstring_view directory)
+{
+	const bool is_emulated_driver = fix_imports;
+
+	return map_image(emulator, name,
+	{
+		.fix_imports = fix_imports,
+		.user_accessible = false,
+		.load_pdb = !is_emulated_driver,
+		.add_to_module_list = true,
+		.register_redirections = !is_emulated_driver,
+		.monitor_data = !is_emulated_driver,
+		.directory = directory,
+	});
+}
+
+std::shared_ptr<image_t> kernel::map_user_image(const std::shared_ptr<emulator_t>& emulator,
+	const std::string_view name, const bool fix_imports, const bool load_pdb)
+{
+	return map_image(emulator, name,
+	{
+		.fix_imports = fix_imports,
+		.user_accessible = true,
+		.load_pdb = load_pdb,
+		.add_to_module_list = false,
+		.register_redirections = false,
+		.monitor_data = false,
+	});
 }

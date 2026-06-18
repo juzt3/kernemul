@@ -255,6 +255,15 @@ emulator_err_t unicorn_emulator_t::unmap_physical_memory(const address_type addr
 	return emulator_err_t{ uc_mem_unmap(backend_, aligned_address, aligned_size) };
 }
 
+emulator_err_t unicorn_emulator_t::protect_physical_memory(const address_type address, const size_type size,
+                                                           const protection_type protection)
+{
+	const address_type aligned_address = align_down(address, page_size);
+	const size_type aligned_size = align_up(size, page_size);
+
+	return emulator_err_t{ uc_mem_protect(backend_, aligned_address, aligned_size, convert_prot(protection)) };
+}
+
 emulator_err_t unicorn_emulator_t::read_physical_memory(const address_type address, void* const buffer,
                                                const size_type size) const
 {

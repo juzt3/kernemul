@@ -14,10 +14,10 @@
 #include <type_traits>
 
 void redirect_function(const kernel::function_implementation_t& function_impl,
-	const kernel_image_t& mapped_image, std::string_view name);
+	const image_t& mapped_image, std::string_view name);
 
 void redirect_function(const std::function<void()>& function_impl,
-	const kernel_image_t& mapped_image, std::string_view name);
+	const image_t& mapped_image, std::string_view name);
 
 void write_return_value(const std::shared_ptr<emulator_t>& emulator, std::uint64_t value);
 void write_nt_status(const std::shared_ptr<emulator_t>& emulator, std::uint32_t code);
@@ -118,7 +118,7 @@ void forward_redirect(
 
 template <auto Handler>
 void redirect_handler(const std::shared_ptr<emulator_t>& emulator,
-	const kernel_image_t& mapped_image, std::string_view name)
+	const image_t& mapped_image, std::string_view name)
 {
 	redirect_function(
 		[emulator] { forward_redirect(emulator, Handler); },
