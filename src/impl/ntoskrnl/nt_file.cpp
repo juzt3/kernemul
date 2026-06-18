@@ -651,8 +651,12 @@ void redirect_ntoskrnl_file_functions(const std::shared_ptr<emulator_t>& emulato
 					error = emulator->read_virtual_memory(buffer_address, buffer.data(), length);
 					error.throw_if("read write buffer from guest");
 
-					std::fwrite(buffer.data(), 1, length, stdout);
-					std::fflush(stdout);
+					std::string_view text(reinterpret_cast<const char*>(buffer.data()), length);
+					if (!text.empty() && text.back() == '\n')
+					{
+						text.remove_suffix(1);
+					}
+					THREAD_LOG("guest stdout: '{}'", text);
 				}
 
 				write_io_status(emulator, io_status_block, 0, length);
