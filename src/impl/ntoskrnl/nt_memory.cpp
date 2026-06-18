@@ -716,7 +716,7 @@ void redirect_ntoskrnl_memory_functions(const std::shared_ptr<emulator_t>& emula
 
 			if (!file_obj && file_handle)
 			{
-				file_obj = kernel::object_manager->get_object_from_handle<file_object_t>(file_handle);
+				file_obj = kernel::active_handle_table().get_object_from_handle<file_object_t>(file_handle);
 			}
 
 			if (file_obj)
@@ -829,7 +829,7 @@ void redirect_ntoskrnl_memory_functions(const std::shared_ptr<emulator_t>& emula
 
 		if (file_handle)
 		{
-			file_obj = kernel::object_manager->get_object_from_handle<file_object_t>(file_handle);
+			file_obj = kernel::active_handle_table().get_object_from_handle<file_object_t>(file_handle);
 		}
 
 		if (file_obj)
@@ -893,7 +893,7 @@ void redirect_ntoskrnl_memory_functions(const std::shared_ptr<emulator_t>& emula
 		}
 
 		const auto body_address = kernel::object_manager->create_object(0, body.data(), body.size(), host_object);
-		const auto section_handle = kernel::object_manager->create_handle(body_address, desired_access);
+		const auto section_handle = kernel::active_handle_table().create_handle(body_address, desired_access);
 
 		if (section_handle_out)
 		{
@@ -962,7 +962,7 @@ void redirect_ntoskrnl_memory_functions(const std::shared_ptr<emulator_t>& emula
 
 			const auto body_address = kernel::object_manager->create_object(
 				0, body.data(), body.size(), host_object);
-			const auto handle = kernel::object_manager->create_handle(body_address, desired_access);
+			const auto handle = kernel::active_handle_table().create_handle(body_address, desired_access);
 
 			if (section_handle_out)
 			{
@@ -979,7 +979,7 @@ void redirect_ntoskrnl_memory_functions(const std::shared_ptr<emulator_t>& emula
 		// check if this is a KnownDlls lookup (RootDirectory is the \KnownDlls handle)
 		if (root_directory_handle && !section_name.empty())
 		{
-			const auto dir_obj = kernel::object_manager->get_object_from_handle<directory_object_t>(root_directory_handle);
+			const auto dir_obj = kernel::active_handle_table().get_object_from_handle<directory_object_t>(root_directory_handle);
 
 			if (dir_obj && (dir_obj->name == "\\KnownDlls" || dir_obj->name == "\\KnownDlls32"))
 			{
@@ -1023,7 +1023,7 @@ void redirect_ntoskrnl_memory_functions(const std::shared_ptr<emulator_t>& emula
 
 					const auto body_address = kernel::object_manager->create_object(
 						0, body.data(), body.size(), host_object);
-					const auto handle = kernel::object_manager->create_handle(body_address, desired_access);
+					const auto handle = kernel::active_handle_table().create_handle(body_address, desired_access);
 
 					if (section_handle_out)
 					{
@@ -1044,7 +1044,7 @@ void redirect_ntoskrnl_memory_functions(const std::shared_ptr<emulator_t>& emula
 
 		if (existing)
 		{
-			const auto handle = kernel::object_manager->create_handle(*existing, desired_access);
+			const auto handle = kernel::active_handle_table().create_handle(*existing, desired_access);
 
 			if (section_handle_out)
 			{
@@ -1179,7 +1179,7 @@ void redirect_ntoskrnl_memory_functions(const std::shared_ptr<emulator_t>& emula
 			THREAD_LOG("NtMapViewOfSection called (section_handle=0x{:X}, process_handle=0x{:X}, base_out=0x{:X}, zero_bits=0x{:X}, commit_size=0x{:X}, section_offset=0x{:X}, view_size=0x{:X}, protect=0x{:X})",
 				section_handle, process_handle, base_address_ptr, zero_bits, commit_size, section_offset, view_size, win32_protect);
 
-			const auto section = kernel::object_manager->get_object_from_handle<section_object_t>(section_handle);
+			const auto section = kernel::active_handle_table().get_object_from_handle<section_object_t>(section_handle);
 
 			if (!section)
 			{
@@ -1301,7 +1301,7 @@ void redirect_ntoskrnl_memory_functions(const std::shared_ptr<emulator_t>& emula
 			THREAD_LOG("NtMapViewOfSection: mapped 0x{:X} bytes at 0x{:X} (offset=0x{:X}, file_size=0x{:X})",
 				view_size, mapping_address, offset, file_size);
 
-			if (section->is_image && user::usermode_peb_address != 0)
+			if (section->is_image && kernel::active_process()->peb_address() != 0)
 			{
 				std::uint32_t e_lfanew = 0;
 				(void)emulator->read_virtual_memory(mapping_address + 0x3C, &e_lfanew, sizeof(e_lfanew));
@@ -1951,7 +1951,7 @@ void redirect_ntoskrnl_memory_functions(const std::shared_ptr<emulator_t>& emula
 			return;
 		}
 
-		const auto section = kernel::object_manager->get_object_from_handle<section_object_t>(section_handle);
+		const auto section = kernel::active_handle_table().get_object_from_handle<section_object_t>(section_handle);
 
 		if (!section)
 		{

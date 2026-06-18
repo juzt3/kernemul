@@ -50,80 +50,21 @@ void object_manager_t::register_object(
 	objects_[body_address] = { 0, std::move(object) };
 }
 
-object_manager_t::handle_type object_manager_t::create_handle(
-	const emulator_t::address_type body_address, const access_type access)
+bool object_manager_t::has_registered_object(const emulator_t::address_type body_address) const
+{
+	return objects_.contains(body_address);
+}
+
+std::size_t object_manager_t::object_total_size(const emulator_t::address_type body_address) const
 {
 	const auto it = objects_.find(body_address);
 
 	if (it == objects_.end())
 	{
-		throw std::runtime_error("object_manager: create_handle for unknown object");
+		return 0;
 	}
 
-	const handle_type handle = allocate_handle();
-
-	handles_[handle] = { body_address, access };
-
-	const emulator_t::address_type header_address = body_address - sizeof(_OBJECT_HEADER);
-
-	LONGLONG handle_count = 0;
-	emulator_err_t error = emulator_->read_virtual_memory(
-		header_address + offsetof(_OBJECT_HEADER, HandleCount), &handle_count, sizeof(handle_count));
-	error.throw_if("object_manager: read HandleCount");
-
-	++handle_count;
-
-	error = emulator_->write_virtual_memory(
-		header_address + offsetof(_OBJECT_HEADER, HandleCount), &handle_count, sizeof(handle_count));
-	error.throw_if("object_manager: write HandleCount");
-
-	return handle;
-}
-
-bool object_manager_t::close_handle(const handle_type handle)
-{
-	const auto it = handles_.find(handle);
-
-	if (it == handles_.end())
-	{
-		return false;
-	}
-
-	const emulator_t::address_type body_address = it->second.body_address;
-
-	handles_.erase(it);
-
-	const auto obj_it = objects_.find(body_address);
-
-	if (obj_it != objects_.end() && obj_it->second.total_size > 0)
-	{
-		const emulator_t::address_type header_address = body_address - sizeof(_OBJECT_HEADER);
-
-		LONGLONG handle_count = 0;
-		const emulator_err_t error = emulator_->read_virtual_memory(
-			header_address + offsetof(_OBJECT_HEADER, HandleCount), &handle_count, sizeof(handle_count));
-		error.throw_if("object_manager: read HandleCount");
-
-		--handle_count;
-
-		const emulator_err_t write_error = emulator_->write_virtual_memory(
-			header_address + offsetof(_OBJECT_HEADER, HandleCount), &handle_count, sizeof(handle_count));
-		write_error.throw_if("object_manager: write HandleCount");
-	}
-
-	return true;
-}
-
-std::optional<object_manager_t::handle_entry_t> object_manager_t::lookup_handle(const handle_type handle) const
-{
-	const auto it = handles_.find(handle);
-
-	if (it == handles_.end())
-	{
-		return std::nullopt;
-	}
-
-	return it->second;
+	return it->second.total_size;
 }
 
 void object_manager_t::reference_object(const emulator_t::address_type body_address)
@@ -170,13 +111,6 @@ void object_manager_t::dereference_object(const emulator_t::address_type body_ad
 	error = emulator_->write_virtual_memory(
 		header_address + offsetof(_OBJECT_HEADER, PointerCount), &pointer_count, sizeof(pointer_count));
 	error.throw_if("object_manager: write PointerCount");
-}
-
-object_manager_t::handle_type object_manager_t::allocate_handle()
-{
-	const handle_type handle = next_handle_;
-	next_handle_ += 4;
-	return handle;
 }
 
 std::uint64_t object_manager_t::allocate_id()

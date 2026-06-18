@@ -306,7 +306,8 @@ void kernel::set_up_idt(const std::shared_ptr<emulator_t>& emulator, const image
 					fault_address = emulator->read_register<x86::reg::cr2, emulator_t::address_type>();
 				}
 
-				if (is_usermode && user::ki_user_exception_dispatcher_address)
+				if (is_usermode && kernel::current_thread
+					&& kernel::current_thread->process()->ki_user_exception_dispatcher())
 				{
 					if (exception_code)
 					{

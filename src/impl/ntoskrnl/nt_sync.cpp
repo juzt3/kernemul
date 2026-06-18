@@ -34,7 +34,7 @@ static void handle_create_event(const std::shared_ptr<emulator_t>& emulator,
 	body.Header.SignalState = initial_state ? 1 : 0;
 
 	const auto body_address = kernel::object_manager->create_object(0, &body, sizeof(body), event);
-	const auto handle = kernel::object_manager->create_handle(body_address, desired_access);
+	const auto handle = kernel::active_handle_table().create_handle(body_address, desired_access);
 
 	if (handle_out)
 	{
@@ -76,7 +76,7 @@ static void handle_set_event(const std::shared_ptr<emulator_t>& emulator,
 	THREAD_LOG("NtSetEvent called (handle=0x{:X}, previous_state=0x{:X})",
 		event_handle, previous_state_ptr);
 
-	const auto event = kernel::object_manager->get_object_from_handle<event_object_t>(event_handle);
+	const auto event = kernel::active_handle_table().get_object_from_handle<event_object_t>(event_handle);
 
 	if (!event)
 	{
@@ -104,7 +104,7 @@ static void handle_clear_event(const std::shared_ptr<emulator_t>& emulator,
 {
 	THREAD_LOG("NtClearEvent called (handle=0x{:X})", event_handle);
 
-	const auto event = kernel::object_manager->get_object_from_handle<event_object_t>(event_handle);
+	const auto event = kernel::active_handle_table().get_object_from_handle<event_object_t>(event_handle);
 
 	if (!event)
 	{
@@ -124,7 +124,7 @@ static void handle_reset_event(const std::shared_ptr<emulator_t>& emulator,
 	THREAD_LOG("NtResetEvent called (handle=0x{:X}, previous_state=0x{:X})",
 		event_handle, previous_state_ptr);
 
-	const auto event = kernel::object_manager->get_object_from_handle<event_object_t>(event_handle);
+	const auto event = kernel::active_handle_table().get_object_from_handle<event_object_t>(event_handle);
 
 	if (!event)
 	{
@@ -167,7 +167,7 @@ static void handle_query_event(const std::shared_ptr<emulator_t>& emulator,
 		return;
 	}
 
-	const auto event = kernel::object_manager->get_object_from_handle<event_object_t>(event_handle);
+	const auto event = kernel::active_handle_table().get_object_from_handle<event_object_t>(event_handle);
 
 	if (!event)
 	{
@@ -211,7 +211,7 @@ static void handle_create_mutant(const std::shared_ptr<emulator_t>& emulator,
 
 	std::uint8_t body[64] = {};
 	const auto body_address = kernel::object_manager->create_object(0, body, sizeof(body), mutant);
-	const auto handle = kernel::object_manager->create_handle(body_address, desired_access);
+	const auto handle = kernel::active_handle_table().create_handle(body_address, desired_access);
 
 	if (handle_out)
 	{
@@ -230,7 +230,7 @@ static void handle_release_mutant(const std::shared_ptr<emulator_t>& emulator,
 	THREAD_LOG("NtReleaseMutant called (handle=0x{:X}, previous_count=0x{:X})",
 		mutant_handle, previous_count_ptr);
 
-	const auto mutant = kernel::object_manager->get_object_from_handle<mutant_object_t>(mutant_handle);
+	const auto mutant = kernel::active_handle_table().get_object_from_handle<mutant_object_t>(mutant_handle);
 
 	if (!mutant)
 	{
@@ -283,7 +283,7 @@ static void handle_create_semaphore(const std::shared_ptr<emulator_t>& emulator,
 
 	std::uint8_t body[64] = {};
 	const auto body_address = kernel::object_manager->create_object(0, body, sizeof(body), semaphore);
-	const auto handle = kernel::object_manager->create_handle(body_address, desired_access);
+	const auto handle = kernel::active_handle_table().create_handle(body_address, desired_access);
 
 	if (handle_out)
 	{
@@ -310,7 +310,7 @@ static void handle_release_semaphore(const std::shared_ptr<emulator_t>& emulator
 		return;
 	}
 
-	const auto semaphore = kernel::object_manager->get_object_from_handle<semaphore_object_t>(sem_handle);
+	const auto semaphore = kernel::active_handle_table().get_object_from_handle<semaphore_object_t>(sem_handle);
 
 	if (!semaphore)
 	{
@@ -357,7 +357,7 @@ static void handle_create_keyed_event(const std::shared_ptr<emulator_t>& emulato
 
 	std::uint8_t body[64] = {};
 	const auto body_address = kernel::object_manager->create_object(0, body, sizeof(body), keyed_event);
-	const auto handle = kernel::object_manager->create_handle(body_address, desired_access);
+	const auto handle = kernel::active_handle_table().create_handle(body_address, desired_access);
 
 	if (handle_out)
 	{
@@ -409,7 +409,7 @@ static void handle_wait_for_single_object(const std::shared_ptr<emulator_t>& emu
 	THREAD_LOG("NtWaitForSingleObject called (handle=0x{:X}, alertable={}, timeout={})",
 		handle, alertable, has_timeout ? timeout_value : -1);
 
-	const auto event = kernel::object_manager->get_object_from_handle<event_object_t>(handle);
+	const auto event = kernel::active_handle_table().get_object_from_handle<event_object_t>(handle);
 
 	if (event)
 	{
@@ -452,7 +452,7 @@ static void handle_wait_for_single_object(const std::shared_ptr<emulator_t>& emu
 		return;
 	}
 
-	const auto mutant = kernel::object_manager->get_object_from_handle<mutant_object_t>(handle);
+	const auto mutant = kernel::active_handle_table().get_object_from_handle<mutant_object_t>(handle);
 
 	if (mutant)
 	{
@@ -466,7 +466,7 @@ static void handle_wait_for_single_object(const std::shared_ptr<emulator_t>& emu
 		return;
 	}
 
-	const auto semaphore = kernel::object_manager->get_object_from_handle<semaphore_object_t>(handle);
+	const auto semaphore = kernel::active_handle_table().get_object_from_handle<semaphore_object_t>(handle);
 
 	if (semaphore)
 	{
@@ -490,7 +490,7 @@ static void handle_wait_for_single_object(const std::shared_ptr<emulator_t>& emu
 		return;
 	}
 
-	const auto thread_obj = kernel::object_manager->get_object_from_handle<thread_object_t>(handle);
+	const auto thread_obj = kernel::active_handle_table().get_object_from_handle<thread_object_t>(handle);
 
 	if (thread_obj)
 	{
@@ -547,7 +547,7 @@ static void handle_wait_for_multiple_objects(const std::shared_ptr<emulator_t>& 
 	// single-threaded - signal all waitable events and return
 	for (std::uint32_t i = 0; i < count; ++i)
 	{
-		const auto event = kernel::object_manager->get_object_from_handle<event_object_t>(handles[i]);
+		const auto event = kernel::active_handle_table().get_object_from_handle<event_object_t>(handles[i]);
 
 		if (event && event->signaled && event->event_type == event_object_t::synchronization)
 		{
@@ -566,21 +566,21 @@ static void handle_signal_and_wait(const std::shared_ptr<emulator_t>& emulator,
 	THREAD_LOG("NtSignalAndWaitForSingleObject called (signal=0x{:X}, wait=0x{:X}, alertable={}, timeout=0x{:X})",
 		signal_handle, wait_handle, alertable, timeout_ptr);
 
-	const auto signal_event = kernel::object_manager->get_object_from_handle<event_object_t>(signal_handle);
+	const auto signal_event = kernel::active_handle_table().get_object_from_handle<event_object_t>(signal_handle);
 
 	if (signal_event)
 	{
 		signal_event->signaled = true;
 	}
 
-	const auto signal_semaphore = kernel::object_manager->get_object_from_handle<semaphore_object_t>(signal_handle);
+	const auto signal_semaphore = kernel::active_handle_table().get_object_from_handle<semaphore_object_t>(signal_handle);
 
 	if (signal_semaphore && signal_semaphore->count < signal_semaphore->max_count)
 	{
 		signal_semaphore->count++;
 	}
 
-	const auto signal_mutant = kernel::object_manager->get_object_from_handle<mutant_object_t>(signal_handle);
+	const auto signal_mutant = kernel::active_handle_table().get_object_from_handle<mutant_object_t>(signal_handle);
 
 	if (signal_mutant && signal_mutant->owned)
 	{
@@ -593,7 +593,7 @@ static void handle_signal_and_wait(const std::shared_ptr<emulator_t>& emulator,
 		}
 	}
 
-	const auto wait_event = kernel::object_manager->get_object_from_handle<event_object_t>(wait_handle);
+	const auto wait_event = kernel::active_handle_table().get_object_from_handle<event_object_t>(wait_handle);
 
 	if (wait_event && wait_event->signaled && wait_event->event_type == event_object_t::synchronization)
 	{

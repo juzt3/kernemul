@@ -43,6 +43,21 @@ thread_t::id_type kernel::current_thread_id()
 	return current_thread->id();
 }
 
+std::uint64_t kernel::current_process_id()
+{
+	return current_thread ? current_thread->process()->id() : 0;
+}
+
+const char* kernel::current_mode_string()
+{
+	if (current_thread && current_thread->state().is_usermode)
+	{
+		return "user";
+	}
+
+	return "kernel";
+}
+
 std::optional<kernel::function_implementation_t> kernel::find_redirected_function(const emulator_t::address_type address)
 {
 	const auto it = redirected_functions.find(address);

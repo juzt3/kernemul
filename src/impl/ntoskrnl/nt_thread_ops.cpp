@@ -69,7 +69,7 @@ static void handle_open_thread(const std::shared_ptr<emulator_t>& emulator,
 
 		_ETHREAD body = {};
 		const auto body_address = kernel::object_manager->create_object(0, &body, sizeof(body), thread_obj);
-		const auto handle = kernel::object_manager->create_handle(body_address, desired_access);
+		const auto handle = kernel::active_handle_table().create_handle(body_address, desired_access);
 
 		if (handle_out)
 		{
@@ -148,7 +148,7 @@ static void handle_get_context_thread(const std::shared_ptr<emulator_t>& emulato
 	}
 	else
 	{
-		const auto thread_obj = kernel::object_manager->get_object_from_handle<thread_object_t>(thread_handle);
+		const auto thread_obj = kernel::active_handle_table().get_object_from_handle<thread_object_t>(thread_handle);
 		if (thread_obj && thread_obj->thread)
 		{
 			state = &thread_obj->thread->state();
@@ -386,7 +386,7 @@ static void impl_create_thread_ex(const std::shared_ptr<emulator_t>& emulator)
 			teb.ClientId.UniqueProcess = kernel::current_thread->process()->id();
 		}
 
-		teb.ProcessEnvironmentBlock = user::usermode_peb_address;
+		teb.ProcessEnvironmentBlock = kernel::active_process()->peb_address();
 
 		static_cast<void>(emulator->write_virtual_memory(teb_address, &teb, sizeof(teb)));
 
@@ -404,7 +404,7 @@ static void impl_create_thread_ex(const std::shared_ptr<emulator_t>& emulator)
 	}
 
 	kernel::object_manager->register_object(thread->address(), std::make_shared<thread_object_t>(thread));
-	const auto handle_value = kernel::object_manager->create_handle(thread->address(), desired_access);
+	const auto handle_value = kernel::active_handle_table().create_handle(thread->address(), desired_access);
 
 	if (thread_handle_out)
 	{
@@ -496,7 +496,7 @@ void redirect_ntoskrnl_thread_functions(const std::shared_ptr<emulator_t>& emula
 			return;
 		}
 
-		const auto thread_obj = kernel::object_manager->get_object_from_handle<thread_object_t>(thread_handle);
+		const auto thread_obj = kernel::active_handle_table().get_object_from_handle<thread_object_t>(thread_handle);
 		if (!thread_obj)
 		{
 			THREAD_WARN_LOG("NtTerminateThread: invalid handle 0x{:X}", thread_handle);

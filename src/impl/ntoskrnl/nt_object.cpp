@@ -89,7 +89,7 @@ void redirect_ntoskrnl_object_functions(const std::shared_ptr<emulator_t>& emula
 			THREAD_LOG("ObReferenceObjectByHandle called (handle=0x{:X}, access=0x{:X}, type=0x{:X}, object_out=0x{:X})",
 				handle, desired_access, object_type, object_out);
 
-			const auto entry = kernel::object_manager->lookup_handle(handle);
+			const auto entry = kernel::active_handle_table().lookup_handle(handle);
 
 			if (entry && object_out)
 			{
@@ -128,7 +128,7 @@ void redirect_ntoskrnl_object_functions(const std::shared_ptr<emulator_t>& emula
 
 		if (!user::is_console_handle(handle))
 		{
-			kernel::object_manager->close_handle(handle);
+			kernel::active_handle_table().close_handle(handle);
 		}
 
 		write_nt_success(emulator);
@@ -261,7 +261,7 @@ void redirect_ntoskrnl_object_functions(const std::shared_ptr<emulator_t>& emula
 		constexpr std::size_t directory_body_size = 0x40;
 		std::array<std::uint8_t, directory_body_size> body{};
 		const auto body_address = kernel::object_manager->create_object(0, body.data(), body.size(), host_object);
-		const auto handle_value = kernel::object_manager->create_handle(body_address, desired_access);
+		const auto handle_value = kernel::active_handle_table().create_handle(body_address, desired_access);
 
 		if (handle_address)
 		{
@@ -433,7 +433,7 @@ void redirect_ntoskrnl_object_functions(const std::shared_ptr<emulator_t>& emula
 
 			kernel::object_manager->reference_object(object_address);
 
-			const auto handle_value = kernel::object_manager->create_handle(object_address, desired_access);
+			const auto handle_value = kernel::active_handle_table().create_handle(object_address, desired_access);
 
 			if (handle_out)
 			{

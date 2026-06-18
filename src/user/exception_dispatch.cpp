@@ -54,7 +54,11 @@ void user::dispatch_exception(const std::shared_ptr<emulator_t>& emulator,
 	const emulator_t::address_type exception_address,
 	const std::uint64_t* parameters, const std::uint32_t parameter_count)
 {
-	if (!ki_user_exception_dispatcher_address)
+	const auto dispatcher_address = kernel::current_thread
+		? kernel::current_thread->process()->ki_user_exception_dispatcher()
+		: ki_user_exception_dispatcher_address;
+
+	if (!dispatcher_address)
 	{
 		THREAD_ERR_LOG("dispatch_exception: KiUserExceptionDispatcher not resolved");
 		return;
@@ -101,7 +105,7 @@ void user::dispatch_exception(const std::shared_ptr<emulator_t>& emulator,
 	static_cast<void>(emulator->write_virtual_memory(new_sp, frame.data(), zero_size));
 
 	emulator->write_register<x86::reg::rsp>(new_sp);
-	emulator->write_register<x86::reg::rip>(ki_user_exception_dispatcher_address);
+	emulator->write_register<x86::reg::rip>(dispatcher_address);
 
 	kernel::swap_to_usermode_segments(emulator);
 

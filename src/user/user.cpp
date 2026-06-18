@@ -17,6 +17,7 @@
 #include <portable_executable/image.hpp>
 
 #include <algorithm>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -350,6 +351,8 @@ user::context_t user::set_up_structures(
 	const emulator_t::address_type ntdll_base,
 	const emulator_t::size_type image_size,
 	const emulator_t::size_type ntdll_size,
+	const std::string_view module_name,
+	const std::shared_ptr<process_t>& process,
 	const std::vector<std::shared_ptr<image_t>>& extra_modules)
 {
 	using namespace user;
@@ -384,9 +387,12 @@ user::context_t user::set_up_structures(
 
 	const auto api_set_address = build_api_set_map(emulator);
 
+	const auto wide_module_name = util::widen_string(module_name);
+	const auto wide_module_path = L"C:\\Windows\\System32\\" + wide_module_name;
+
 	std::vector<ldr_module_info_t> ldr_modules =
 	{
-		{ image_base, image_size, L"C:\\Windows\\System32\\test_user.exe", L"test_user.exe", 0x00004000, false },
+		{ image_base, image_size, wide_module_path, wide_module_name, 0x00004000, false },
 		{ ntdll_base, ntdll_size, L"C:\\Windows\\System32\\ntdll.dll", L"ntdll.dll", 0x001C4004, true },
 	};
 
@@ -438,12 +444,12 @@ user::context_t user::set_up_structures(
 		set_unicode_string(params.DllPath, dll_path_address,
 			static_cast<std::uint16_t>(dll_path.size() * sizeof(wchar_t)));
 
-		const std::wstring image_path = L"C:\\Windows\\System32\\test_user.exe";
+		const auto image_path = L"C:\\Windows\\System32\\" + wide_module_name;
 		const auto image_path_address = kernel::allocate_wstring(*emulator, image_path, user_page_allocator);
 		set_unicode_string(params.ImagePathName, image_path_address,
 			static_cast<std::uint16_t>(image_path.size() * sizeof(wchar_t)));
 
-		const std::wstring command_line = L"test_user.exe";
+		const auto command_line = wide_module_name;
 		const auto command_line_address = kernel::allocate_wstring(*emulator, command_line, user_page_allocator);
 		set_unicode_string(params.CommandLine, command_line_address,
 			static_cast<std::uint16_t>(command_line.size() * sizeof(wchar_t)));
@@ -496,8 +502,6 @@ user::context_t user::set_up_structures(
 	{
 		teb64_t teb{};
 
-		const auto& process = kernel::process_entries.front();
-
 		teb.NtTib.StackBase = stack_base;
 		teb.NtTib.StackLimit = stack_limit;
 		teb.NtTib.Self = teb_address;
@@ -514,8 +518,6 @@ user::context_t user::set_up_structures(
 		GLOBAL_LOG("user: TEB at 0x{:X}, stack=0x{:X}-0x{:X}",
 			teb_address, stack_limit, stack_base);
 	}
-
-	usermode_peb_address = peb_address;
 
 	return context_t
 	{
@@ -534,10 +536,11 @@ std::shared_ptr<thread_t> user::create_initial_thread(
 	const emulator_t::address_type entry_point,
 	const emulator_t::address_type ldr_initialize_thunk,
 	const emulator_t::address_type rtl_user_thread_start,
-	const context_t& context)
+	const context_t& context,
+	const std::shared_ptr<process_t>& process)
 {
 	auto thread = kernel::create_thread_at(emulator, ldr_initialize_thunk, {},
-		context.stack_base, context.teb_address);
+		context.stack_base, context.teb_address, process);
 
 	// place CONTEXT on the usermode stack for NtContinue after initialization
 	const emulator_t::address_type stack_top = (context.stack_base - 0x1000) & ~0xFull;
@@ -571,86 +574,87 @@ std::shared_ptr<thread_t> user::create_initial_thread(
 	return thread;
 }
 
-void user::initialize(const std::shared_ptr<emulator_t>& emulator,
-	const std::shared_ptr<image_t>& nt_image,
-	const std::string_view usermode_module_name)
+void user::initialize_system(const std::shared_ptr<emulator_t>& emulator,
+	const std::shared_ptr<image_t>& nt_image)
 {
 	user::memory_manager = std::make_unique<user::memory_manager_t>(emulator);
 
-	const std::array usermode_dlls =
+	const std::filesystem::path vfs_dir("vfs");
+
+	if (std::filesystem::exists(vfs_dir))
 	{
-		"kernel32.dll",
-		"KernelBase.dll",
-		"ucrtbase.dll",
-		"vcruntime140.dll",
-		"vcruntime140_1.dll",
-		"vcruntime140d.dll",
-	};
-
-	for (const auto& dll : usermode_dlls)
-	{
-		std::string lower_name(dll);
-
-		for (auto& c : lower_name)
+		for (const auto& entry : std::filesystem::directory_iterator(vfs_dir))
 		{
-			c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-		}
+			if (!entry.is_regular_file())
+			{
+				continue;
+			}
 
-		const auto vfs_path = "system32/" + lower_name;
+			const auto ext = entry.path().extension().string();
 
-		if (!kernel::filesystem->exists(vfs_path))
-		{
-			kernel::filesystem->load_at(dll, vfs_path);
+			if (ext != ".dll" && ext != ".DLL")
+			{
+				continue;
+			}
+
+			const auto filename = entry.path().filename().string();
+
+			std::string lower_name(filename);
+
+			for (auto& c : lower_name)
+			{
+				c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+			}
+
+			const auto fs_path = "system32/" + lower_name;
+
+			if (!kernel::filesystem->exists(fs_path))
+			{
+				kernel::filesystem->load_at(filename, fs_path);
+			}
 		}
 	}
 
-	auto ntdll_image = kernel::map_user_image(emulator, "ntdll.dll", false, true);
+	user::ntdll_image = kernel::map_user_image(emulator, "ntdll.dll", false, true);
 
-	if (!ntdll_image)
+	if (!user::ntdll_image)
 	{
 		throw std::runtime_error("failed to load ntdll.dll for usermode emulation");
 	}
 
-	user::module_entries.push_back(ntdll_image);
+	user::module_entries.push_back(user::ntdll_image);
 
-	auto kernelbase_image = kernel::map_user_image(emulator, "kernelbase.dll", true, false, true);
+	user::kernelbase_image = kernel::map_user_image(emulator, "kernelbase.dll", true, false, true);
 
-	if (kernelbase_image)
+	if (user::kernelbase_image)
 	{
-		user::module_entries.push_back(kernelbase_image);
-		GLOBAL_LOG("usermode: loaded kernelbase.dll at 0x{:X}", kernelbase_image->base_address());
+		user::module_entries.push_back(user::kernelbase_image);
+		GLOBAL_LOG("usermode: loaded kernelbase.dll at 0x{:X}", user::kernelbase_image->base_address());
 	}
 	else
 	{
 		GLOBAL_WARN_LOG("usermode: kernelbase.dll not found in vfs/ - some imports may fail");
 	}
 
-	auto kernel32_image = kernel::map_user_image(emulator, "kernel32.dll", true, false, true);
+	user::kernel32_image = kernel::map_user_image(emulator, "kernel32.dll", true, false, true);
 
-	if (kernel32_image)
+	if (user::kernel32_image)
 	{
-		user::module_entries.push_back(kernel32_image);
-		GLOBAL_LOG("usermode: loaded kernel32.dll at 0x{:X}", kernel32_image->base_address());
+		user::module_entries.push_back(user::kernel32_image);
+		GLOBAL_LOG("usermode: loaded kernel32.dll at 0x{:X}", user::kernel32_image->base_address());
 	}
 	else
 	{
 		GLOBAL_WARN_LOG("usermode: kernel32.dll not found in vfs/ - some imports may fail");
 	}
 
-	auto win32u_image = kernel::map_user_image(emulator, "win32u.dll");
+	user::win32u_image = kernel::map_user_image(emulator, "win32u.dll");
 
-	auto usermode_image = kernel::map_user_image(emulator, std::string(usermode_module_name), true, false, true);
+	user::syscall_table.parse_from_image(emulator, user::ntdll_image);
 
-	if (!usermode_image)
+	if (user::win32u_image)
 	{
-		throw std::runtime_error("failed to load usermode target PE");
-	}
-
-	user::syscall_table.parse_from_image(emulator, ntdll_image);
-
-	if (win32u_image)
-	{
-		user::syscall_table.parse_from_image(emulator, win32u_image);
+		user::syscall_table.parse_from_image(emulator, user::win32u_image);
 	}
 
 	for (const auto& [name, address] : nt_image->symbols())
@@ -678,7 +682,7 @@ void user::initialize(const std::shared_ptr<emulator_t>& emulator,
 
 	redirect_ntoskrnl_syscall_handler(emulator, *nt_image);
 
-	const auto ki_user_exception_disp = ntdll_image->find_symbol("KiUserExceptionDispatcher");
+	const auto ki_user_exception_disp = user::ntdll_image->find_symbol("KiUserExceptionDispatcher");
 
 	if (ki_user_exception_disp)
 	{
@@ -690,38 +694,131 @@ void user::initialize(const std::shared_ptr<emulator_t>& emulator,
 		GLOBAL_WARN_LOG("usermode: KiUserExceptionDispatcher not found in ntdll");
 	}
 
-	std::vector<std::shared_ptr<image_t>> extra_modules;
-
-	if (kernelbase_image)
-	{
-		extra_modules.push_back(kernelbase_image);
-	}
-
-	if (kernel32_image)
-	{
-		extra_modules.push_back(kernel32_image);
-	}
-
-	const auto um_context = user::set_up_structures(emulator,
-		usermode_image->base_address(), ntdll_image->base_address(),
-		usermode_image->size(), ntdll_image->size(), extra_modules);
-
-	const auto ldr_init_thunk = ntdll_image->find_symbol("LdrInitializeThunk");
-	const auto rtl_user_thread_start = ntdll_image->find_symbol("RtlUserThreadStart");
+	const auto ldr_init_thunk = user::ntdll_image->find_symbol("LdrInitializeThunk");
+	const auto rtl_user_thread_start = user::ntdll_image->find_symbol("RtlUserThreadStart");
 
 	if (!ldr_init_thunk || !rtl_user_thread_start)
 	{
 		throw std::runtime_error("usermode: LdrInitializeThunk or RtlUserThreadStart not found in ntdll");
 	}
 
+	user::ldr_initialize_thunk_address = *ldr_init_thunk;
+	user::rtl_user_thread_start_address = *rtl_user_thread_start;
+
+	GLOBAL_LOG("usermode system initialized: syscall stubs={}", user::syscall_table.size());
+}
+
+void user::create_user_process(const std::shared_ptr<emulator_t>& emulator,
+	const std::string_view usermode_module_name)
+{
+	static bool first_process = true;
+
+	std::shared_ptr<image_t> process_ntdll;
+	std::shared_ptr<image_t> process_kernelbase;
+	std::shared_ptr<image_t> process_kernel32;
+
+	std::vector<std::shared_ptr<image_t>> saved_entries;
+
+	if (first_process)
+	{
+		process_ntdll = user::ntdll_image;
+		process_kernelbase = user::kernelbase_image;
+		process_kernel32 = user::kernel32_image;
+		first_process = false;
+	}
+	else
+	{
+		// each process needs its own system DLL copies so writable sections
+		// (.data/.bss) are clean - ntdll's LdrpInitializeProcess skips heap
+		// creation if it sees "already initialized" flags from another process
+		saved_entries = user::module_entries;
+		user::module_entries.clear();
+
+		process_ntdll = kernel::map_user_image(emulator, "ntdll.dll", false, true);
+
+		if (!process_ntdll)
+		{
+			throw std::runtime_error("failed to load ntdll.dll for process: " + std::string(usermode_module_name));
+		}
+
+		user::module_entries.push_back(process_ntdll);
+
+		process_kernelbase = kernel::map_user_image(emulator, "kernelbase.dll", true, false, true);
+
+		if (process_kernelbase)
+		{
+			user::module_entries.push_back(process_kernelbase);
+		}
+
+		process_kernel32 = kernel::map_user_image(emulator, "kernel32.dll", true, false, true);
+
+		if (process_kernel32)
+		{
+			user::module_entries.push_back(process_kernel32);
+		}
+
+		GLOBAL_LOG("usermode: mapped per-process DLLs for {} (ntdll=0x{:X})",
+			usermode_module_name, process_ntdll->base_address());
+	}
+
+	auto usermode_image = kernel::map_user_image(emulator, std::string(usermode_module_name), true, false, true);
+
+	if (!usermode_image)
+	{
+		throw std::runtime_error("failed to load usermode target: " + std::string(usermode_module_name));
+	}
+
+	// merge saved entries back so find_module_from_rip can resolve all DLL instances
+	for (auto& entry : saved_entries)
+	{
+		user::module_entries.push_back(std::move(entry));
+	}
+
+	// resolve per-process addresses from this process's ntdll
+	const auto ldr_init_thunk = process_ntdll->find_symbol("LdrInitializeThunk");
+	const auto rtl_user_thread_start = process_ntdll->find_symbol("RtlUserThreadStart");
+
+	if (!ldr_init_thunk || !rtl_user_thread_start)
+	{
+		throw std::runtime_error("usermode: LdrInitializeThunk or RtlUserThreadStart not found in ntdll");
+	}
+
+	const auto process_id = kernel::object_manager->allocate_id();
+	auto process = kernel::create_process(emulator, process_id,
+		usermode_module_name, usermode_image->base_address());
+
+	if (const auto ki_disp = process_ntdll->find_symbol("KiUserExceptionDispatcher"))
+	{
+		process->set_ki_user_exception_dispatcher(*ki_disp);
+	}
+
+	std::vector<std::shared_ptr<image_t>> extra_modules;
+
+	if (process_kernelbase)
+	{
+		extra_modules.push_back(process_kernelbase);
+	}
+
+	if (process_kernel32)
+	{
+		extra_modules.push_back(process_kernel32);
+	}
+
+	const auto um_context = user::set_up_structures(emulator,
+		usermode_image->base_address(), process_ntdll->base_address(),
+		usermode_image->size(), process_ntdll->size(),
+		usermode_module_name, process, extra_modules);
+
+	process->set_peb_address(um_context.peb_address);
+
 	auto um_thread = user::create_initial_thread(emulator,
-		usermode_image->entry_point(), *ldr_init_thunk, *rtl_user_thread_start, um_context);
+		usermode_image->entry_point(),
+		*ldr_init_thunk,
+		*rtl_user_thread_start,
+		um_context, process);
 
 	kernel::pending_threads.push(std::move(um_thread));
 
-	GLOBAL_LOG("usermode: starting at LdrInitializeThunk (0x{:X}), entry=0x{:X}",
-		*ldr_init_thunk, usermode_image->entry_point());
-
-	GLOBAL_LOG("usermode emulation initialized: target={}, syscall stubs={}",
-		usermode_module_name, user::syscall_table.size());
+	GLOBAL_LOG("usermode: process created for {} (pid={}, base=0x{:X}, entry=0x{:X})",
+		usermode_module_name, process_id, usermode_image->base_address(), usermode_image->entry_point());
 }

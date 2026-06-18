@@ -5,6 +5,7 @@
 #include "../filesystem/filesystem.hpp"
 #include "../registry/registry.hpp"
 #include "kernel_def.hpp"
+#include "handle_table.hpp"
 #include "object_manager.hpp"
 #include "process_loader.hpp"
 #include "thread.hpp"
@@ -48,4 +49,19 @@ namespace kernel
 	[[nodiscard]] std::shared_ptr<image_t> find_module(std::string_view name);
 	[[nodiscard]] std::shared_ptr<image_t> find_module_from_rip(emulator_t::address_type rip);
 	[[nodiscard]] std::optional<function_implementation_t> find_redirected_function(emulator_t::address_type address);
+
+	[[nodiscard]] inline const std::shared_ptr<process_t>& active_process()
+	{
+		if (current_thread)
+		{
+			return current_thread->process();
+		}
+
+		return process_entries.front();
+	}
+
+	[[nodiscard]] inline handle_table_t& active_handle_table()
+	{
+		return *active_process()->handle_table();
+	}
 }

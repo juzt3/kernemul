@@ -487,7 +487,11 @@ std::int32_t main()
 		set_up_syscall_msrs(emulator);
 
 #ifdef EMULATED_USERMODE_MODULE
-		user::initialize(emulator, nt_image, EMULATED_USERMODE_MODULE);
+		user::initialize_system(emulator, nt_image);
+		user::create_user_process(emulator, EMULATED_USERMODE_MODULE);
+#ifdef EMULATED_USERMODE_MODULE_2
+		user::create_user_process(emulator, EMULATED_USERMODE_MODULE_2);
+#endif
 #endif
 
 		const emulator_t::address_type base_address = kernel::emulated_module->base_address();

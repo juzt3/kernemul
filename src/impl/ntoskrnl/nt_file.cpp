@@ -342,12 +342,12 @@ static void iop_create_file(const std::shared_ptr<emulator_t>& emulator,
 	{
 		if (filesystem->exists(normalized))
 		{
-			THREAD_WARN_LOG("{}: file already exists '{}'", caller_name, normalized);
+			file = filesystem->open_at(normalized);
+			information = file_opened;
 
-			write_io_status(emulator, io_status_block_address, static_cast<std::int32_t>(status_object_name_collision), 0);
-			write_nt_status(emulator, status_object_name_collision);
+			THREAD_LOG("{}: file already exists '{}', opening existing", caller_name, normalized);
 
-			return;
+			break;
 		}
 
 		file = want_directory ? filesystem->create_directory_at(normalized) : filesystem->create_at(normalized);
@@ -453,7 +453,7 @@ static void iop_create_file(const std::shared_ptr<emulator_t>& emulator,
 
 	std::array<std::uint8_t, file_object_body_size> body{};
 	const auto body_address = kernel::object_manager->create_object(0, body.data(), body.size(), host_object);
-	const auto handle_value = kernel::object_manager->create_handle(body_address, desired_access);
+	const auto handle_value = kernel::active_handle_table().create_handle(body_address, desired_access);
 
 	THREAD_LOG("{}: handle 0x{:X} for '{}' (access=0x{:X}, info={}, *file_handle=0x{:X})",
 		caller_name, handle_value, normalized, desired_access, information, handle_out_address);
@@ -673,7 +673,7 @@ void redirect_ntoskrnl_file_functions(const std::shared_ptr<emulator_t>& emulato
 				return;
 			}
 
-			const auto entry = kernel::object_manager->lookup_handle(file_handle);
+			const auto entry = kernel::active_handle_table().lookup_handle(file_handle);
 
 			if (!entry)
 			{
@@ -705,7 +705,7 @@ void redirect_ntoskrnl_file_functions(const std::shared_ptr<emulator_t>& emulato
 				return;
 			}
 
-			const auto host_object = kernel::object_manager->get_object_from_handle<file_object_t>(file_handle);
+			const auto host_object = kernel::active_handle_table().get_object_from_handle<file_object_t>(file_handle);
 
 			if (!host_object || !host_object->file)
 			{
@@ -783,7 +783,7 @@ void redirect_ntoskrnl_file_functions(const std::shared_ptr<emulator_t>& emulato
 				return;
 			}
 
-			const auto entry = kernel::object_manager->lookup_handle(file_handle);
+			const auto entry = kernel::active_handle_table().lookup_handle(file_handle);
 
 			if (!entry)
 			{
@@ -815,7 +815,7 @@ void redirect_ntoskrnl_file_functions(const std::shared_ptr<emulator_t>& emulato
 				return;
 			}
 
-			const auto host_object = kernel::object_manager->get_object_from_handle<file_object_t>(file_handle);
+			const auto host_object = kernel::active_handle_table().get_object_from_handle<file_object_t>(file_handle);
 
 			if (!host_object || !host_object->file)
 			{
@@ -916,7 +916,7 @@ void redirect_ntoskrnl_file_functions(const std::shared_ptr<emulator_t>& emulato
 					return;
 				}
 
-				const auto host_object = kernel::object_manager->get_object_from_handle<file_object_t>(file_handle);
+				const auto host_object = kernel::active_handle_table().get_object_from_handle<file_object_t>(file_handle);
 				const bool is_directory = host_object && host_object->file && host_object->file->is_directory();
 				const std::int64_t file_size = (host_object && host_object->file && !is_directory) ? static_cast<std::int64_t>(host_object->file->size()) : 0;
 
@@ -1169,7 +1169,7 @@ void redirect_ntoskrnl_file_functions(const std::shared_ptr<emulator_t>& emulato
 				}
 			}
 
-			const auto host_object = kernel::object_manager->get_object_from_handle<file_object_t>(file_handle);
+			const auto host_object = kernel::active_handle_table().get_object_from_handle<file_object_t>(file_handle);
 			const std::string directory_path = host_object ? host_object->path : std::string{};
 
 			THREAD_LOG("{} called (handle=0x{:X}, event=0x{:X}, apc_routine=0x{:X}, apc_context=0x{:X}, io_status_block=0x{:X}, buffer=0x{:X}, length=0x{:X}, class={}, return_single_entry={}, file_name='{}', restart_scan={}, dir='{}')",

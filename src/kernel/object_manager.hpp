@@ -154,10 +154,6 @@ public:
 		std::shared_ptr<object_t> object = {}
 	);
 
-	[[nodiscard]] handle_type create_handle(emulator_t::address_type body_address, access_type access);
-	bool close_handle(handle_type handle);
-	[[nodiscard]] std::optional<handle_entry_t> lookup_handle(handle_type handle) const;
-
 	template <typename T>
 	[[nodiscard]] std::shared_ptr<T> get_object(emulator_t::address_type body_address) const
 	{
@@ -171,18 +167,8 @@ public:
 		return std::dynamic_pointer_cast<T>(it->second.object);
 	}
 
-	template <typename T>
-	[[nodiscard]] std::shared_ptr<T> get_object_from_handle(handle_type handle) const
-	{
-		const auto entry = lookup_handle(handle);
-
-		if (!entry)
-		{
-			return {};
-		}
-
-		return get_object<T>(entry->body_address);
-	}
+	[[nodiscard]] bool has_registered_object(emulator_t::address_type body_address) const;
+	[[nodiscard]] std::size_t object_total_size(emulator_t::address_type body_address) const;
 
 	void reference_object(emulator_t::address_type body_address);
 	void dereference_object(emulator_t::address_type body_address);
@@ -193,12 +179,8 @@ public:
 	[[nodiscard]] std::uint64_t allocate_id();
 
 private:
-	[[nodiscard]] handle_type allocate_handle();
-
 	std::shared_ptr<emulator_t> emulator_;
 	std::unordered_map<emulator_t::address_type, object_entry_t> objects_;
-	std::unordered_map<handle_type, handle_entry_t> handles_;
 	std::unordered_map<std::string, emulator_t::address_type> named_objects_;
-	handle_type next_handle_ = 4;
 	std::uint64_t next_id_ = 4;
 };

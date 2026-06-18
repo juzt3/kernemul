@@ -143,7 +143,8 @@ namespace kernel
 
 	[[nodiscard]] std::shared_ptr<thread_t> create_thread_at(const std::shared_ptr<emulator_t>& emulator,
 		emulator_t::address_type target_address, std::span<const std::uint64_t> arguments = {},
-		emulator_t::address_type stack_base = 0, emulator_t::address_type teb_address = 0);
+		emulator_t::address_type stack_base = 0, emulator_t::address_type teb_address = 0,
+		const std::shared_ptr<process_t>& owner_process = {});
 
 	std::uint64_t run_thread_immediately(const std::shared_ptr<emulator_t>& emulator,
 		const std::shared_ptr<thread_t>& thread);

@@ -140,6 +140,7 @@ std::shared_ptr<process_t> kernel::create_process(const std::shared_ptr<emulator
 	auto object = emulator_object_t<_EPROCESS>::allocate(emulator, contents, object_name);
 
 	auto process = std::make_shared<process_t>(process_id, section_base_address, std::move(object), std::string(image_name));
+	process->set_handle_table(std::make_shared<handle_table_t>(emulator, object_manager));
 
 	const auto self_links = get_active_process_links_address(*process);
 

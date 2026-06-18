@@ -391,11 +391,12 @@ void kernel::run_all_threads(const std::shared_ptr<emulator_t>& emulator, const 
 
 std::shared_ptr<thread_t> kernel::create_thread_at(const std::shared_ptr<emulator_t>& emulator,
 	const emulator_t::address_type target_address, const std::span<const std::uint64_t> arguments,
-	const emulator_t::address_type stack_base, const emulator_t::address_type teb_address)
+	const emulator_t::address_type stack_base, const emulator_t::address_type teb_address,
+	const std::shared_ptr<process_t>& owner_process)
 {
 	const auto thread_id = object_manager->allocate_id();
-	const auto& process = process_entries.front();
-	auto thread = create_thread(emulator, thread_id, process);
+	const auto& target_process = owner_process ? owner_process : process_entries.front();
+	auto thread = create_thread(emulator, thread_id, target_process);
 
 	emulator_t::address_type stack_top;
 

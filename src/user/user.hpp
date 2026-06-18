@@ -41,8 +41,18 @@ namespace user
 	inline emulator_t::address_type usermode_peb_address = 0;
 	inline std::vector<std::shared_ptr<image_t>> module_entries;
 
-	void initialize(const std::shared_ptr<emulator_t>& emulator,
-		const std::shared_ptr<image_t>& nt_image,
+	inline std::shared_ptr<image_t> ntdll_image;
+	inline std::shared_ptr<image_t> kernelbase_image;
+	inline std::shared_ptr<image_t> kernel32_image;
+	inline std::shared_ptr<image_t> win32u_image;
+
+	inline emulator_t::address_type ldr_initialize_thunk_address = 0;
+	inline emulator_t::address_type rtl_user_thread_start_address = 0;
+
+	void initialize_system(const std::shared_ptr<emulator_t>& emulator,
+		const std::shared_ptr<image_t>& nt_image);
+
+	void create_user_process(const std::shared_ptr<emulator_t>& emulator,
 		std::string_view usermode_module_name);
 
 	context_t set_up_structures(const std::shared_ptr<emulator_t>& emulator,
@@ -50,11 +60,14 @@ namespace user
 		emulator_t::address_type ntdll_base,
 		emulator_t::size_type image_size,
 		emulator_t::size_type ntdll_size,
+		std::string_view module_name,
+		const std::shared_ptr<process_t>& process,
 		const std::vector<std::shared_ptr<image_t>>& extra_modules = {});
 
 	std::shared_ptr<thread_t> create_initial_thread(const std::shared_ptr<emulator_t>& emulator,
 		emulator_t::address_type entry_point,
 		emulator_t::address_type ldr_initialize_thunk,
 		emulator_t::address_type rtl_user_thread_start,
-		const context_t& context);
+		const context_t& context,
+		const std::shared_ptr<process_t>& process);
 }

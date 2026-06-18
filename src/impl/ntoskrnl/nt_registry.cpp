@@ -92,7 +92,7 @@ static std::string resolve_registry_path(const std::shared_ptr<emulator_t>& emul
 
 	if (root_handle)
 	{
-		const auto parent = kernel::object_manager->get_object_from_handle<registry_key_object_t>(root_handle);
+		const auto parent = kernel::active_handle_table().get_object_from_handle<registry_key_object_t>(root_handle);
 
 		if (parent)
 		{
@@ -142,7 +142,7 @@ static void create_key_handle(const std::shared_ptr<emulator_t>& emulator,
 
 	std::array<std::uint8_t, registry_key_body_size> body{};
 	const auto body_address = kernel::object_manager->create_object(0, body.data(), body.size(), key_object);
-	const auto handle_value = kernel::object_manager->create_handle(body_address, desired_access);
+	const auto handle_value = kernel::active_handle_table().create_handle(body_address, desired_access);
 
 	emulator_err_t error = emulator->write_virtual_memory(handle_out, &handle_value, sizeof(handle_value));
 	error.throw_if(std::format("{}: write handle", caller_name));
@@ -383,7 +383,7 @@ void redirect_ntoskrnl_registry_functions(const std::shared_ptr<emulator_t>& emu
 
 		THREAD_LOG("{} called (handle=0x{:X})", caller_name, key_handle);
 
-		const auto key_object = kernel::object_manager->get_object_from_handle<registry_key_object_t>(key_handle);
+		const auto key_object = kernel::active_handle_table().get_object_from_handle<registry_key_object_t>(key_handle);
 
 		if (!key_object)
 		{
@@ -440,7 +440,7 @@ void redirect_ntoskrnl_registry_functions(const std::shared_ptr<emulator_t>& emu
 		THREAD_LOG("{} called (handle=0x{:X}, value='{}', class={}, buffer=0x{:X}, length={})",
 			caller_name, key_handle, value_name_narrow, info_class, info_buffer, length);
 
-		const auto key_object = kernel::object_manager->get_object_from_handle<registry_key_object_t>(key_handle);
+		const auto key_object = kernel::active_handle_table().get_object_from_handle<registry_key_object_t>(key_handle);
 
 		if (!key_object || !key_object->key)
 		{
@@ -501,7 +501,7 @@ void redirect_ntoskrnl_registry_functions(const std::shared_ptr<emulator_t>& emu
 		THREAD_LOG("{} called (handle=0x{:X}, value='{}', type={}, data_size={})",
 			caller_name, key_handle, value_name_narrow, type, data_size);
 
-		const auto key_object = kernel::object_manager->get_object_from_handle<registry_key_object_t>(key_handle);
+		const auto key_object = kernel::active_handle_table().get_object_from_handle<registry_key_object_t>(key_handle);
 
 		if (!key_object || !key_object->key)
 		{
@@ -546,7 +546,7 @@ void redirect_ntoskrnl_registry_functions(const std::shared_ptr<emulator_t>& emu
 		auto value_name_wide = read_guest_unicode_string(*emulator, value_name_address);
 		const auto value_name_narrow = util::narrow_wstring(value_name_wide);
 
-		const auto key_object = kernel::object_manager->get_object_from_handle<registry_key_object_t>(key_handle);
+		const auto key_object = kernel::active_handle_table().get_object_from_handle<registry_key_object_t>(key_handle);
 
 		if (!key_object || !key_object->key)
 		{
@@ -592,7 +592,7 @@ void redirect_ntoskrnl_registry_functions(const std::shared_ptr<emulator_t>& emu
 		THREAD_LOG("{} called (handle=0x{:X}, index={}, class={}, length={})",
 			caller_name, key_handle, index, info_class, length);
 
-		const auto key_object = kernel::object_manager->get_object_from_handle<registry_key_object_t>(key_handle);
+		const auto key_object = kernel::active_handle_table().get_object_from_handle<registry_key_object_t>(key_handle);
 
 		if (!key_object)
 		{
@@ -671,7 +671,7 @@ void redirect_ntoskrnl_registry_functions(const std::shared_ptr<emulator_t>& emu
 		THREAD_LOG("{} called (handle=0x{:X}, index={}, class={}, length={})",
 			caller_name, key_handle, index, info_class, length);
 
-		const auto key_object = kernel::object_manager->get_object_from_handle<registry_key_object_t>(key_handle);
+		const auto key_object = kernel::active_handle_table().get_object_from_handle<registry_key_object_t>(key_handle);
 
 		if (!key_object || !key_object->key)
 		{
@@ -728,7 +728,7 @@ void redirect_ntoskrnl_registry_functions(const std::shared_ptr<emulator_t>& emu
 		THREAD_LOG("{} called (handle=0x{:X}, class={}, length={})",
 			caller_name, key_handle, info_class, length);
 
-		const auto key_object = kernel::object_manager->get_object_from_handle<registry_key_object_t>(key_handle);
+		const auto key_object = kernel::active_handle_table().get_object_from_handle<registry_key_object_t>(key_handle);
 
 		if (!key_object || !key_object->key)
 		{
@@ -899,7 +899,7 @@ void redirect_ntoskrnl_registry_functions(const std::shared_ptr<emulator_t>& emu
 			if (relative_to & rtl_registry_handle)
 			{
 				const auto handle = path_address;
-				const auto key_obj = kernel::object_manager->get_object_from_handle<registry_key_object_t>(handle);
+				const auto key_obj = kernel::active_handle_table().get_object_from_handle<registry_key_object_t>(handle);
 
 				if (!key_obj)
 				{

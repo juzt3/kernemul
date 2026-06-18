@@ -1608,7 +1608,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 			{
 				kernel::object_manager->register_object(thread->address(), std::make_shared<thread_object_t>(thread));
 
-				const auto handle_value = kernel::object_manager->create_handle(thread->address(), object_manager_t::generic_all);
+				const auto handle_value = kernel::active_handle_table().create_handle(thread->address(), object_manager_t::generic_all);
 				error = emulator->write_virtual_memory(thread_handle_out, &handle_value, sizeof(handle_value));
 				error.throw_if("PsCreateSystemThread: write handle");
 			}
@@ -3103,7 +3103,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 			else
 			{
 				// try to get the process ID from the handle
-				const auto entry = kernel::object_manager->lookup_handle(process_handle);
+				const auto entry = kernel::active_handle_table().lookup_handle(process_handle);
 				if (entry)
 				{
 					for (const auto& proc : kernel::process_entries)
@@ -3117,9 +3117,10 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 				}
 			}
 
-			if (user::usermode_peb_address)
+			const auto queried_peb = kernel::active_process()->peb_address();
+			if (queried_peb)
 			{
-				basic_info.peb_base_address = user::usermode_peb_address;
+				basic_info.peb_base_address = queried_peb;
 			}
 			else
 			{
@@ -3159,7 +3160,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 		{
 			// try to get image name from the process
 			std::string name;
-			const auto entry = kernel::object_manager->lookup_handle(process_handle);
+			const auto entry = kernel::active_handle_table().lookup_handle(process_handle);
 			if (entry)
 			{
 				for (const auto& proc : kernel::process_entries)
@@ -3571,7 +3572,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 			std::array<std::uint8_t, dir_body_size> body{};
 
 			const auto body_address = kernel::object_manager->create_object(0, body.data(), body.size());
-			const auto dir_handle = kernel::object_manager->create_handle(body_address, desired_access);
+			const auto dir_handle = kernel::active_handle_table().create_handle(body_address, desired_access);
 
 			kernel::object_manager->register_named_object(dir_name, body_address);
 
@@ -3623,7 +3624,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 			std::array<std::uint8_t, body_size> body{};
 
 			const auto body_address = kernel::object_manager->create_object(0, body.data(), body.size());
-			const auto link_handle = kernel::object_manager->create_handle(body_address, desired_access);
+			const auto link_handle = kernel::active_handle_table().create_handle(body_address, desired_access);
 
 			if (handle_out)
 			{
@@ -3972,7 +3973,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 			body[1] = static_cast<std::uint8_t>(initial_state);
 
 			const auto body_address = kernel::object_manager->create_object(0, body.data(), body.size());
-			const auto event_handle = kernel::object_manager->create_handle(body_address, desired_access);
+			const auto event_handle = kernel::active_handle_table().create_handle(body_address, desired_access);
 
 			if (handle_out)
 			{
@@ -4021,7 +4022,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 			std::array<std::uint8_t, event_body_size> body{};
 
 			const auto body_address = kernel::object_manager->create_object(0, body.data(), body.size());
-			const auto event_handle = kernel::object_manager->create_handle(body_address, desired_access);
+			const auto event_handle = kernel::active_handle_table().create_handle(body_address, desired_access);
 
 			if (handle_out)
 			{
@@ -4074,7 +4075,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 				}
 				else
 				{
-					const auto entry = kernel::object_manager->lookup_handle(
+					const auto entry = kernel::active_handle_table().lookup_handle(
 						static_cast<object_manager_t::handle_type>(source_handle));
 
 					if (entry)
@@ -4094,7 +4095,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 				if (body_address)
 				{
 					kernel::object_manager->reference_object(body_address);
-					new_handle = kernel::object_manager->create_handle(body_address, access);
+					new_handle = kernel::active_handle_table().create_handle(body_address, access);
 					THREAD_LOG("NtDuplicateObject: duplicated 0x{:X} -> 0x{:X}", source_handle, new_handle);
 				}
 				else
@@ -4108,7 +4109,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 
 			if (options & duplicate_close_source)
 			{
-				kernel::object_manager->close_handle(static_cast<object_manager_t::handle_type>(source_handle));
+				kernel::active_handle_table().close_handle(static_cast<object_manager_t::handle_type>(source_handle));
 				THREAD_LOG("NtDuplicateObject: closed source handle 0x{:X} (DUPLICATE_CLOSE_SOURCE)", source_handle);
 			}
 
@@ -4177,7 +4178,11 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 					return;
 				}
 
-				if (!user::ki_user_exception_dispatcher_address)
+				const auto raise_dispatcher = kernel::current_thread
+					? kernel::current_thread->process()->ki_user_exception_dispatcher()
+					: static_cast<emulator_t::address_type>(0);
+
+				if (!raise_dispatcher)
 				{
 					THREAD_ERR_LOG("NtRaiseException: KiUserExceptionDispatcher not resolved, terminating");
 					emulator->write_register<x86::reg::rip>(0xFFFFFFFFFFFFFFFF);
@@ -4207,7 +4212,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 				static_cast<void>(emulator->write_virtual_memory(new_sp, frame.data(), zero_size));
 
 				emulator->write_register<x86::reg::rsp>(new_sp);
-				emulator->write_register<x86::reg::rip>(user::ki_user_exception_dispatcher_address);
+				emulator->write_register<x86::reg::rip>(raise_dispatcher);
 
 				kernel::swap_to_usermode_segments(emulator);
 
@@ -4337,7 +4342,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 			std::array<std::uint8_t, body_size> body{};
 
 			const auto body_address = kernel::object_manager->create_object(0, body.data(), body.size());
-			const auto handle = kernel::object_manager->create_handle(body_address, desired_access);
+			const auto handle = kernel::active_handle_table().create_handle(body_address, desired_access);
 
 			if (handle_out)
 			{
@@ -4440,7 +4445,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 			std::array<std::uint8_t, body_size> body{};
 
 			const auto body_address = kernel::object_manager->create_object(0, body.data(), body.size());
-			const auto handle = kernel::object_manager->create_handle(body_address, desired_access);
+			const auto handle = kernel::active_handle_table().create_handle(body_address, desired_access);
 
 			if (handle_out)
 			{
@@ -4485,7 +4490,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 			std::array<std::uint8_t, body_size> body{};
 
 			const auto body_address = kernel::object_manager->create_object(0, body.data(), body.size());
-			const auto handle = kernel::object_manager->create_handle(body_address, desired_access);
+			const auto handle = kernel::active_handle_table().create_handle(body_address, desired_access);
 
 			if (handle_out)
 			{
@@ -4563,7 +4568,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 			std::array<std::uint8_t, body_size> body{};
 
 			const auto body_address = kernel::object_manager->create_object(0, body.data(), body.size());
-			const auto handle = kernel::object_manager->create_handle(body_address, desired_access);
+			const auto handle = kernel::active_handle_table().create_handle(body_address, desired_access);
 
 			if (handle_out)
 			{
@@ -4711,7 +4716,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 			constexpr std::size_t alpc_port_body_size = 0x20;
 			std::array<std::uint8_t, alpc_port_body_size> body{};
 			const auto body_address = kernel::object_manager->create_object(0, body.data(), body.size());
-			const auto port_handle = kernel::object_manager->create_handle(body_address, 0x1F0001);
+			const auto port_handle = kernel::active_handle_table().create_handle(body_address, 0x1F0001);
 
 			if (port_handle_out)
 			{

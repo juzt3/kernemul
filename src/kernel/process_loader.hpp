@@ -8,6 +8,8 @@
 #include <memory>
 #include <string>
 
+class handle_table_t;
+
 class process_t
 {
 public:
@@ -51,11 +53,44 @@ public:
 		return image_name_;
 	}
 
+	void set_handle_table(std::shared_ptr<handle_table_t> table)
+	{
+		handle_table_ = std::move(table);
+	}
+
+	[[nodiscard]] const std::shared_ptr<handle_table_t>& handle_table() const
+	{
+		return handle_table_;
+	}
+
+	void set_peb_address(const address_type addr)
+	{
+		peb_address_ = addr;
+	}
+
+	[[nodiscard]] address_type peb_address() const
+	{
+		return peb_address_;
+	}
+
+	void set_ki_user_exception_dispatcher(const address_type addr)
+	{
+		ki_user_exception_dispatcher_ = addr;
+	}
+
+	[[nodiscard]] address_type ki_user_exception_dispatcher() const
+	{
+		return ki_user_exception_dispatcher_;
+	}
+
 protected:
 	id_type id_;
 	address_type section_base_address_;
 	emulator_object_t<_EPROCESS> object_;
 	std::string image_name_;
+	std::shared_ptr<handle_table_t> handle_table_;
+	address_type peb_address_ = 0;
+	address_type ki_user_exception_dispatcher_ = 0;
 };
 
 namespace kernel
