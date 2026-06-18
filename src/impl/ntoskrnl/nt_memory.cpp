@@ -1040,9 +1040,27 @@ void redirect_ntoskrnl_memory_functions(const std::shared_ptr<emulator_t>& emula
 			}
 		}
 
-		constexpr std::uint32_t status_object_name_not_found = 0xC0000034;
+		const auto existing = kernel::object_manager->lookup_named_object(section_name);
 
-		write_nt_status(emulator, status_object_name_not_found);
+		if (existing)
+		{
+			const auto handle = kernel::object_manager->create_handle(*existing, desired_access);
+
+			if (section_handle_out)
+			{
+				emulator_err_t error = emulator->write_virtual_memory(
+					section_handle_out, &handle, sizeof(handle));
+				error.throw_if("NtOpenSection: write handle");
+			}
+
+			THREAD_LOG("NtOpenSection: opened handle 0x{:X} for section '{}' at 0x{:X}",
+				handle, section_name, *existing);
+			write_nt_success(emulator);
+			return;
+		}
+
+		THREAD_LOG("NtOpenSection: section '{}' not found", section_name);
+		write_nt_status(emulator, 0xC0000034);
 	};
 
 	redirect_function(open_section_handler, mapped_image, "NtOpenSection");
@@ -1224,8 +1242,48 @@ void redirect_ntoskrnl_memory_functions(const std::shared_ptr<emulator_t>& emula
 
 			if (copy_size > 0)
 			{
-				error = emulator->write_virtual_memory(mapping_address, data.data() + offset, copy_size);
-				error.throw_if("NtMapViewOfSection: write file data");
+				if (section->is_image && mapping_address != section->preferred_base && copy_size >= sizeof(portable_executable::dos_header_t))
+				{
+					std::vector<std::uint8_t> relocated_data(data.data() + offset, data.data() + offset + copy_size);
+
+					auto* pe = reinterpret_cast<portable_executable::image_t*>(relocated_data.data());
+
+					if (pe->dos_header()->valid())
+					{
+						const auto delta = static_cast<std::int64_t>(mapping_address) -
+							static_cast<std::int64_t>(section->preferred_base);
+
+						std::size_t reloc_count = 0;
+
+						for (const auto [descriptor, virtual_address] : pe->relocations())
+						{
+							if (descriptor.type == portable_executable::relocation_type_t::dir64)
+							{
+								const auto patch_rva = virtual_address + descriptor.offset;
+
+								if (patch_rva + sizeof(std::uint64_t) <= relocated_data.size())
+								{
+									auto* patch = reinterpret_cast<std::uint64_t*>(relocated_data.data() + patch_rva);
+									*patch += delta;
+									++reloc_count;
+								}
+							}
+						}
+
+						pe->nt_headers()->optional_header.image_base = mapping_address;
+
+						THREAD_LOG("NtMapViewOfSection: applied {} base relocations (delta=0x{:X}), patched ImageBase to 0x{:X}",
+							reloc_count, static_cast<std::uint64_t>(delta), mapping_address);
+					}
+
+					error = emulator->write_virtual_memory(mapping_address, relocated_data.data(), relocated_data.size());
+					error.throw_if("NtMapViewOfSection: write relocated image data");
+				}
+				else
+				{
+					error = emulator->write_virtual_memory(mapping_address, data.data() + offset, copy_size);
+					error.throw_if("NtMapViewOfSection: write file data");
+				}
 			}
 
 			if (base_address_ptr)

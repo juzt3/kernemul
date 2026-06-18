@@ -42,7 +42,9 @@ bool portable_executable::file_t::load()
 
 	this->m_buffer.resize(raw_image->nt_headers()->optional_header.size_of_image, 0);
 
-	std::memcpy(this->m_buffer.data(), raw_buffer.data(), 0x1000);
+	const std::size_t headers_size = std::min(static_cast<std::size_t>(0x1000), raw_buffer.size());
+
+	std::memcpy(this->m_buffer.data(), raw_buffer.data(), headers_size);
 
 	for (const auto& section : raw_image->sections())
 	{
