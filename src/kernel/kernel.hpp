@@ -24,6 +24,7 @@ namespace kernel
 	constexpr std::uint32_t processor_count = 4;
 
 	using function_implementation_t = std::function<void(bool& skip_return)>;
+	using handle_t = std::uint64_t;
 
 	inline emulator_object_t<_LIST_ENTRY> ps_loaded_module_list;
 	inline std::vector<std::shared_ptr<image_t>> module_entries;
