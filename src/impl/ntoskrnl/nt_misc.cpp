@@ -3530,7 +3530,17 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 		[emulator]
 		{
 			THREAD_LOG("NtYieldExecution called");
-			write_nt_status(emulator, 0x40000024); // STATUS_NO_YIELD_PERFORMED
+
+			if (!kernel::pending_threads.empty())
+			{
+				kernel::pending_thread_switch = true;
+				emulator->stop().throw_if("yield execution");
+				write_nt_success(emulator);
+			}
+			else
+			{
+				write_nt_status(emulator, 0x40000024); // STATUS_NO_YIELD_PERFORMED
+			}
 		},
 		mapped_image,
 		"NtYieldExecution"
@@ -4691,6 +4701,55 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 		"NtQueryWnfStateNameInformation"
 	);
 
+	// NtAlpcCreatePort(PortHandle*, ObjectAttributes, PortAttributes)
+	redirect_function(
+		[emulator]
+		{
+			const auto handle_out = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+			const auto obj_attr_addr = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+
+			std::string port_name;
+			if (obj_attr_addr)
+			{
+				const auto obj_attr = emulator_object_t<OBJECT_ATTRIBUTES>::view_at(emulator, obj_attr_addr).read();
+				const auto name_addr = reinterpret_cast<emulator_t::address_type>(obj_attr.ObjectName);
+				if (name_addr)
+				{
+					const auto us = emulator_object_t<UNICODE_STRING>::view_at(emulator, name_addr).read();
+					const auto buf = reinterpret_cast<emulator_t::address_type>(us.Buffer);
+					if (buf && us.Length)
+					{
+						port_name = util::narrow_wstring(kernel::read_guest_wstring(*emulator, buf));
+					}
+				}
+			}
+
+			THREAD_LOG("NtAlpcCreatePort called (handle_out=0x{:X}, name='{}')", handle_out, port_name);
+
+			auto port = std::make_shared<alpc_port_object_t>(port_name, true);
+
+			constexpr std::size_t alpc_port_body_size = 0x20;
+			std::array<std::uint8_t, alpc_port_body_size> body{};
+			const auto body_address = kernel::object_manager->create_object(0, body.data(), body.size(), port);
+			const auto port_handle = kernel::active_handle_table().create_handle(body_address, 0x1F0001);
+
+			if (!port_name.empty())
+			{
+				kernel::object_manager->register_named_object(port_name, body_address);
+			}
+
+			if (handle_out)
+			{
+				static_cast<void>(emulator->write_virtual_memory(handle_out, &port_handle, sizeof(port_handle)));
+			}
+
+			THREAD_LOG("NtAlpcCreatePort: created port handle 0x{:X} (name='{}')", port_handle, port_name);
+			write_nt_success(emulator);
+		},
+		mapped_image,
+		"NtAlpcCreatePort"
+	);
+
 	// NtAlpcConnectPort(PortHandle*, PortName, ObjectAttributes, PortAttributes, Flags, RequiredServerSid, ConnectionMessage, BufferLength, OutMessageAttributes, InMessageAttributes, Timeout)
 	redirect_function(
 		[emulator]
@@ -4698,24 +4757,51 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 			const auto port_handle_out = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
 			const auto port_name_addr = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
 
-			std::string port_name;
+			const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
+			emulator_t::address_type conn_msg_addr = 0;
+			emulator_t::address_type buf_len_ptr = 0;
+			static_cast<void>(emulator->read_virtual_memory(rsp + 0x38, &conn_msg_addr, sizeof(conn_msg_addr)));
+			static_cast<void>(emulator->read_virtual_memory(rsp + 0x40, &buf_len_ptr, sizeof(buf_len_ptr)));
 
+			std::string port_name;
 			if (port_name_addr)
 			{
 				const auto us = emulator_object_t<UNICODE_STRING>::view_at(emulator, port_name_addr).read();
 				const auto buffer_address = reinterpret_cast<emulator_t::address_type>(us.Buffer);
-
 				if (buffer_address && us.Length)
 				{
 					port_name = util::narrow_wstring(kernel::read_guest_wstring(*emulator, buffer_address));
 				}
 			}
 
-			THREAD_LOG("NtAlpcConnectPort called (handle_out=0x{:X}, port='{}')", port_handle_out, port_name);
+			THREAD_LOG("NtAlpcConnectPort called (handle_out=0x{:X}, port='{}', msg=0x{:X})", port_handle_out, port_name, conn_msg_addr);
+
+			// look up the server port by name
+			std::shared_ptr<alpc_port_object_t> server_port;
+			if (!port_name.empty())
+			{
+				const auto server_body = kernel::object_manager->lookup_named_object(port_name);
+				if (server_body)
+				{
+					server_port = kernel::object_manager->get_object<alpc_port_object_t>(*server_body);
+				}
+			}
+
+			if (!server_port)
+			{
+				constexpr std::uint32_t status_object_name_not_found = 0xC0000034;
+				THREAD_LOG("NtAlpcConnectPort: port '{}' not found", port_name);
+				write_nt_status(emulator, status_object_name_not_found);
+				return;
+			}
+
+			// create client port
+			auto client_port = std::make_shared<alpc_port_object_t>(port_name, false);
+			client_port->peer_port = server_port;
 
 			constexpr std::size_t alpc_port_body_size = 0x20;
 			std::array<std::uint8_t, alpc_port_body_size> body{};
-			const auto body_address = kernel::object_manager->create_object(0, body.data(), body.size());
+			const auto body_address = kernel::object_manager->create_object(0, body.data(), body.size(), client_port);
 			const auto port_handle = kernel::active_handle_table().create_handle(body_address, 0x1F0001);
 
 			if (port_handle_out)
@@ -4723,7 +4809,62 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 				static_cast<void>(emulator->write_virtual_memory(port_handle_out, &port_handle, sizeof(port_handle)));
 			}
 
-			THREAD_LOG("NtAlpcConnectPort: created dummy handle 0x{:X}", port_handle);
+			// if there's a connection message, queue it to the server
+			if (server_port && conn_msg_addr)
+			{
+				// PORT_MESSAGE: first 4 bytes = {DataLength, TotalLength}
+				struct port_message_header_t
+				{
+					std::int16_t data_length;
+					std::int16_t total_length;
+				};
+
+				port_message_header_t hdr{};
+				static_cast<void>(emulator->read_virtual_memory(conn_msg_addr, &hdr, sizeof(hdr)));
+
+				const auto msg_size = static_cast<std::size_t>(hdr.total_length > 0 ? hdr.total_length : sizeof(port_message_header_t));
+				std::vector<std::uint8_t> msg_data(msg_size);
+				static_cast<void>(emulator->read_virtual_memory(conn_msg_addr, msg_data.data(), msg_size));
+
+				// fill in ClientId with sender's process/thread IDs
+				if (msg_size >= 0x18 && kernel::current_thread)
+				{
+					const auto pid = kernel::current_thread->process()->id();
+					const auto tid = kernel::current_thread->id();
+					std::memcpy(msg_data.data() + 0x08, &pid, sizeof(pid));
+					std::memcpy(msg_data.data() + 0x10, &tid, sizeof(tid));
+				}
+
+				// check if server has a pending receive
+				if (server_port->pending_receive)
+				{
+					auto& recv = *server_port->pending_receive;
+					const auto copy_size = std::min(msg_size, static_cast<std::size_t>(recv.buffer_length));
+					static_cast<void>(emulator->write_virtual_memory(recv.receive_buffer, msg_data.data(), copy_size));
+
+					if (recv.buffer_length_ptr)
+					{
+						static_cast<void>(emulator->write_virtual_memory(recv.buffer_length_ptr, &copy_size, sizeof(copy_size)));
+					}
+
+					THREAD_LOG("NtAlpcConnectPort: delivered message ({} bytes) to waiting server thread", copy_size);
+
+					// wake the server thread
+					if (recv.waiting_thread)
+					{
+						recv.waiting_thread->sleep_for(std::chrono::milliseconds(0));
+					}
+
+					server_port->pending_receive.reset();
+				}
+				else
+				{
+					server_port->message_queue.push_back(alpc_port_object_t::queued_message_t{ std::move(msg_data) });
+					THREAD_LOG("NtAlpcConnectPort: queued message ({} bytes) to server port", msg_size);
+				}
+			}
+
+			THREAD_LOG("NtAlpcConnectPort: created client handle 0x{:X}", port_handle);
 			write_nt_success(emulator);
 		},
 		mapped_image,
@@ -4732,12 +4873,135 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 
 	// NtAlpcSendWaitReceivePort(PortHandle, Flags, SendMessage, SendMessageAttributes, ReceiveMessage, BufferLength, ReceiveMessageAttributes, Timeout)
 	redirect_function(
-		[emulator]
+		[emulator](bool& skip_return)
 		{
-			const auto port_handle = emulator->read_register<x86::reg::rcx, std::uint64_t>();
+			const auto port_handle_val = emulator->read_register<x86::reg::rcx, std::uint64_t>();
+			const auto flags = emulator->read_register<x86::reg::rdx, std::uint32_t>();
+			const auto send_msg_addr = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
 
-			THREAD_LOG("NtAlpcSendWaitReceivePort called (handle=0x{:X}, stub)", port_handle);
+			const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
+			emulator_t::address_type recv_msg_addr = 0;
+			emulator_t::address_type buf_len_ptr = 0;
+			emulator_t::address_type timeout_addr = 0;
+			static_cast<void>(emulator->read_virtual_memory(rsp + 0x28, &recv_msg_addr, sizeof(recv_msg_addr)));
+			static_cast<void>(emulator->read_virtual_memory(rsp + 0x30, &buf_len_ptr, sizeof(buf_len_ptr)));
+			static_cast<void>(emulator->read_virtual_memory(rsp + 0x40, &timeout_addr, sizeof(timeout_addr)));
+
+			THREAD_LOG("NtAlpcSendWaitReceivePort called (handle=0x{:X}, flags=0x{:X}, send=0x{:X}, recv=0x{:X})",
+				port_handle_val, flags, send_msg_addr, recv_msg_addr);
+
+			const auto port = kernel::active_handle_table().get_object_from_handle<alpc_port_object_t>(port_handle_val);
+			if (!port)
+			{
+				THREAD_LOG("NtAlpcSendWaitReceivePort: invalid port handle");
+				write_nt_success(emulator);
+				skip_return = false;
+				return;
+			}
+
+			// handle send
+			if (send_msg_addr && port->peer_port)
+			{
+				struct port_message_header_t
+				{
+					std::int16_t data_length;
+					std::int16_t total_length;
+				};
+
+				port_message_header_t hdr{};
+				static_cast<void>(emulator->read_virtual_memory(send_msg_addr, &hdr, sizeof(hdr)));
+
+				const auto msg_size = static_cast<std::size_t>(hdr.total_length > 0 ? hdr.total_length : sizeof(port_message_header_t));
+				std::vector<std::uint8_t> msg_data(msg_size);
+				static_cast<void>(emulator->read_virtual_memory(send_msg_addr, msg_data.data(), msg_size));
+
+				if (msg_size >= 0x18 && kernel::current_thread)
+				{
+					const auto pid = kernel::current_thread->process()->id();
+					const auto tid = kernel::current_thread->id();
+					std::memcpy(msg_data.data() + 0x08, &pid, sizeof(pid));
+					std::memcpy(msg_data.data() + 0x10, &tid, sizeof(tid));
+				}
+
+				auto& peer = port->peer_port;
+				if (peer->pending_receive)
+				{
+					auto& recv = *peer->pending_receive;
+					const auto copy_size = std::min(msg_size, static_cast<std::size_t>(recv.buffer_length));
+					static_cast<void>(emulator->write_virtual_memory(recv.receive_buffer, msg_data.data(), copy_size));
+
+					if (recv.buffer_length_ptr)
+					{
+						static_cast<void>(emulator->write_virtual_memory(recv.buffer_length_ptr, &copy_size, sizeof(copy_size)));
+					}
+
+					if (recv.waiting_thread)
+					{
+						recv.waiting_thread->sleep_for(std::chrono::milliseconds(0));
+					}
+					peer->pending_receive.reset();
+
+					THREAD_LOG("NtAlpcSendWaitReceivePort: delivered send message ({} bytes) to waiting peer", copy_size);
+				}
+				else
+				{
+					peer->message_queue.push_back(alpc_port_object_t::queued_message_t{ std::move(msg_data) });
+					THREAD_LOG("NtAlpcSendWaitReceivePort: queued send message ({} bytes)", msg_size);
+				}
+			}
+
+			// handle receive
+			if (recv_msg_addr)
+			{
+				std::uint64_t buf_len = 0;
+				if (buf_len_ptr)
+				{
+					static_cast<void>(emulator->read_virtual_memory(buf_len_ptr, &buf_len, sizeof(buf_len)));
+				}
+
+				if (!port->message_queue.empty())
+				{
+					auto& msg = port->message_queue.front();
+					const auto copy_size = std::min(msg.data.size(), static_cast<std::size_t>(buf_len > 0 ? buf_len : msg.data.size()));
+					static_cast<void>(emulator->write_virtual_memory(recv_msg_addr, msg.data.data(), copy_size));
+
+					if (buf_len_ptr)
+					{
+						static_cast<void>(emulator->write_virtual_memory(buf_len_ptr, &copy_size, sizeof(copy_size)));
+					}
+
+					port->message_queue.erase(port->message_queue.begin());
+
+					THREAD_LOG("NtAlpcSendWaitReceivePort: dequeued message ({} bytes)", copy_size);
+					write_nt_success(emulator);
+					skip_return = false;
+					return;
+				}
+
+				// queue is empty - block until a message arrives
+				THREAD_LOG("NtAlpcSendWaitReceivePort: no messages, blocking thread");
+
+				port->pending_receive = alpc_port_object_t::pending_receive_t
+				{
+					.waiting_thread = kernel::current_thread.get(),
+					.receive_buffer = recv_msg_addr,
+					.buffer_length_ptr = buf_len_ptr,
+					.buffer_length = buf_len > 0 ? buf_len : 0x1000
+				};
+
+				write_nt_success(emulator);
+				kernel::current_thread->sleep_for(std::chrono::milliseconds(30000));
+
+				// force immediate context switch so the thread actually blocks
+				kernel::pending_thread_switch = true;
+				emulator->stop().throw_if("alpc block thread");
+
+				skip_return = false;
+				return;
+			}
+
 			write_nt_success(emulator);
+			skip_return = false;
 		},
 		mapped_image,
 		"NtAlpcSendWaitReceivePort"

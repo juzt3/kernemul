@@ -4,7 +4,9 @@
 
 #include <memory>
 #include <optional>
+#include <string>
 #include <unordered_map>
+#include <vector>
 
 class file_t;
 class thread_t;
@@ -106,6 +108,32 @@ struct semaphore_object_t final : object_t
 
 struct keyed_event_object_t final : object_t
 {
+};
+
+struct alpc_port_object_t final : object_t
+{
+	std::string port_name;
+	bool is_server_port = false;
+
+	struct queued_message_t
+	{
+		std::vector<std::uint8_t> data;
+	};
+	std::vector<queued_message_t> message_queue;
+
+	struct pending_receive_t
+	{
+		thread_t* waiting_thread = nullptr;
+		emulator_t::address_type receive_buffer = 0;
+		emulator_t::address_type buffer_length_ptr = 0;
+		std::uint64_t buffer_length = 0;
+	};
+	std::optional<pending_receive_t> pending_receive;
+
+	std::shared_ptr<alpc_port_object_t> peer_port;
+
+	explicit alpc_port_object_t(std::string name, const bool server)
+		: port_name(std::move(name)), is_server_port(server) { }
 };
 
 struct object_entry_t

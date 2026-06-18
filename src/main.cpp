@@ -628,7 +628,7 @@ std::int32_t main()
 						return true;
 					}
 
-					if (user::ki_user_exception_dispatcher_address)
+					if (kernel::current_thread->process()->ki_user_exception_dispatcher())
 					{
 						user::dispatch_access_violation(emulator, faulting_address, is_write);
 						return true;
