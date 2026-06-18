@@ -31,69 +31,49 @@ void initialize_ntoskrnl_debugger_state(const std::shared_ptr<emulator_t>& emula
 	}
 }
 
+static void handle_kd_change_option(const std::shared_ptr<emulator_t>& emulator)
+{
+	constexpr std::uint32_t status_debugger_inactive = 0xC0000354;
+
+	THREAD_LOG("KdChangeOption called, returning STATUS_DEBUGGER_INACTIVE");
+
+	write_nt_status(emulator, status_debugger_inactive);
+}
+
+static void handle_system_debug_control(const std::shared_ptr<emulator_t>& emulator)
+{
+	constexpr std::uint32_t status_debugger_inactive = 0xC0000354;
+
+	THREAD_LOG("SystemDebugControl called, returning STATUS_DEBUGGER_INACTIVE");
+
+	write_nt_status(emulator, status_debugger_inactive);
+}
+
+static void handle_kd_system_debug_control(const std::shared_ptr<emulator_t>& emulator)
+{
+	constexpr std::uint32_t status_access_denied = 0xC0000022;
+
+	THREAD_LOG("KdSystemDebugControl called, returning STATUS_ACCESS_DENIED");
+
+	write_nt_status(emulator, status_access_denied);
+}
+
+static void handle_dbg_set_debug_print_callback(const std::shared_ptr<emulator_t>& emulator)
+{
+	THREAD_LOG("DbgSetDebugPrintCallback called, returning STATUS_SUCCESS");
+
+	write_nt_success(emulator);
+}
+
 void redirect_ntoskrnl_debugger_functions(const std::shared_ptr<emulator_t>& emulator,
 	const image_t& mapped_image)
 {
-	redirect_function(
-		[emulator]
-		{
-			constexpr std::uint32_t status_debugger_inactive = 0xC0000354;
+	redirect_handler<handle_kd_change_option>(emulator, mapped_image, "KdChangeOption");
 
-			THREAD_LOG("KdChangeOption called, returning STATUS_DEBUGGER_INACTIVE");
+	redirect_handler<handle_system_debug_control>(emulator, mapped_image, "ZwSystemDebugControl");
+	redirect_handler<handle_system_debug_control>(emulator, mapped_image, "NtSystemDebugControl");
 
-			write_nt_status(emulator, status_debugger_inactive);
-		},
-		mapped_image,
-		"KdChangeOption"
-	);
+	redirect_handler<handle_kd_system_debug_control>(emulator, mapped_image, "KdSystemDebugControl");
 
-	redirect_function(
-		[emulator]
-		{
-			constexpr std::uint32_t status_debugger_inactive = 0xC0000354;
-
-			THREAD_LOG("ZwSystemDebugControl called, returning STATUS_DEBUGGER_INACTIVE");
-
-			write_nt_status(emulator, status_debugger_inactive);
-		},
-		mapped_image,
-		"ZwSystemDebugControl"
-	);
-
-	redirect_function(
-		[emulator]
-		{
-			constexpr std::uint32_t status_debugger_inactive = 0xC0000354;
-
-			THREAD_LOG("NtSystemDebugControl called, returning STATUS_DEBUGGER_INACTIVE");
-
-			write_nt_status(emulator, status_debugger_inactive);
-		},
-		mapped_image,
-		"NtSystemDebugControl"
-	);
-
-	redirect_function(
-		[emulator]
-		{
-			constexpr std::uint32_t status_access_denied = 0xC0000022;
-
-			THREAD_LOG("KdSystemDebugControl called, returning STATUS_ACCESS_DENIED");
-
-			write_nt_status(emulator, status_access_denied);
-		},
-		mapped_image,
-		"KdSystemDebugControl"
-	);
-
-	redirect_function(
-		[emulator]
-		{
-			THREAD_LOG("DbgSetDebugPrintCallback called, returning STATUS_SUCCESS");
-
-			write_nt_success(emulator);
-		},
-		mapped_image,
-		"DbgSetDebugPrintCallback"
-	);
+	redirect_handler<handle_dbg_set_debug_print_callback>(emulator, mapped_image, "DbgSetDebugPrintCallback");
 }

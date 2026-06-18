@@ -138,90 +138,73 @@ static _TIME_FIELDS time_to_time_fields(const std::int64_t time)
 	return fields;
 }
 
+static void handle_system_time_to_local_time(const std::shared_ptr<emulator_t>& emulator,
+	emulator_object_t<LARGE_INTEGER> system_time_object,
+	emulator_object_t<LARGE_INTEGER> local_time_object)
+{
+	const auto system_time = system_time_object.read();
+
+	constexpr std::int64_t timezone_bias = 0;
+
+	LARGE_INTEGER local_time;
+
+	local_time.QuadPart = system_time.QuadPart - timezone_bias;
+
+	local_time_object.write(local_time);
+
+	THREAD_LOG("ExSystemTimeToLocalTime called (system_time=0x{:X})", system_time.QuadPart);
+}
+
+static void handle_time_to_time_fields(const std::shared_ptr<emulator_t>& emulator,
+	emulator_object_t<LARGE_INTEGER> time_object,
+	emulator_object_t<_TIME_FIELDS> time_fields_object)
+{
+	const auto time = time_object.read();
+	const auto fields = time_to_time_fields(time.QuadPart);
+
+	time_fields_object.write(fields);
+
+	THREAD_LOG("RtlTimeToTimeFields called (time=0x{:X}, {}-{:02}-{:02} {:02}:{:02}:{:02}.{:03})",
+		time.QuadPart, fields.Year, fields.Month, fields.Day,
+		fields.Hour, fields.Minute, fields.Second, fields.Milliseconds);
+}
+
+static void handle_query_performance_counter(const std::shared_ptr<emulator_t>& emulator,
+	emulator_t::address_type frequency_address)
+{
+	static std::uint64_t counter = 0;
+	constexpr std::uint64_t frequency = 10000000;
+
+	counter += 100000;
+
+	if (frequency_address)
+	{
+		static_cast<void>(emulator->write_virtual_memory(
+			frequency_address, &frequency, sizeof(frequency)));
+	}
+
+	THREAD_LOG("KeQueryPerformanceCounter called (counter=0x{:X})", counter);
+
+	write_return_value(emulator, counter);
+}
+
+static void handle_query_time_increment(const std::shared_ptr<emulator_t>& emulator)
+{
+	constexpr std::uint32_t time_increment = 156250;
+
+	THREAD_LOG("KeQueryTimeIncrement called -> {}", time_increment);
+
+	write_return_value(emulator, static_cast<std::uint64_t>(time_increment));
+}
+
 void redirect_ntoskrnl_time_functions(const std::shared_ptr<emulator_t>& emulator,
 	const image_t& mapped_image)
 {
-	redirect_function(
-		[emulator]
-		{
-			const auto rcx = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
-			const auto rdx = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+	redirect_handler<handle_system_time_to_local_time>(emulator, mapped_image, "ExSystemTimeToLocalTime");
 
-			auto system_time_object = emulator_object_t<LARGE_INTEGER>::view_at(emulator, rcx);
-			auto local_time_object = emulator_object_t<LARGE_INTEGER>::view_at(emulator, rdx);
+	redirect_handler<handle_time_to_time_fields>(emulator, mapped_image, "RtlTimeToTimeFields");
 
-			const auto system_time = system_time_object.read();
+	redirect_handler<handle_query_performance_counter>(emulator, mapped_image, "KeQueryPerformanceCounter");
 
-			constexpr std::int64_t timezone_bias = 0;
-
-			LARGE_INTEGER local_time;
-
-			local_time.QuadPart = system_time.QuadPart - timezone_bias;
-
-			local_time_object.write(local_time);
-
-			THREAD_LOG("ExSystemTimeToLocalTime called (system_time=0x{:X})", system_time.QuadPart);
-		},
-		mapped_image,
-		"ExSystemTimeToLocalTime"
-	);
-
-	redirect_function(
-		[emulator]
-		{
-			const auto rcx = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
-			const auto rdx = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
-
-			const auto time_object = emulator_object_t<LARGE_INTEGER>::view_at(emulator, rcx);
-			auto time_fields_object = emulator_object_t<_TIME_FIELDS>::view_at(emulator, rdx);
-
-			const auto time = time_object.read();
-			const auto fields = time_to_time_fields(time.QuadPart);
-
-			time_fields_object.write(fields);
-
-			THREAD_LOG("RtlTimeToTimeFields called (time=0x{:X}, {}-{:02}-{:02} {:02}:{:02}:{:02}.{:03})",
-				time.QuadPart, fields.Year, fields.Month, fields.Day,
-				fields.Hour, fields.Minute, fields.Second, fields.Milliseconds);
-		},
-		mapped_image,
-		"RtlTimeToTimeFields"
-	);
-
-	redirect_function(
-		[emulator]
-		{
-			const auto frequency_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
-
-			static std::uint64_t counter = 0;
-			constexpr std::uint64_t frequency = 10000000;
-
-			counter += 100000;
-
-			if (frequency_address)
-			{
-				static_cast<void>(emulator->write_virtual_memory(
-					frequency_address, &frequency, sizeof(frequency)));
-			}
-
-			THREAD_LOG("KeQueryPerformanceCounter called (counter=0x{:X})", counter);
-
-			write_return_value(emulator, counter);
-		},
-		mapped_image,
-		"KeQueryPerformanceCounter"
-	);
-
-	redirect_function(
-		[emulator]
-		{
-			constexpr std::uint32_t time_increment = 156250;
-
-			THREAD_LOG("KeQueryTimeIncrement called -> {}", time_increment);
-
-			write_return_value(emulator, static_cast<std::uint64_t>(time_increment));
-		},
-		mapped_image,
-		"KeQueryTimeIncrement"
-	);
+	redirect_handler<handle_query_time_increment>(emulator, mapped_image, "KeQueryTimeIncrement");
 }

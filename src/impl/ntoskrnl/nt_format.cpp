@@ -537,403 +537,360 @@ std::string guest_vsprintf(const emulator_t& emulator, const std::string_view fo
 	return result;
 }
 
-void redirect_ntoskrnl_format_functions(const std::shared_ptr<emulator_t>& emulator,
-	const image_t& mapped_image)
+// DbgPrint(PCSTR Format, ...)
+static void handle_dbg_print(const std::shared_ptr<emulator_t>& emulator,
+	emulator_t::address_type format_address, std::uint64_t arg1,
+	std::uint64_t arg2, std::uint64_t arg3)
 {
-	redirect_function(
-		[emulator]
-		{
-			const auto rcx = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
-			const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
-			const auto rdx = emulator->read_register<x86::reg::rdx, std::uint64_t>();
-			const auto r8 = emulator->read_register<x86::reg::r8, std::uint64_t>();
-			const auto r9 = emulator->read_register<x86::reg::r9, std::uint64_t>();
+	const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
 
-			// spill rdx/r8/r9 into shadow space to form contiguous va_list at rsp+0x10
-			const emulator_t::address_type va_list_address = rsp + 0x10;
+	// spill rdx/r8/r9 into shadow space to form contiguous va_list at rsp+0x10
+	const emulator_t::address_type va_list_address = rsp + 0x10;
 
-			emulator->write_virtual_memory(rsp + 0x10, &rdx, sizeof(rdx)).throw_if("write memory");
-			emulator->write_virtual_memory(rsp + 0x18, &r8, sizeof(r8)).throw_if("write memory");
-			emulator->write_virtual_memory(rsp + 0x20, &r9, sizeof(r9)).throw_if("write memory");
+	emulator->write_virtual_memory(rsp + 0x10, &arg1, sizeof(arg1)).throw_if("write memory");
+	emulator->write_virtual_memory(rsp + 0x18, &arg2, sizeof(arg2)).throw_if("write memory");
+	emulator->write_virtual_memory(rsp + 0x20, &arg3, sizeof(arg3)).throw_if("write memory");
 
-			const auto format_string = kernel::read_guest_string(*emulator, rcx);
-			const auto formatted = guest_vsprintf(*emulator, format_string, va_list_address);
+	const auto format_string = kernel::read_guest_string(*emulator, format_address);
+	const auto formatted = guest_vsprintf(*emulator, format_string, va_list_address);
 
-			THREAD_LOG("DbgPrint: {}", formatted);
+	THREAD_LOG("DbgPrint: {}", formatted);
 
-			write_nt_success(emulator);
-		},
-		mapped_image,
-		"DbgPrint"
-	);
+	write_nt_success(emulator);
+}
 
-	redirect_function(
-		[emulator]
-		{
-			const auto component_id = emulator->read_register<x86::reg::rcx, std::uint32_t>();
-			const auto level = emulator->read_register<x86::reg::rdx, std::uint32_t>();
-			const auto format_address = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
-			const auto r9 = emulator->read_register<x86::reg::r9, std::uint64_t>();
-			const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
+// DbgPrintEx(ULONG ComponentId, ULONG Level, PCSTR Format, ...)
+static void handle_dbg_print_ex(const std::shared_ptr<emulator_t>& emulator,
+	std::uint32_t component_id, std::uint32_t level,
+	emulator_t::address_type format_address, std::uint64_t arg3)
+{
+	const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
 
-			const emulator_t::address_type va_list_address = rsp + 0x20;
-			emulator->write_virtual_memory(va_list_address, &r9, sizeof(r9)).throw_if("write memory");
+	const emulator_t::address_type va_list_address = rsp + 0x20;
+	emulator->write_virtual_memory(va_list_address, &arg3, sizeof(arg3)).throw_if("write memory");
 
-			const auto format_string = kernel::read_guest_string(*emulator, format_address);
-			const auto formatted = guest_vsprintf(*emulator, format_string, va_list_address);
+	const auto format_string = kernel::read_guest_string(*emulator, format_address);
+	const auto formatted = guest_vsprintf(*emulator, format_string, va_list_address);
 
-			THREAD_LOG("DbgPrintEx called (component={}, level={}) : {}", component_id, level, formatted);
+	THREAD_LOG("DbgPrintEx called (component={}, level={}) : {}", component_id, level, formatted);
 
-			write_nt_success(emulator);
-		},
-		mapped_image,
-		"DbgPrintEx"
-	);
+	write_nt_success(emulator);
+}
 
-	redirect_function(
-		[emulator]
-		{
-			const auto rcx = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
-			const auto rdx = emulator->read_register<x86::reg::rdx, std::uint64_t>();
-			const auto r8 = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
-			const auto r9 = emulator->read_register<x86::reg::r9, emulator_t::address_type>();
-
-			if (!rcx || !rdx || !r8)
-			{
-				THREAD_WARN_LOG("vswprintf_s called with invalid parameters");
-
-				write_return_value(emulator, static_cast<std::uint64_t>(-1));
-
-				return;
-			}
-
-			const auto format_string = kernel::read_guest_wstring(*emulator, r8);
-			const auto formatted = guest_vswprintf(*emulator, format_string, r9);
-
-			if (formatted.size() >= rdx)
-			{
-				constexpr wchar_t null_terminator = L'\0';
-
-				const emulator_err_t error = emulator->write_virtual_memory(
-					rcx, &null_terminator, sizeof(null_terminator));
-
-				error.throw_if("write memory");
-
-				THREAD_WARN_LOG("vswprintf_s called (result truncated, format='{}')",
-					util::narrow_wstring(format_string));
-
-				write_return_value(emulator, static_cast<std::uint64_t>(-1));
-
-				return;
-			}
-
-			write_guest_wstring_buffer(*emulator, rcx, rdx, formatted);
-
-			THREAD_LOG("vswprintf_s called (result='{}')",
-				util::narrow_wstring(formatted));
-
-			write_return_value(emulator, static_cast<std::uint64_t>(formatted.size()));
-		},
-		mapped_image,
-		"vswprintf_s"
-	);
-
-	redirect_function(
-		[emulator]
-		{
-			const auto rcx = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
-			const auto rdx = emulator->read_register<x86::reg::rdx, std::uint64_t>();
-			const auto r8 = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
-			const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
-			const auto r9 = emulator->read_register<x86::reg::r9, std::uint64_t>();
-
-			// spill r9 into its shadow space slot so va_list at rsp+0x20 is contiguous
-			const emulator_t::address_type va_list_address = rsp + 0x20;
-
-			const emulator_err_t error = emulator->write_virtual_memory(
-				va_list_address, &r9, sizeof(r9));
-
-			error.throw_if("write memory");
-
-			if (!rcx || !rdx || !r8)
-			{
-				THREAD_WARN_LOG("swprintf_s called with invalid parameters");
-
-				write_return_value(emulator, static_cast<std::uint64_t>(-1));
-
-				return;
-			}
-
-			const auto format_string = kernel::read_guest_wstring(*emulator, r8);
-			const auto formatted = guest_vswprintf(*emulator, format_string, va_list_address);
-
-			if (formatted.size() >= rdx)
-			{
-				constexpr wchar_t null_terminator = L'\0';
-
-				const emulator_err_t error = emulator->write_virtual_memory(
-					rcx, &null_terminator, sizeof(null_terminator));
-
-				error.throw_if("write memory");
-
-				THREAD_WARN_LOG("swprintf_s called (result truncated, format='{}')",
-					util::narrow_wstring(format_string));
-
-				write_return_value(emulator, static_cast<std::uint64_t>(-1));
-
-				return;
-			}
-
-			write_guest_wstring_buffer(*emulator, rcx, rdx, formatted);
-
-			THREAD_LOG("swprintf_s called (result='{}')",
-				util::narrow_wstring(formatted));
-
-			write_return_value(emulator, static_cast<std::uint64_t>(formatted.size()));
-		},
-		mapped_image,
-		"swprintf_s"
-	);
-
-	// _snwprintf(buffer, count, format, ...) - same layout as swprintf_s
-	const auto snwprintf_handler = [emulator]
+// vswprintf_s(wchar_t* buffer, size_t sizeInWords, const wchar_t* format, va_list argptr)
+static void handle_vswprintf_s(const std::shared_ptr<emulator_t>& emulator,
+	emulator_t::address_type buffer, std::uint64_t size_in_words,
+	emulator_t::address_type format_address, emulator_t::address_type va_list_address)
+{
+	if (!buffer || !size_in_words || !format_address)
 	{
-		const auto buffer_address = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
-		const auto count = emulator->read_register<x86::reg::rdx, std::uint64_t>();
-		const auto format_address = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
-		const auto r9 = emulator->read_register<x86::reg::r9, std::uint64_t>();
+		THREAD_WARN_LOG("vswprintf_s called with invalid parameters");
 
-		const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
-		const auto va_list_address = rsp + 0x20;
+		write_return_value(emulator, static_cast<std::uint64_t>(-1));
 
-		emulator_err_t error = emulator->write_virtual_memory(
-			va_list_address, &r9, sizeof(r9));
-		error.throw_if("_snwprintf: write r9");
+		return;
+	}
 
-		if (!buffer_address || !format_address)
-		{
-			write_return_value(emulator, static_cast<std::uint64_t>(-1));
-			return;
-		}
+	const auto format_string = kernel::read_guest_wstring(*emulator, format_address);
+	const auto formatted = guest_vswprintf(*emulator, format_string, va_list_address);
 
+	if (formatted.size() >= size_in_words)
+	{
+		constexpr wchar_t null_terminator = L'\0';
+
+		const emulator_err_t error = emulator->write_virtual_memory(
+			buffer, &null_terminator, sizeof(null_terminator));
+
+		error.throw_if("write memory");
+
+		THREAD_WARN_LOG("vswprintf_s called (result truncated, format='{}')",
+			util::narrow_wstring(format_string));
+
+		write_return_value(emulator, static_cast<std::uint64_t>(-1));
+
+		return;
+	}
+
+	write_guest_wstring_buffer(*emulator, buffer, size_in_words, formatted);
+
+	THREAD_LOG("vswprintf_s called (result='{}')",
+		util::narrow_wstring(formatted));
+
+	write_return_value(emulator, static_cast<std::uint64_t>(formatted.size()));
+}
+
+// swprintf_s(wchar_t* buffer, size_t sizeInWords, const wchar_t* format, ...)
+static void handle_swprintf_s(const std::shared_ptr<emulator_t>& emulator,
+	emulator_t::address_type buffer, std::uint64_t size_in_words,
+	emulator_t::address_type format_address, std::uint64_t arg3)
+{
+	const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
+
+	// spill r9 into its shadow space slot so va_list at rsp+0x20 is contiguous
+	const emulator_t::address_type va_list_address = rsp + 0x20;
+
+	const emulator_err_t spill_error = emulator->write_virtual_memory(
+		va_list_address, &arg3, sizeof(arg3));
+
+	spill_error.throw_if("write memory");
+
+	if (!buffer || !size_in_words || !format_address)
+	{
+		THREAD_WARN_LOG("swprintf_s called with invalid parameters");
+
+		write_return_value(emulator, static_cast<std::uint64_t>(-1));
+
+		return;
+	}
+
+	const auto format_string = kernel::read_guest_wstring(*emulator, format_address);
+	const auto formatted = guest_vswprintf(*emulator, format_string, va_list_address);
+
+	if (formatted.size() >= size_in_words)
+	{
+		constexpr wchar_t null_terminator = L'\0';
+
+		const emulator_err_t error = emulator->write_virtual_memory(
+			buffer, &null_terminator, sizeof(null_terminator));
+
+		error.throw_if("write memory");
+
+		THREAD_WARN_LOG("swprintf_s called (result truncated, format='{}')",
+			util::narrow_wstring(format_string));
+
+		write_return_value(emulator, static_cast<std::uint64_t>(-1));
+
+		return;
+	}
+
+	write_guest_wstring_buffer(*emulator, buffer, size_in_words, formatted);
+
+	THREAD_LOG("swprintf_s called (result='{}')",
+		util::narrow_wstring(formatted));
+
+	write_return_value(emulator, static_cast<std::uint64_t>(formatted.size()));
+}
+
+// _snwprintf(wchar_t* buffer, size_t count, const wchar_t* format, ...)
+static void handle_snwprintf(const std::shared_ptr<emulator_t>& emulator,
+	emulator_t::address_type buffer_address, std::uint64_t count,
+	emulator_t::address_type format_address, std::uint64_t arg3)
+{
+	const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
+	const auto va_list_address = rsp + 0x20;
+
+	emulator_err_t error = emulator->write_virtual_memory(
+		va_list_address, &arg3, sizeof(arg3));
+	error.throw_if("_snwprintf: write r9");
+
+	if (!buffer_address || !format_address)
+	{
+		write_return_value(emulator, static_cast<std::uint64_t>(-1));
+		return;
+	}
+
+	const auto format_string = kernel::read_guest_wstring(*emulator, format_address);
+	const auto formatted = guest_vswprintf(*emulator, format_string, va_list_address);
+
+	if (formatted.size() >= count)
+	{
+		write_guest_wstring_buffer(*emulator, buffer_address, count, formatted.substr(0, count > 0 ? count - 1 : 0));
+		THREAD_LOG("_snwprintf called (result truncated, format='{}')", util::narrow_wstring(format_string));
+		write_return_value(emulator, static_cast<std::uint64_t>(-1));
+		return;
+	}
+
+	write_guest_wstring_buffer(*emulator, buffer_address, count, formatted);
+
+	THREAD_LOG("_snwprintf called (result='{}')", util::narrow_wstring(formatted));
+
+	write_return_value(emulator, static_cast<std::uint64_t>(formatted.size()));
+}
+
+// _vsnwprintf(wchar_t* buffer, size_t count, const wchar_t* format, va_list argptr)
+static void handle_vsnwprintf(const std::shared_ptr<emulator_t>& emulator,
+	emulator_t::address_type buffer, std::uint64_t count,
+	emulator_t::address_type format_address, emulator_t::address_type va_list_address)
+{
+	if (!format_address)
+	{
+		THREAD_WARN_LOG("_vsnwprintf called with null format");
+
+		write_return_value(emulator, static_cast<std::uint64_t>(-1));
+
+		return;
+	}
+
+	if (count && !buffer)
+	{
+		THREAD_WARN_LOG("_vsnwprintf called with null dest but nonzero count");
+
+		write_return_value(emulator, static_cast<std::uint64_t>(-1));
+
+		return;
+	}
+
+	try
+	{
 		const auto format_string = kernel::read_guest_wstring(*emulator, format_address);
 		const auto formatted = guest_vswprintf(*emulator, format_string, va_list_address);
 
-		if (formatted.size() >= count)
+		if (!buffer || !count)
 		{
-			write_guest_wstring_buffer(*emulator, buffer_address, count, formatted.substr(0, count > 0 ? count - 1 : 0));
-			THREAD_LOG("_snwprintf called (result truncated, format='{}')", util::narrow_wstring(format_string));
-			write_return_value(emulator, static_cast<std::uint64_t>(-1));
+			THREAD_LOG("_vsnwprintf called with null dest (format='{}', would need {} chars)",
+				util::narrow_wstring(format_string), formatted.size());
+
+			write_return_value(emulator, static_cast<std::uint64_t>(formatted.size()));
+
 			return;
 		}
 
-		write_guest_wstring_buffer(*emulator, buffer_address, count, formatted);
+		if (formatted.size() >= count)
+		{
+			write_guest_wstring_buffer(*emulator, buffer, count + 1, formatted.substr(0, count));
 
-		THREAD_LOG("_snwprintf called (result='{}')", util::narrow_wstring(formatted));
+			THREAD_WARN_LOG("_vsnwprintf called (result truncated, format='{}')",
+				util::narrow_wstring(format_string));
+
+			write_return_value(emulator, static_cast<std::uint64_t>(-1));
+
+			return;
+		}
+
+		write_guest_wstring_buffer(*emulator, buffer, count, formatted);
+
+		THREAD_LOG("_vsnwprintf called (result='{}')",
+			util::narrow_wstring(formatted));
 
 		write_return_value(emulator, static_cast<std::uint64_t>(formatted.size()));
-	};
+	}
+	catch (const std::exception& e)
+	{
+		THREAD_WARN_LOG("_vsnwprintf failed (format_addr=0x{:X}): {}", format_address, e.what());
 
-	redirect_function(snwprintf_handler, mapped_image, "_snwprintf");
+		write_return_value(emulator, static_cast<std::uint64_t>(-1));
+	}
+}
 
-	redirect_function(
-		[emulator]
-		{
-			const auto rcx = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
-			const auto rdx = emulator->read_register<x86::reg::rdx, std::uint64_t>();
-			const auto r8 = emulator->read_register<x86::reg::r8, emulator_t::address_type>();
-			const auto r9 = emulator->read_register<x86::reg::r9, emulator_t::address_type>();
+// _vsnwprintf_s(wchar_t* buffer, size_t sizeInWords, size_t maxCount, const wchar_t* format, va_list argptr)
+static void handle_vsnwprintf_s(const std::shared_ptr<emulator_t>& emulator,
+	emulator_t::address_type dst_buf, std::uint64_t size_in_words,
+	std::uint64_t max_count, emulator_t::address_type format_address,
+	emulator_t::address_type va_list_address)
+{
+	if (!format_address)
+	{
+		THREAD_WARN_LOG("_vsnwprintf_s called with null format");
+		write_return_value(emulator, static_cast<std::uint64_t>(-1));
+		return;
+	}
 
-			if (!r8)
-			{
-				THREAD_WARN_LOG("_vsnwprintf called with null format");
+	if (!max_count && !dst_buf && !size_in_words)
+	{
+		write_return_value(emulator, 0);
+		return;
+	}
 
-				write_return_value(emulator, static_cast<std::uint64_t>(-1));
+	if (!dst_buf || !size_in_words)
+	{
+		THREAD_WARN_LOG("_vsnwprintf_s called with null dest or zero size");
+		write_return_value(emulator, static_cast<std::uint64_t>(-1));
+		return;
+	}
 
-				return;
-			}
+	const auto format_string = kernel::read_guest_wstring(*emulator, format_address);
+	const auto formatted = guest_vswprintf(*emulator, format_string, va_list_address);
 
-			if (rdx && !rcx)
-			{
-				THREAD_WARN_LOG("_vsnwprintf called with null dest but nonzero count");
+	const auto effective_size = (size_in_words > max_count) ? max_count + 1 : size_in_words;
 
-				write_return_value(emulator, static_cast<std::uint64_t>(-1));
+	if (formatted.size() >= effective_size)
+	{
+		constexpr wchar_t null_terminator = L'\0';
+		static_cast<void>(emulator->write_virtual_memory(dst_buf, &null_terminator, sizeof(null_terminator)));
 
-				return;
-			}
+		THREAD_WARN_LOG("_vsnwprintf_s called (result truncated, format='{}')",
+			util::narrow_wstring(format_string));
 
-			try
-			{
-				const auto format_string = kernel::read_guest_wstring(*emulator, r8);
-				const auto formatted = guest_vswprintf(*emulator, format_string, r9);
+		write_return_value(emulator, static_cast<std::uint64_t>(-1));
+		return;
+	}
 
-				if (!rcx || !rdx)
-				{
-					THREAD_LOG("_vsnwprintf called with null dest (format='{}', would need {} chars)",
-						util::narrow_wstring(format_string), formatted.size());
+	write_guest_wstring_buffer(*emulator, dst_buf, effective_size, formatted);
 
-					write_return_value(emulator, static_cast<std::uint64_t>(formatted.size()));
+	THREAD_LOG("_vsnwprintf_s called (result='{}')", util::narrow_wstring(formatted));
 
-					return;
-				}
+	write_return_value(emulator, static_cast<std::uint64_t>(formatted.size()));
+}
 
-				if (formatted.size() >= rdx)
-				{
-					write_guest_wstring_buffer(*emulator, rcx, rdx + 1, formatted.substr(0, rdx));
+// _vsnprintf_s(char* buffer, size_t sizeInBytes, size_t maxCount, const char* format, va_list argptr)
+static void handle_vsnprintf_s(const std::shared_ptr<emulator_t>& emulator,
+	emulator_t::address_type dst_buf, std::uint64_t size_in_bytes,
+	std::uint64_t max_count, emulator_t::address_type format_address,
+	emulator_t::address_type va_list_address)
+{
+	if (!format_address)
+	{
+		THREAD_WARN_LOG("_vsnprintf_s called with null format");
+		write_return_value(emulator, static_cast<std::uint64_t>(-1));
+		return;
+	}
 
-					THREAD_WARN_LOG("_vsnwprintf called (result truncated, format='{}')",
-						util::narrow_wstring(format_string));
+	if (!max_count && !dst_buf && !size_in_bytes)
+	{
+		write_return_value(emulator, 0);
+		return;
+	}
 
-					write_return_value(emulator, static_cast<std::uint64_t>(-1));
+	if (!dst_buf || !size_in_bytes)
+	{
+		THREAD_WARN_LOG("_vsnprintf_s called with null dest or zero size");
+		write_return_value(emulator, static_cast<std::uint64_t>(-1));
+		return;
+	}
 
-					return;
-				}
+	const auto format_string = kernel::read_guest_string(*emulator, format_address);
+	const auto formatted = guest_vsprintf(*emulator, format_string, va_list_address);
 
-				write_guest_wstring_buffer(*emulator, rcx, rdx, formatted);
+	const auto effective_size = (size_in_bytes > max_count) ? max_count + 1 : size_in_bytes;
 
-				THREAD_LOG("_vsnwprintf called (result='{}')",
-					util::narrow_wstring(formatted));
+	if (formatted.size() >= effective_size)
+	{
+		constexpr char null_terminator = '\0';
+		static_cast<void>(emulator->write_virtual_memory(dst_buf, &null_terminator, sizeof(null_terminator)));
 
-				write_return_value(emulator, static_cast<std::uint64_t>(formatted.size()));
-			}
-			catch (const std::exception& e)
-			{
-				THREAD_WARN_LOG("_vsnwprintf failed (format_addr=0x{:X}): {}", r8, e.what());
+		THREAD_WARN_LOG("_vsnprintf_s called (result truncated, format='{}')", format_string);
 
-				write_return_value(emulator, static_cast<std::uint64_t>(-1));
-			}
-		},
-		mapped_image,
-		"_vsnwprintf"
-	);
+		write_return_value(emulator, static_cast<std::uint64_t>(-1));
+		return;
+	}
 
-	redirect_function(
-		[emulator]
-		{
-			const auto dst_buf = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
-			const auto size_in_words = emulator->read_register<x86::reg::rdx, std::uint64_t>();
-			const auto max_count = emulator->read_register<x86::reg::r8, std::uint64_t>();
-			const auto format_address = emulator->read_register<x86::reg::r9, emulator_t::address_type>();
+	const std::size_t chars_to_write = formatted.size();
+	if (chars_to_write > 0)
+	{
+		const emulator_err_t error = emulator->write_virtual_memory(
+			dst_buf, formatted.data(), chars_to_write);
+		error.throw_if("write memory");
+	}
 
-			const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
+	constexpr char null_terminator = '\0';
+	const emulator_err_t error = emulator->write_virtual_memory(
+		dst_buf + chars_to_write, &null_terminator, sizeof(null_terminator));
+	error.throw_if("write memory");
 
-			emulator_t::address_type va_list_address = 0;
-			static_cast<void>(emulator->read_virtual_memory(rsp + 0x28, &va_list_address, sizeof(va_list_address)));
+	THREAD_LOG("_vsnprintf_s called (result='{}')", formatted);
 
-			if (!format_address)
-			{
-				THREAD_WARN_LOG("_vsnwprintf_s called with null format");
-				write_return_value(emulator, static_cast<std::uint64_t>(-1));
-				return;
-			}
+	write_return_value(emulator, static_cast<std::uint64_t>(formatted.size()));
+}
 
-			if (!max_count && !dst_buf && !size_in_words)
-			{
-				write_return_value(emulator, 0);
-				return;
-			}
-
-			if (!dst_buf || !size_in_words)
-			{
-				THREAD_WARN_LOG("_vsnwprintf_s called with null dest or zero size");
-				write_return_value(emulator, static_cast<std::uint64_t>(-1));
-				return;
-			}
-
-			const auto format_string = kernel::read_guest_wstring(*emulator, format_address);
-			const auto formatted = guest_vswprintf(*emulator, format_string, va_list_address);
-
-			const auto effective_size = (size_in_words > max_count) ? max_count + 1 : size_in_words;
-
-			if (formatted.size() >= effective_size)
-			{
-				constexpr wchar_t null_terminator = L'\0';
-				static_cast<void>(emulator->write_virtual_memory(dst_buf, &null_terminator, sizeof(null_terminator)));
-
-				THREAD_WARN_LOG("_vsnwprintf_s called (result truncated, format='{}')",
-					util::narrow_wstring(format_string));
-
-				write_return_value(emulator, static_cast<std::uint64_t>(-1));
-				return;
-			}
-
-			write_guest_wstring_buffer(*emulator, dst_buf, effective_size, formatted);
-
-			THREAD_LOG("_vsnwprintf_s called (result='{}')", util::narrow_wstring(formatted));
-
-			write_return_value(emulator, static_cast<std::uint64_t>(formatted.size()));
-		},
-		mapped_image,
-		"_vsnwprintf_s"
-	);
-
-	redirect_function(
-		[emulator]
-		{
-			const auto dst_buf = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
-			const auto size_in_bytes = emulator->read_register<x86::reg::rdx, std::uint64_t>();
-			const auto max_count = emulator->read_register<x86::reg::r8, std::uint64_t>();
-			const auto format_address = emulator->read_register<x86::reg::r9, emulator_t::address_type>();
-
-			const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
-
-			emulator_t::address_type va_list_address = 0;
-			static_cast<void>(emulator->read_virtual_memory(rsp + 0x28, &va_list_address, sizeof(va_list_address)));
-
-			if (!format_address)
-			{
-				THREAD_WARN_LOG("_vsnprintf_s called with null format");
-				write_return_value(emulator, static_cast<std::uint64_t>(-1));
-				return;
-			}
-
-			if (!max_count && !dst_buf && !size_in_bytes)
-			{
-				write_return_value(emulator, 0);
-				return;
-			}
-
-			if (!dst_buf || !size_in_bytes)
-			{
-				THREAD_WARN_LOG("_vsnprintf_s called with null dest or zero size");
-				write_return_value(emulator, static_cast<std::uint64_t>(-1));
-				return;
-			}
-
-			const auto format_string = kernel::read_guest_string(*emulator, format_address);
-			const auto formatted = guest_vsprintf(*emulator, format_string, va_list_address);
-
-			const auto effective_size = (size_in_bytes > max_count) ? max_count + 1 : size_in_bytes;
-
-			if (formatted.size() >= effective_size)
-			{
-				constexpr char null_terminator = '\0';
-				static_cast<void>(emulator->write_virtual_memory(dst_buf, &null_terminator, sizeof(null_terminator)));
-
-				THREAD_WARN_LOG("_vsnprintf_s called (result truncated, format='{}')", format_string);
-
-				write_return_value(emulator, static_cast<std::uint64_t>(-1));
-				return;
-			}
-
-			const std::size_t chars_to_write = formatted.size();
-			if (chars_to_write > 0)
-			{
-				const emulator_err_t error = emulator->write_virtual_memory(
-					dst_buf, formatted.data(), chars_to_write);
-				error.throw_if("write memory");
-			}
-
-			constexpr char null_terminator = '\0';
-			const emulator_err_t error = emulator->write_virtual_memory(
-				dst_buf + chars_to_write, &null_terminator, sizeof(null_terminator));
-			error.throw_if("write memory");
-
-			THREAD_LOG("_vsnprintf_s called (result='{}')", formatted);
-
-			write_return_value(emulator, static_cast<std::uint64_t>(formatted.size()));
-		},
-		mapped_image,
-		"_vsnprintf_s"
-	);
+void redirect_ntoskrnl_format_functions(const std::shared_ptr<emulator_t>& emulator,
+	const image_t& mapped_image)
+{
+	redirect_handler<handle_dbg_print>(emulator, mapped_image, "DbgPrint");
+	redirect_handler<handle_dbg_print_ex>(emulator, mapped_image, "DbgPrintEx");
+	redirect_handler<handle_vswprintf_s>(emulator, mapped_image, "vswprintf_s");
+	redirect_handler<handle_swprintf_s>(emulator, mapped_image, "swprintf_s");
+	redirect_handler<handle_snwprintf>(emulator, mapped_image, "_snwprintf");
+	redirect_handler<handle_vsnwprintf>(emulator, mapped_image, "_vsnwprintf");
+	redirect_handler<handle_vsnwprintf_s>(emulator, mapped_image, "_vsnwprintf_s");
+	redirect_handler<handle_vsnprintf_s>(emulator, mapped_image, "_vsnprintf_s");
 }
