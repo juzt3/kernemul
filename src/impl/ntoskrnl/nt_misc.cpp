@@ -13,6 +13,8 @@
 #include <thread>
 #include <atomic>
 #include <chrono>
+#include <cstring>
+#include <vector>
 
 using nt_query_information_process_fn = NTSTATUS(NTAPI*)(HANDLE, ULONG, PVOID, ULONG, PULONG);
 
@@ -4143,21 +4145,85 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 			{
 				skip_return = true;
 
-				const auto exception_record = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
-				const auto context_record = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
+				const auto exception_record_ptr = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
+				const auto context_record_ptr = emulator->read_register<x86::reg::rdx, emulator_t::address_type>();
 				const auto first_chance = emulator->read_register<x86::reg::r8, std::uint32_t>();
 
 				std::uint32_t exception_code = 0;
-				static_cast<void>(emulator->read_virtual_memory(exception_record, &exception_code, sizeof(exception_code)));
+				static_cast<void>(emulator->read_virtual_memory(exception_record_ptr, &exception_code, sizeof(exception_code)));
 
-				THREAD_ERR_LOG("NtRaiseException called (record=0x{:X}, context=0x{:X}, first_chance={}, code=0x{:X})",
-					exception_record, context_record, first_chance, exception_code);
-				THREAD_ERR_LOG("NtRaiseException: unhandled exception, terminating thread");
+				THREAD_LOG("NtRaiseException called (record=0x{:X}, context=0x{:X}, first_chance={}, code=0x{:X})",
+					exception_record_ptr, context_record_ptr, first_chance, exception_code);
+
+				const bool is_usermode = kernel::current_thread && kernel::current_thread->state().is_usermode;
+
+				if (!is_usermode)
+				{
+					emulator_t::address_type exception_address = 0;
+					static_cast<void>(emulator->read_virtual_memory(
+						exception_record_ptr + offsetof(EXCEPTION_RECORD, ExceptionAddress),
+						&exception_address, sizeof(exception_address)));
+
+					THREAD_LOG("NtRaiseException: kernel mode, dispatching via handle_exception (address=0x{:X})", exception_address);
+
+					const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
+					emulator->write_register<x86::reg::rsp>(rsp + 8);
+
+					if (!kernel::handle_exception(emulator, exception_address, exception_code, 0, false))
+					{
+						THREAD_ERR_LOG("NtRaiseException: unhandled kernel exception 0x{:X}", exception_code);
+					}
+
+					return;
+				}
+
+				if (!user::ki_user_exception_dispatcher_address)
+				{
+					THREAD_ERR_LOG("NtRaiseException: KiUserExceptionDispatcher not resolved, terminating");
+					emulator->write_register<x86::reg::rip>(0xFFFFFFFFFFFFFFFF);
+					return;
+				}
+
+				EXCEPTION_RECORD er{};
+				static_cast<void>(emulator->read_virtual_memory(exception_record_ptr, &er, sizeof(er)));
+
+				constexpr std::size_t ctx_size = 0x4F0;
+				std::vector<std::uint8_t> ctx_buf(ctx_size, 0);
+				static_cast<void>(emulator->read_virtual_memory(context_record_ptr, ctx_buf.data(),
+					std::min(ctx_size, static_cast<std::size_t>(sizeof(CONTEXT)))));
+
+				const auto current_rsp = emulator->read_register<x86::reg::rsp, std::uint64_t>();
+				const auto combined_size = (ctx_size + sizeof(EXCEPTION_RECORD) + 0xF) & ~static_cast<std::size_t>(0xF);
+				constexpr std::size_t machine_frame_reserved = 0x40;
+				const auto total_alloc = combined_size + machine_frame_reserved;
+				const auto new_sp = (current_rsp - total_alloc) & ~static_cast<std::uint64_t>(0xFF);
+
+				const auto zero_size = current_rsp - new_sp;
+				std::vector<std::uint8_t> frame(zero_size, 0);
+
+				std::memcpy(frame.data(), ctx_buf.data(), ctx_size);
+				std::memcpy(frame.data() + ctx_size, &er, sizeof(er));
+
+				static_cast<void>(emulator->write_virtual_memory(new_sp, frame.data(), zero_size));
+
+				emulator->write_register<x86::reg::rsp>(new_sp);
+				emulator->write_register<x86::reg::rip>(user::ki_user_exception_dispatcher_address);
+
+				kernel::swap_to_usermode_segments(emulator);
+
+				if (kernel::current_thread)
+				{
+					const auto gs_base = kernel::current_thread->state().gs_base;
+					if (gs_base)
+					{
+						kernel::swap_to_usermode_gs(emulator, gs_base);
+					}
+				}
 
 				user::clear_exception_dispatch_guard();
 
-				emulator->write_register<x86::reg::rax>(static_cast<std::uint64_t>(0));
-				emulator->write_register<x86::reg::rip>(0xFFFFFFFFFFFFFFFF);
+				THREAD_LOG("NtRaiseException: dispatching to KiUserExceptionDispatcher (code=0x{:08X}, rsp=0x{:X})",
+					exception_code, new_sp);
 			}
 		),
 		mapped_image,

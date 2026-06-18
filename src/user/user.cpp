@@ -12,6 +12,7 @@
 
 #include "../util/logs.hpp"
 #include "../util/file.hpp"
+#include "../util/util.hpp"
 
 #include <portable_executable/image.hpp>
 
@@ -348,7 +349,8 @@ user::context_t user::set_up_structures(
 	const emulator_t::address_type image_base,
 	const emulator_t::address_type ntdll_base,
 	const emulator_t::size_type image_size,
-	const emulator_t::size_type ntdll_size)
+	const emulator_t::size_type ntdll_size,
+	const std::vector<std::shared_ptr<image_t>>& extra_modules)
 {
 	using namespace user;
 
@@ -382,11 +384,26 @@ user::context_t user::set_up_structures(
 
 	const auto api_set_address = build_api_set_map(emulator);
 
-	const auto ldr_address = build_ldr_data(emulator,
+	std::vector<ldr_module_info_t> ldr_modules =
 	{
 		{ image_base, image_size, L"C:\\Windows\\System32\\test_user.exe", L"test_user.exe", 0x00004000, false },
 		{ ntdll_base, ntdll_size, L"C:\\Windows\\System32\\ntdll.dll", L"ntdll.dll", 0x001C4004, true },
-	});
+	};
+
+	for (const auto& mod : extra_modules)
+	{
+		if (!mod)
+		{
+			continue;
+		}
+
+		const auto wide_name = util::widen_string(mod->name());
+		const auto wide_path = L"C:\\Windows\\System32\\" + wide_name;
+
+		ldr_modules.push_back({ mod->base_address(), mod->size(), wide_path, wide_name, 0x001C4004, true });
+	}
+
+	const auto ldr_address = build_ldr_data(emulator, ldr_modules);
 
 	// allocate a zeroed page for GdiSharedHandleTable
 	const auto gdi_table = memory_manager->allocate_pages(0x1000);
@@ -594,9 +611,35 @@ void user::initialize(const std::shared_ptr<emulator_t>& emulator,
 		throw std::runtime_error("failed to load ntdll.dll for usermode emulation");
 	}
 
+	user::module_entries.push_back(ntdll_image);
+
+	auto kernelbase_image = kernel::map_user_image(emulator, "kernelbase.dll", true, false, true);
+
+	if (kernelbase_image)
+	{
+		user::module_entries.push_back(kernelbase_image);
+		GLOBAL_LOG("usermode: loaded kernelbase.dll at 0x{:X}", kernelbase_image->base_address());
+	}
+	else
+	{
+		GLOBAL_WARN_LOG("usermode: kernelbase.dll not found in vfs/ - some imports may fail");
+	}
+
+	auto kernel32_image = kernel::map_user_image(emulator, "kernel32.dll", true, false, true);
+
+	if (kernel32_image)
+	{
+		user::module_entries.push_back(kernel32_image);
+		GLOBAL_LOG("usermode: loaded kernel32.dll at 0x{:X}", kernel32_image->base_address());
+	}
+	else
+	{
+		GLOBAL_WARN_LOG("usermode: kernel32.dll not found in vfs/ - some imports may fail");
+	}
+
 	auto win32u_image = kernel::map_user_image(emulator, "win32u.dll");
 
-	auto usermode_image = kernel::map_user_image(emulator, std::string(usermode_module_name));
+	auto usermode_image = kernel::map_user_image(emulator, std::string(usermode_module_name), true, false, true);
 
 	if (!usermode_image)
 	{
@@ -647,9 +690,21 @@ void user::initialize(const std::shared_ptr<emulator_t>& emulator,
 		GLOBAL_WARN_LOG("usermode: KiUserExceptionDispatcher not found in ntdll");
 	}
 
+	std::vector<std::shared_ptr<image_t>> extra_modules;
+
+	if (kernelbase_image)
+	{
+		extra_modules.push_back(kernelbase_image);
+	}
+
+	if (kernel32_image)
+	{
+		extra_modules.push_back(kernel32_image);
+	}
+
 	const auto um_context = user::set_up_structures(emulator,
 		usermode_image->base_address(), ntdll_image->base_address(),
-		usermode_image->size(), ntdll_image->size());
+		usermode_image->size(), ntdll_image->size(), extra_modules);
 
 	const auto ldr_init_thunk = ntdll_image->find_symbol("LdrInitializeThunk");
 	const auto rtl_user_thread_start = ntdll_image->find_symbol("RtlUserThreadStart");

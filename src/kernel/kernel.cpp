@@ -1,26 +1,41 @@
 #include "kernel.hpp"
+#include "../user/user.hpp"
 #include "../util/logs.hpp"
 
 std::shared_ptr<image_t> kernel::find_module(const std::string_view name)
 {
 	const auto it = std::ranges::find(module_entries, name, &image_t::name);
 
-	return it != std::ranges::end(module_entries) ? *it : nullptr;
+	if (it != std::ranges::end(module_entries))
+	{
+		return *it;
+	}
+
+	const auto user_it = std::ranges::find(user::module_entries, name, &image_t::name);
+
+	return user_it != std::ranges::end(user::module_entries) ? *user_it : nullptr;
 }
 
 std::shared_ptr<image_t> kernel::find_module_from_rip(const emulator_t::address_type rip)
 {
-	const auto it = std::ranges::find_if(module_entries,
-		[rip](const std::shared_ptr<image_t>& image) -> bool
-		{
-			const emulator_t::address_type start = image->base_address();
-			const emulator_t::address_type end = start + image->size();
+	const auto match = [rip](const std::shared_ptr<image_t>& image) -> bool
+	{
+		const emulator_t::address_type start = image->base_address();
+		const emulator_t::address_type end = start + image->size();
 
-			return start <= rip && rip < end;
-		}
-	);
+		return start <= rip && rip < end;
+	};
 
-	return it != std::ranges::end(module_entries) ? *it : nullptr;
+	const auto it = std::ranges::find_if(module_entries, match);
+
+	if (it != std::ranges::end(module_entries))
+	{
+		return *it;
+	}
+
+	const auto user_it = std::ranges::find_if(user::module_entries, match);
+
+	return user_it != std::ranges::end(user::module_entries) ? *user_it : nullptr;
 }
 
 thread_t::id_type kernel::current_thread_id()

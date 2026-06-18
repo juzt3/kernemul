@@ -103,6 +103,16 @@ public:
 		table_entry_ = std::move(object);
 	}
 
+	[[nodiscard]] bool is_user_mode() const noexcept
+	{
+		return user_mode_;
+	}
+
+	void set_user_mode(const bool value) noexcept
+	{
+		user_mode_ = value;
+	}
+
 protected:
 	string_type name_;
 
@@ -113,4 +123,5 @@ protected:
 	symbol_map_type symbols_;
 
 	emulator_object_t<_KLDR_DATA_TABLE_ENTRY> table_entry_;
+	bool user_mode_ = false;
 };

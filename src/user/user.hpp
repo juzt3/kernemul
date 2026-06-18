@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <memory>
 #include <string_view>
+#include <vector>
 
 class image_t;
 
@@ -38,6 +39,7 @@ namespace user
 	}
 
 	inline emulator_t::address_type usermode_peb_address = 0;
+	inline std::vector<std::shared_ptr<image_t>> module_entries;
 
 	void initialize(const std::shared_ptr<emulator_t>& emulator,
 		const std::shared_ptr<image_t>& nt_image,
@@ -47,7 +49,8 @@ namespace user
 		emulator_t::address_type image_base,
 		emulator_t::address_type ntdll_base,
 		emulator_t::size_type image_size,
-		emulator_t::size_type ntdll_size);
+		emulator_t::size_type ntdll_size,
+		const std::vector<std::shared_ptr<image_t>>& extra_modules = {});
 
 	std::shared_ptr<thread_t> create_initial_thread(const std::shared_ptr<emulator_t>& emulator,
 		emulator_t::address_type entry_point,

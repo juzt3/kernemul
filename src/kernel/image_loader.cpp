@@ -10,6 +10,8 @@
 #include "../impl/ntoskrnl/nt_crashdump.hpp"
 #include "../impl/ntoskrnl/nt_debugger.hpp"
 #include "../impl/ntoskrnl/nt_helpers.hpp"
+#include "../impl/ntoskrnl/nt_sync.hpp"
+#include "../impl/ntoskrnl/nt_thread_ops.hpp"
 #include "../impl/ntoskrnl/nt_object.hpp"
 #include "../filesystem/filesystem.hpp"
 #include "../user/user_memory.hpp"
@@ -21,6 +23,9 @@
 
 #include "../util/logs.hpp"
 #include "../util/util.hpp"
+
+#include <algorithm>
+#include <cctype>
 #include <set>
 
 static void relocate_image(portable_executable::image_t* const image, const emulator_t::address_type runtime_base_address)
@@ -39,14 +44,88 @@ static void relocate_image(portable_executable::image_t* const image, const emul
 	}
 }
 
-static void fix_image_imports(portable_executable::image_t* const image)
+static std::shared_ptr<image_t> find_module_flexible(const std::string_view name)
+{
+	if (const auto m = kernel::find_module(name))
+	{
+		return m;
+	}
+
+	const std::string with_ext = std::string(name) + ".dll";
+
+	if (const auto m = kernel::find_module(with_ext))
+	{
+		return m;
+	}
+
+	std::string lower(name);
+	std::ranges::transform(lower, lower.begin(), [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+	if (const auto m = kernel::find_module(lower))
+	{
+		return m;
+	}
+
+	const std::string lower_ext = lower + ".dll";
+
+	if (const auto m = kernel::find_module(lower_ext))
+	{
+		return m;
+	}
+
+	return nullptr;
+}
+
+static std::shared_ptr<image_t> resolve_api_set_module(const std::string_view api_set_name,
+	const std::string_view symbol_name)
+{
+	std::string lower(api_set_name);
+	std::ranges::transform(lower, lower.begin(), [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+	if (!lower.starts_with("api-ms-win-") && !lower.starts_with("ext-ms-win-"))
+	{
+		return nullptr;
+	}
+
+	static constexpr std::string_view candidates[] = { "kernelbase.dll", "ntdll.dll", "kernel32.dll" };
+
+	for (const auto candidate : candidates)
+	{
+		const auto module = kernel::find_module(candidate);
+
+		if (module && module->find_symbol(std::string(symbol_name)))
+		{
+			return module;
+		}
+	}
+
+	return nullptr;
+}
+
+static void fix_image_imports(portable_executable::image_t* const image, const bool tolerant = false)
 {
 	for (const auto current_import : image->imports())
 	{
-		const auto import_module = kernel::find_module(current_import.module_name);
+		auto import_module = kernel::find_module(current_import.module_name);
 
 		if (!import_module)
 		{
+			import_module = find_module_flexible(current_import.module_name);
+		}
+
+		if (!import_module)
+		{
+			import_module = resolve_api_set_module(current_import.module_name, current_import.import_name);
+		}
+
+		if (!import_module)
+		{
+			if (tolerant)
+			{
+				GLOBAL_WARN_LOG("unresolved import module: {} ({})", current_import.module_name, current_import.import_name);
+				continue;
+			}
+
 			throw std::runtime_error("unable to find import module: " + current_import.module_name);
 		}
 
@@ -54,6 +133,12 @@ static void fix_image_imports(portable_executable::image_t* const image)
 
 		if (!module_symbol)
 		{
+			if (tolerant)
+			{
+				GLOBAL_WARN_LOG("unresolved symbol: {}!{}", current_import.module_name, current_import.import_name);
+				continue;
+			}
+
 			throw std::runtime_error("unable to find symbol in module: " + current_import.import_name);
 		}
 
@@ -103,13 +188,53 @@ static void collect_module_symbols(portable_executable::image_t* const pe_image,
 	const bool load_pdb)
 {
 	const auto local_image_address = pe_image->as<const std::uint8_t*>();
+	const auto& export_data_dir = pe_image->nt_headers()->optional_header.data_directories.export_directory;
+
+	std::uint32_t forwarded_count = 0;
+	std::uint32_t unresolved_count = 0;
 
 	for (const auto current_export : pe_image->exports())
 	{
 		const std::uint32_t rva = static_cast<std::uint32_t>(current_export.address - local_image_address);
-		const emulator_t::address_type runtime_address = mapped_image.base_address() + rva;
 
+		if (export_data_dir.present() &&
+			rva >= export_data_dir.virtual_address &&
+			rva < export_data_dir.virtual_address + export_data_dir.size)
+		{
+			const auto forwarder_str = reinterpret_cast<const char*>(current_export.address);
+			const std::string_view forwarder(forwarder_str);
+
+			const auto dot_pos = forwarder.find('.');
+			if (dot_pos != std::string_view::npos)
+			{
+				const auto target_module_name = forwarder.substr(0, dot_pos);
+				const auto target_symbol_name = forwarder.substr(dot_pos + 1);
+
+				const auto target_module = find_module_flexible(target_module_name);
+
+				if (target_module)
+				{
+					if (const auto addr = target_module->find_symbol(std::string(target_symbol_name)))
+					{
+						mapped_image.register_symbol(current_export.name, *addr);
+						++forwarded_count;
+						continue;
+					}
+				}
+			}
+
+			++unresolved_count;
+			continue;
+		}
+
+		const emulator_t::address_type runtime_address = mapped_image.base_address() + rva;
 		mapped_image.register_symbol(current_export.name, runtime_address);
+	}
+
+	if (forwarded_count > 0 || unresolved_count > 0)
+	{
+		GLOBAL_LOG("'{}': resolved {} forwarded exports, {} unresolved",
+			mapped_image.name(), forwarded_count, unresolved_count);
 	}
 
 	if (!load_pdb)
@@ -360,10 +485,11 @@ std::shared_ptr<image_t> kernel::map_image(const std::shared_ptr<emulator_t>& em
 	}
 
 	relocate_image(pe_image, mapped_base);
+	nt_headers->optional_header.image_base = mapped_base;
 
 	if (options.fix_imports)
 	{
-		fix_image_imports(pe_image);
+		fix_image_imports(pe_image, options.tolerant_imports);
 	}
 
 	const auto image_start = pe_image->as<const std::uint8_t*>();
@@ -452,6 +578,8 @@ std::shared_ptr<image_t> kernel::map_image(const std::shared_ptr<emulator_t>& em
 			redirect_ntoskrnl_object_functions(emulator, *mapped_image);
 			redirect_ntoskrnl_debugger_functions(emulator, *mapped_image);
 			redirect_ntoskrnl_crashdump_functions(emulator, *mapped_image);
+			redirect_ntoskrnl_sync_functions(emulator, *mapped_image);
+			redirect_ntoskrnl_thread_functions(emulator, *mapped_image);
 		}
 	}
 
@@ -476,15 +604,23 @@ std::shared_ptr<image_t> kernel::map_kernel_image(const std::shared_ptr<emulator
 }
 
 std::shared_ptr<image_t> kernel::map_user_image(const std::shared_ptr<emulator_t>& emulator,
-	const std::string_view name, const bool fix_imports, const bool load_pdb)
+	const std::string_view name, const bool fix_imports, const bool load_pdb, const bool tolerant_imports)
 {
-	return map_image(emulator, name,
+	auto image = map_image(emulator, name,
 	{
 		.fix_imports = fix_imports,
+		.tolerant_imports = tolerant_imports,
 		.user_accessible = true,
 		.load_pdb = load_pdb,
 		.add_to_module_list = false,
 		.register_redirections = false,
 		.monitor_data = false,
 	});
+
+	if (image)
+	{
+		image->set_user_mode(true);
+	}
+
+	return image;
 }

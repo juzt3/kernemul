@@ -113,6 +113,8 @@ void user::dispatch_exception(const std::shared_ptr<emulator_t>& emulator,
 
 	THREAD_LOG("dispatching exception 0x{:08X} to KiUserExceptionDispatcher (fault_rip=0x{:X}, rsp=0x{:X}->0x{:X})",
 		exception_code, faulting_rip, current_rsp, new_sp);
+
+	dispatching_exception = false;
 }
 
 void user::dispatch_access_violation(const std::shared_ptr<emulator_t>& emulator,
@@ -139,8 +141,52 @@ void user::dispatch_access_violation(const std::shared_ptr<emulator_t>& emulator
 		}
 	}
 
+	const auto rsp = emulator->read_register<x86::reg::rsp, emulator_t::address_type>();
+	const auto rcx = emulator->read_register<x86::reg::rcx, std::uint64_t>();
+	const auto rdx = emulator->read_register<x86::reg::rdx, std::uint64_t>();
+
+	emulator_t::address_type return_addr = 0;
+	static_cast<void>(emulator->read_virtual_memory(rsp, &return_addr, sizeof(return_addr)));
+
+	std::string caller_sym = "unknown";
+	if (const auto caller_mod = kernel::find_module_from_rip(return_addr))
+	{
+		if (const auto caller_s = caller_mod->find_symbol_by_address(return_addr))
+		{
+			caller_sym = caller_mod->name() + "!" + caller_s->first + "+0x" + std::format("{:X}", return_addr - caller_s->second);
+		}
+		else
+		{
+			caller_sym = caller_mod->name() + "+0x" + std::format("{:X}", return_addr - caller_mod->base_address());
+		}
+	}
+
 	THREAD_LOG("STATUS_ACCESS_VIOLATION at 0x{:X} [{}] ({} 0x{:X})",
 		rip, sym_name, is_write ? "writing" : "reading", fault_address);
+	THREAD_LOG("  caller=[RSP]=0x{:X} [{}], rcx=0x{:X}, rdx=0x{:X}",
+		return_addr, caller_sym, rcx, rdx);
+
+	// dump raw stack for call chain analysis
+	for (int frame = 0; frame < 16; ++frame)
+	{
+		emulator_t::address_type val = 0;
+		const auto stack_addr = rsp + static_cast<std::uint64_t>(frame) * 8;
+		static_cast<void>(emulator->read_virtual_memory(stack_addr, &val, sizeof(val)));
+
+		std::string frame_sym;
+		if (const auto fmod = kernel::find_module_from_rip(val))
+		{
+			if (const auto fsym = fmod->find_symbol_by_address(val))
+			{
+				frame_sym = fmod->name() + "!" + fsym->first + "+0x" + std::format("{:X}", val - fsym->second);
+			}
+			else
+			{
+				frame_sym = fmod->name() + "+0x" + std::format("{:X}", val - fmod->base_address());
+			}
+		}
+		THREAD_LOG("  [RSP+0x{:X}] = 0x{:X} {}", frame * 8, val, frame_sym);
+	}
 
 	dispatch_exception(emulator, exception_common::status_access_violation, rip, params, 2);
 }

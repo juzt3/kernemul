@@ -74,6 +74,40 @@ struct section_object_t final : object_t
 			:	file(std::move(file)) { }
 };
 
+struct event_object_t final : object_t
+{
+	enum type_t : std::uint32_t { notification = 0, synchronization = 1 };
+	type_t event_type;
+	bool signaled;
+
+	event_object_t(const type_t type, const bool initial)
+			:	event_type(type), signaled(initial) { }
+};
+
+struct mutant_object_t final : object_t
+{
+	bool owned = false;
+	std::uint64_t owner_thread_id = 0;
+	std::int32_t count = 0;
+
+	explicit mutant_object_t(const bool initial_owner, const std::uint64_t tid = 0)
+			:	owned(initial_owner), owner_thread_id(initial_owner ? tid : 0),
+				count(initial_owner ? 1 : 0) { }
+};
+
+struct semaphore_object_t final : object_t
+{
+	std::int32_t count;
+	std::int32_t max_count;
+
+	semaphore_object_t(const std::int32_t initial, const std::int32_t max)
+			:	count(initial), max_count(max) { }
+};
+
+struct keyed_event_object_t final : object_t
+{
+};
+
 struct object_entry_t
 {
 	std::size_t total_size;
@@ -134,7 +168,7 @@ public:
 			return {};
 		}
 
-		return std::static_pointer_cast<T>(it->second.object);
+		return std::dynamic_pointer_cast<T>(it->second.object);
 	}
 
 	template <typename T>

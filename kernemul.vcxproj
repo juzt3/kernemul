@@ -211,6 +211,8 @@
     <ClCompile Include="src\impl\ndis\ndis_misc.cpp" />
     <ClCompile Include="src\impl\ntoskrnl\nt_crashdump.cpp" />
     <ClCompile Include="src\impl\ntoskrnl\nt_misc.cpp" />
+    <ClCompile Include="src\impl\ntoskrnl\nt_sync.cpp" />
+    <ClCompile Include="src\impl\ntoskrnl\nt_thread_ops.cpp" />
     <ClCompile Include="src\impl\ntoskrnl\nt_object.cpp" />
     <ClCompile Include="src\impl\ntoskrnl\nt_registry.cpp" />
     <ClCompile Include="src\impl\ntoskrnl\nt_sysinfo.cpp" />
@@ -319,6 +321,8 @@
     <ClInclude Include="src\impl\ntoskrnl\nt_debugger.hpp" />
     <ClInclude Include="src\impl\ntoskrnl\nt_helpers.hpp" />
     <ClInclude Include="src\impl\ntoskrnl\nt_object.hpp" />
+    <ClInclude Include="src\impl\ntoskrnl\nt_sync.hpp" />
+    <ClInclude Include="src\impl\ntoskrnl\nt_thread_ops.hpp" />
     <ClInclude Include="src\kernel\exception.hpp" />
     <ClInclude Include="src\kernel\kernel.hpp" />
     <ClInclude Include="src\kernel\kernel_string.hpp" />
