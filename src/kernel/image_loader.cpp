@@ -51,11 +51,16 @@ static std::shared_ptr<image_t> find_module_flexible(const std::string_view name
 		return m;
 	}
 
-	const std::string with_ext = std::string(name) + ".dll";
+	static constexpr std::string_view extensions[] = { ".dll", ".exe", ".sys" };
 
-	if (const auto m = kernel::find_module(with_ext))
+	for (const auto ext : extensions)
 	{
-		return m;
+		const std::string with_ext = std::string(name) + std::string(ext);
+
+		if (const auto m = kernel::find_module(with_ext))
+		{
+			return m;
+		}
 	}
 
 	std::string lower(name);
@@ -66,11 +71,14 @@ static std::shared_ptr<image_t> find_module_flexible(const std::string_view name
 		return m;
 	}
 
-	const std::string lower_ext = lower + ".dll";
-
-	if (const auto m = kernel::find_module(lower_ext))
+	for (const auto ext : extensions)
 	{
-		return m;
+		const std::string lower_ext = lower + std::string(ext);
+
+		if (const auto m = kernel::find_module(lower_ext))
+		{
+			return m;
+		}
 	}
 
 	return nullptr;
