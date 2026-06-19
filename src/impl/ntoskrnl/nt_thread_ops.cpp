@@ -42,7 +42,36 @@ static void handle_delay_execution(const std::shared_ptr<emulator_t>& emulator,
 	write_nt_success(emulator);
 }
 
-// NtTerminateThread - registered manually because self-termination needs skip_return
+static void handle_terminate_thread(bool& skip_return, const std::shared_ptr<emulator_t>& emulator,
+	kernel::handle_t thread_handle, std::uint32_t exit_status)
+{
+	THREAD_LOG("NtTerminateThread called (handle=0x{:X}, exit_status=0x{:X})",
+		thread_handle, exit_status);
+
+	if (thread_handle == 0 || thread_handle == static_cast<kernel::handle_t>(-1) ||
+		thread_handle == static_cast<kernel::handle_t>(-2))
+	{
+		THREAD_LOG("NtTerminateThread: terminating current thread");
+
+		constexpr emulator_t::address_type sentinel = 0xFFFFFFFFFFFFFFFF;
+		emulator->write_register<x86::reg::rip>(sentinel);
+		write_nt_success(emulator);
+		skip_return = true;
+		return;
+	}
+
+	const auto thread_obj = kernel::active_handle_table().get_object_from_handle<thread_object_t>(thread_handle);
+	if (!thread_obj)
+	{
+		THREAD_WARN_LOG("NtTerminateThread: invalid handle 0x{:X}", thread_handle);
+		write_nt_status(emulator, status_invalid_handle);
+		return;
+	}
+
+	THREAD_LOG("NtTerminateThread: terminating thread {} (stub - marked done)",
+		thread_obj->thread->id());
+	write_nt_success(emulator);
+}
 
 // NtOpenThread(PHANDLE ThreadHandle, ACCESS_MASK DesiredAccess, POBJECT_ATTRIBUTES ObjectAttributes, PCLIENT_ID ClientId)
 static void handle_open_thread(const std::shared_ptr<emulator_t>& emulator,
@@ -315,23 +344,14 @@ static void handle_get_current_processor_number_ex(const std::shared_ptr<emulato
 	write_nt_success(emulator);
 }
 
-// NtCreateThreadEx - 11 parameters, needs manual lambda for stack reads
-// (PHANDLE ThreadHandle, ACCESS_MASK DesiredAccess, POBJECT_ATTRIBUTES ObjectAttributes,
-//  HANDLE ProcessHandle, PVOID StartRoutine, PVOID Argument, ULONG CreateFlags,
-//  SIZE_T ZeroBits, SIZE_T StackSize, SIZE_T MaximumStackSize, PPS_ATTRIBUTE_LIST AttributeList)
-static void impl_create_thread_ex(const std::shared_ptr<emulator_t>& emulator)
+static void handle_create_thread_ex(const std::shared_ptr<emulator_t>& emulator,
+	emulator_t::address_type thread_handle_out, std::uint32_t desired_access,
+	emulator_t::address_type object_attributes, std::uint64_t process_handle,
+	emulator_t::address_type start_routine, emulator_t::address_type argument,
+	std::uint32_t create_flags, std::uint64_t zero_bits,
+	std::uint64_t stack_size, std::uint64_t maximum_stack_size,
+	emulator_t::address_type attribute_list)
 {
-	const auto thread_handle_out = read_raw_arg(emulator, 0);
-	const auto desired_access = static_cast<std::uint32_t>(read_raw_arg(emulator, 1));
-	const auto object_attributes = read_raw_arg(emulator, 2);
-	const auto process_handle = read_raw_arg(emulator, 3);
-	const auto start_routine = read_raw_arg(emulator, 4);
-	const auto argument = read_raw_arg(emulator, 5);
-	const auto create_flags = static_cast<std::uint32_t>(read_raw_arg(emulator, 6));
-	const auto zero_bits = read_raw_arg(emulator, 7);
-	const auto stack_size = read_raw_arg(emulator, 8);
-	const auto maximum_stack_size = read_raw_arg(emulator, 9);
-	const auto attribute_list = read_raw_arg(emulator, 10);
 
 	THREAD_LOG("NtCreateThreadEx called (handle_out=0x{:X}, start=0x{:X}, arg=0x{:X}, flags=0x{:X}, stack_size=0x{:X})",
 		thread_handle_out, start_routine, argument, create_flags, stack_size);
@@ -464,52 +484,14 @@ static void impl_create_thread_ex(const std::shared_ptr<emulator_t>& emulator)
 void redirect_ntoskrnl_thread_functions(const std::shared_ptr<emulator_t>& emulator,
 	const image_t& mapped_image)
 {
-	redirect_function(
-		[emulator] { impl_create_thread_ex(emulator); },
-		mapped_image, "NtCreateThreadEx"
-	);
-	redirect_function(
-		[emulator] { impl_create_thread_ex(emulator); },
-		mapped_image, "ZwCreateThreadEx"
-	);
+	redirect_handler<handle_create_thread_ex>(emulator, mapped_image, "NtCreateThreadEx");
+	redirect_handler<handle_create_thread_ex>(emulator, mapped_image, "ZwCreateThreadEx");
 
 	redirect_handler<handle_delay_execution>(emulator, mapped_image, "NtDelayExecution");
 	redirect_handler<handle_delay_execution>(emulator, mapped_image, "ZwDelayExecution");
 
-	const auto terminate_thread_impl = [emulator](bool& skip_return)
-	{
-		const auto thread_handle = emulator->read_register<x86::reg::rcx, emulator_t::address_type>();
-		const auto exit_status = emulator->read_register<x86::reg::rdx, std::uint32_t>();
-
-		THREAD_LOG("NtTerminateThread called (handle=0x{:X}, exit_status=0x{:X})",
-			thread_handle, exit_status);
-
-		if (thread_handle == 0 || thread_handle == static_cast<emulator_t::address_type>(-1) ||
-			thread_handle == static_cast<emulator_t::address_type>(-2))
-		{
-			THREAD_LOG("NtTerminateThread: terminating current thread");
-
-			constexpr emulator_t::address_type sentinel = 0xFFFFFFFFFFFFFFFF;
-			emulator->write_register<x86::reg::rip>(sentinel);
-			write_nt_success(emulator);
-			skip_return = true;
-			return;
-		}
-
-		const auto thread_obj = kernel::active_handle_table().get_object_from_handle<thread_object_t>(thread_handle);
-		if (!thread_obj)
-		{
-			THREAD_WARN_LOG("NtTerminateThread: invalid handle 0x{:X}", thread_handle);
-			write_nt_status(emulator, status_invalid_handle);
-			return;
-		}
-
-		THREAD_LOG("NtTerminateThread: terminating thread {} (stub - marked done)",
-			thread_obj->thread->id());
-		write_nt_success(emulator);
-	};
-	redirect_function(terminate_thread_impl, mapped_image, "NtTerminateThread");
-	redirect_function(terminate_thread_impl, mapped_image, "ZwTerminateThread");
+	redirect_handler<handle_terminate_thread>(emulator, mapped_image, "NtTerminateThread");
+	redirect_handler<handle_terminate_thread>(emulator, mapped_image, "ZwTerminateThread");
 
 	redirect_handler<handle_open_thread>(emulator, mapped_image, "NtOpenThread");
 	redirect_handler<handle_open_thread>(emulator, mapped_image, "ZwOpenThread");

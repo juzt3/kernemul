@@ -1218,6 +1218,625 @@ static void handle_flush_process_write_buffers(const std::shared_ptr<emulator_t>
 	write_nt_success(emulator);
 }
 
+static void handle_allocate_virtual_memory(const std::shared_ptr<emulator_t>& emulator,
+	std::uint64_t process_handle, emulator_t::address_type base_address_ptr,
+	std::uint64_t zero_bits, emulator_t::address_type region_size_ptr,
+	std::uint32_t allocation_type, std::uint32_t protection)
+{
+	emulator_t::address_type base_address = 0;
+	emulator_t::size_type region_size = 0;
+
+	if (base_address_ptr)
+	{
+		static_cast<void>(emulator->read_virtual_memory(base_address_ptr, &base_address, sizeof(base_address)));
+	}
+
+	if (region_size_ptr)
+	{
+		static_cast<void>(emulator->read_virtual_memory(region_size_ptr, &region_size, sizeof(region_size)));
+	}
+
+	THREAD_LOG("NtAllocateVirtualMemory called (process=0x{:X}, base=0x{:X}, size=0x{:X}, type=0x{:X}, prot=0x{:X})",
+		process_handle, base_address, region_size, allocation_type, protection);
+
+	if (!user::memory_manager)
+	{
+		const auto alloc = emulator->heap_allocate(region_size, prot_read_write, true);
+
+		if (alloc)
+		{
+			base_address = *alloc;
+
+			if (base_address_ptr)
+			{
+				static_cast<void>(emulator->write_virtual_memory(base_address_ptr, &base_address, sizeof(base_address)));
+			}
+
+			if (region_size_ptr)
+			{
+				const auto aligned = (region_size + 0xFFF) & ~static_cast<emulator_t::size_type>(0xFFF);
+				static_cast<void>(emulator->write_virtual_memory(region_size_ptr, &aligned, sizeof(aligned)));
+			}
+
+			write_nt_success(emulator);
+		}
+		else
+		{
+			write_nt_status(emulator, 0xC0000017); // STATUS_NO_MEMORY
+		}
+
+		return;
+	}
+
+	const auto status = user::memory_manager->allocate(base_address, region_size, allocation_type, protection);
+
+	if (base_address_ptr)
+	{
+		static_cast<void>(emulator->write_virtual_memory(base_address_ptr, &base_address, sizeof(base_address)));
+	}
+
+	if (region_size_ptr)
+	{
+		static_cast<void>(emulator->write_virtual_memory(region_size_ptr, &region_size, sizeof(region_size)));
+	}
+
+	THREAD_LOG("NtAllocateVirtualMemory -> base=0x{:X}, size=0x{:X}, status=0x{:X}",
+		base_address, region_size, status);
+
+	write_nt_status(emulator, status);
+}
+
+static void handle_allocate_virtual_memory_ex(const std::shared_ptr<emulator_t>& emulator,
+	std::uint64_t process_handle, emulator_t::address_type base_address_ptr,
+	emulator_t::address_type region_size_ptr, std::uint32_t allocation_type,
+	std::uint32_t protection, emulator_t::address_type extended_params,
+	std::uint32_t extended_param_count)
+{
+	emulator_t::address_type base_address = 0;
+	emulator_t::size_type region_size = 0;
+
+	if (base_address_ptr)
+	{
+		static_cast<void>(emulator->read_virtual_memory(base_address_ptr, &base_address, sizeof(base_address)));
+	}
+
+	if (region_size_ptr)
+	{
+		static_cast<void>(emulator->read_virtual_memory(region_size_ptr, &region_size, sizeof(region_size)));
+	}
+
+	emulator_t::size_type requested_alignment = 0;
+
+	if (extended_params && extended_param_count > 0)
+	{
+		for (std::uint32_t i = 0; i < extended_param_count; ++i)
+		{
+			struct mem_extended_parameter_t
+			{
+				std::uint64_t type_and_reserved;
+				std::uint64_t value;
+			};
+
+			mem_extended_parameter_t param{};
+			const auto param_addr = extended_params + i * sizeof(param);
+			static_cast<void>(emulator->read_virtual_memory(param_addr, &param, sizeof(param)));
+
+			const auto param_type = param.type_and_reserved & 0xFF;
+
+			if (param_type == 1) // MemExtendedParameterAddressRequirements
+			{
+				struct mem_address_requirements_t
+				{
+					std::uint64_t lowest_starting_address;
+					std::uint64_t highest_ending_address;
+					std::uint64_t alignment;
+				};
+
+				mem_address_requirements_t reqs{};
+				static_cast<void>(emulator->read_virtual_memory(param.value, &reqs, sizeof(reqs)));
+
+				requested_alignment = reqs.alignment;
+
+				THREAD_LOG("NtAllocateVirtualMemoryEx: address requirements (lowest=0x{:X}, highest=0x{:X}, alignment=0x{:X})",
+					reqs.lowest_starting_address, reqs.highest_ending_address, reqs.alignment);
+			}
+		}
+	}
+
+	THREAD_LOG("NtAllocateVirtualMemoryEx called (process=0x{:X}, base=0x{:X}, size=0x{:X}, type=0x{:X}, prot=0x{:X}, ext_params=0x{:X}, ext_count={})",
+		process_handle, base_address, region_size, allocation_type, protection, extended_params, extended_param_count);
+
+	if (!user::memory_manager)
+	{
+		const auto alloc = emulator->heap_allocate(region_size, prot_read_write, true);
+
+		if (alloc)
+		{
+			base_address = *alloc;
+
+			if (base_address_ptr)
+			{
+				static_cast<void>(emulator->write_virtual_memory(base_address_ptr, &base_address, sizeof(base_address)));
+			}
+
+			if (region_size_ptr)
+			{
+				const auto aligned = (region_size + 0xFFF) & ~static_cast<emulator_t::size_type>(0xFFF);
+				static_cast<void>(emulator->write_virtual_memory(region_size_ptr, &aligned, sizeof(aligned)));
+			}
+
+			write_nt_success(emulator);
+		}
+		else
+		{
+			write_nt_status(emulator, 0xC0000017); // STATUS_NO_MEMORY
+		}
+
+		return;
+	}
+
+	const auto status = user::memory_manager->allocate(base_address, region_size, allocation_type, protection, requested_alignment);
+
+	if (base_address_ptr)
+	{
+		static_cast<void>(emulator->write_virtual_memory(base_address_ptr, &base_address, sizeof(base_address)));
+	}
+
+	if (region_size_ptr)
+	{
+		static_cast<void>(emulator->write_virtual_memory(region_size_ptr, &region_size, sizeof(region_size)));
+	}
+
+	THREAD_LOG("NtAllocateVirtualMemoryEx -> base=0x{:X}, size=0x{:X}, status=0x{:X}",
+		base_address, region_size, status);
+
+	write_nt_status(emulator, status);
+}
+
+static void handle_free_virtual_memory(const std::shared_ptr<emulator_t>& emulator,
+	std::uint64_t process_handle, emulator_t::address_type base_address_ptr,
+	emulator_t::address_type region_size_ptr, std::uint32_t free_type)
+{
+	emulator_t::address_type base_address = 0;
+	emulator_t::size_type region_size = 0;
+
+	if (base_address_ptr)
+	{
+		static_cast<void>(emulator->read_virtual_memory(base_address_ptr, &base_address, sizeof(base_address)));
+	}
+
+	if (region_size_ptr)
+	{
+		static_cast<void>(emulator->read_virtual_memory(region_size_ptr, &region_size, sizeof(region_size)));
+	}
+
+	THREAD_LOG("NtFreeVirtualMemory called (process=0x{:X}, base=0x{:X}, size=0x{:X}, type=0x{:X})",
+		process_handle, base_address, region_size, free_type);
+
+	if (!user::memory_manager)
+	{
+		write_nt_success(emulator);
+		return;
+	}
+
+	const auto status = user::memory_manager->free(base_address, region_size, free_type);
+
+	if (status == 0)
+	{
+		if (base_address_ptr)
+		{
+			static_cast<void>(emulator->write_virtual_memory(base_address_ptr, &base_address, sizeof(base_address)));
+		}
+
+		if (region_size_ptr)
+		{
+			static_cast<void>(emulator->write_virtual_memory(region_size_ptr, &region_size, sizeof(region_size)));
+		}
+	}
+
+	write_nt_status(emulator, status);
+}
+
+static void handle_protect_virtual_memory(const std::shared_ptr<emulator_t>& emulator,
+	std::uint64_t process_handle, emulator_t::address_type base_address_ptr,
+	emulator_t::address_type region_size_ptr, std::uint32_t new_protection,
+	emulator_t::address_type old_protection_ptr)
+{
+	emulator_t::address_type base_address = 0;
+	emulator_t::size_type region_size = 0;
+
+	if (base_address_ptr)
+	{
+		static_cast<void>(emulator->read_virtual_memory(base_address_ptr, &base_address, sizeof(base_address)));
+	}
+
+	if (region_size_ptr)
+	{
+		static_cast<void>(emulator->read_virtual_memory(region_size_ptr, &region_size, sizeof(region_size)));
+	}
+
+	THREAD_LOG("NtProtectVirtualMemory called (process=0x{:X}, base=0x{:X}, size=0x{:X}, new_prot=0x{:X})",
+		process_handle, base_address, region_size, new_protection);
+
+	std::uint32_t old_protection = user::page_readwrite;
+
+	if (user::memory_manager)
+	{
+		const auto status = user::memory_manager->protect(base_address, region_size, new_protection, old_protection);
+
+		if (base_address_ptr)
+		{
+			static_cast<void>(emulator->write_virtual_memory(base_address_ptr, &base_address, sizeof(base_address)));
+		}
+
+		if (region_size_ptr)
+		{
+			static_cast<void>(emulator->write_virtual_memory(region_size_ptr, &region_size, sizeof(region_size)));
+		}
+
+		if (old_protection_ptr)
+		{
+			static_cast<void>(emulator->write_virtual_memory(old_protection_ptr, &old_protection, sizeof(old_protection)));
+		}
+
+		write_nt_status(emulator, status);
+	}
+	else
+	{
+		if (old_protection_ptr)
+		{
+			static_cast<void>(emulator->write_virtual_memory(old_protection_ptr, &old_protection, sizeof(old_protection)));
+		}
+
+		write_nt_success(emulator);
+	}
+}
+
+static void handle_query_virtual_memory(const std::shared_ptr<emulator_t>& emulator,
+	std::uint64_t process_handle, emulator_t::address_type base_address,
+	std::uint32_t info_class, emulator_t::address_type buffer_address,
+	std::uint32_t buffer_length, emulator_t::address_type return_length_ptr)
+{
+	THREAD_LOG("NtQueryVirtualMemory called (process=0x{:X}, base=0x{:X}, class=0x{:X}, buf=0x{:X}, len=0x{:X})",
+		process_handle, base_address, info_class, buffer_address, buffer_length);
+
+	constexpr std::uint32_t memory_basic_information_class = 0;
+	constexpr std::uint32_t memory_working_set_ex_class = 4;
+	constexpr std::uint32_t memory_image_information_class = 6;
+	constexpr std::uint32_t memory_region_information_class = 9;
+
+	if (info_class == memory_basic_information_class)
+	{
+		user::memory_basic_information_t info = {};
+		constexpr std::uint32_t info_size = sizeof(info);
+
+		if (buffer_length < info_size)
+		{
+			if (return_length_ptr)
+			{
+				static_cast<void>(emulator->write_virtual_memory(return_length_ptr, &info_size, sizeof(info_size)));
+			}
+
+			write_nt_status(emulator, 0xC0000004); // STATUS_INFO_LENGTH_MISMATCH
+			return;
+		}
+
+		if (user::memory_manager)
+		{
+			user::memory_manager->query_basic(base_address, info);
+		}
+		else
+		{
+			info.base_address = base_address & ~static_cast<std::uint64_t>(0xFFF);
+			info.region_size = 0x1000;
+			info.state = user::mem_free;
+			info.protect = user::page_noaccess;
+		}
+
+		static_cast<void>(emulator->write_virtual_memory(buffer_address, &info, info_size));
+
+		if (return_length_ptr)
+		{
+			static_cast<void>(emulator->write_virtual_memory(return_length_ptr, &info_size, sizeof(info_size)));
+		}
+
+		THREAD_LOG("NtQueryVirtualMemory: basic info for 0x{:X} -> state=0x{:X}, prot=0x{:X}, size=0x{:X}, type=0x{:X}",
+			base_address, info.state, info.protect, info.region_size, info.type);
+
+		write_nt_success(emulator);
+	}
+	else if (info_class == memory_working_set_ex_class)
+	{
+		THREAD_LOG("NtQueryVirtualMemory: working set ex -> STATUS_NOT_SUPPORTED");
+		write_nt_status(emulator, 0xC00000BB); // STATUS_NOT_SUPPORTED
+	}
+	else if (info_class == memory_image_information_class)
+	{
+		if (base_address >= 0x00007FFFFFFF0000ULL)
+		{
+			THREAD_LOG("NtQueryVirtualMemory: class 6 invalid base 0x{:X} -> STATUS_INVALID_PARAMETER", base_address);
+			write_nt_status(emulator, 0xC000000D); // STATUS_INVALID_PARAMETER
+			return;
+		}
+
+		// MEMORY_IMAGE_INFORMATION: ImageBase(8), SizeOfImage(8), ImageFlags(4)
+		struct
+		{
+			std::uint64_t image_base;
+			std::uint64_t size_of_image;
+			std::uint32_t image_flags;
+		} image_info = {};
+
+		if (user::memory_manager)
+		{
+			user::memory_basic_information_t basic = {};
+			user::memory_manager->query_basic(base_address, basic);
+
+			if (basic.type == user::mem_image)
+			{
+				image_info.image_base = basic.allocation_base;
+				image_info.size_of_image = basic.region_size;
+				image_info.image_flags = 0;
+			}
+		}
+
+		const auto write_size = std::min(static_cast<std::size_t>(buffer_length), sizeof(image_info));
+
+		if (buffer_address && write_size)
+		{
+			static_cast<void>(emulator->write_virtual_memory(buffer_address, &image_info, write_size));
+		}
+
+		if (return_length_ptr)
+		{
+			const auto ret_len = static_cast<std::uint32_t>(sizeof(image_info));
+			static_cast<void>(emulator->write_virtual_memory(return_length_ptr, &ret_len, sizeof(ret_len)));
+		}
+
+		write_nt_success(emulator);
+	}
+	else if (info_class == memory_region_information_class)
+	{
+		// MEMORY_REGION_INFORMATION
+		struct
+		{
+			std::uint64_t allocation_base;
+			std::uint32_t allocation_protect;
+			std::uint32_t padding;
+			std::uint64_t region_size;
+			std::uint64_t commit_size;
+		} region_info = {};
+
+		if (user::memory_manager)
+		{
+			user::memory_basic_information_t basic = {};
+			user::memory_manager->query_basic(base_address, basic);
+
+			region_info.allocation_base = basic.allocation_base;
+			region_info.allocation_protect = basic.allocation_protect;
+			region_info.region_size = basic.region_size;
+			region_info.commit_size = (basic.state == user::mem_commit) ? basic.region_size : 0;
+		}
+
+		const auto write_size = std::min(static_cast<std::size_t>(buffer_length), sizeof(region_info));
+
+		if (buffer_address && write_size)
+		{
+			static_cast<void>(emulator->write_virtual_memory(buffer_address, &region_info, write_size));
+		}
+
+		if (return_length_ptr)
+		{
+			const auto ret_len = static_cast<std::uint32_t>(sizeof(region_info));
+			static_cast<void>(emulator->write_virtual_memory(return_length_ptr, &ret_len, sizeof(ret_len)));
+		}
+
+		write_nt_success(emulator);
+	}
+	else
+	{
+		THREAD_WARN_LOG("NtQueryVirtualMemory: unhandled class 0x{:X}", info_class);
+		write_nt_status(emulator, 0xC0000003); // STATUS_INVALID_INFO_CLASS
+	}
+}
+
+static void handle_query_section(const std::shared_ptr<emulator_t>& emulator,
+	std::uint64_t section_handle, std::uint32_t info_class,
+	emulator_t::address_type buffer_address, std::uint32_t buffer_length,
+	emulator_t::address_type return_length_ptr)
+{
+	THREAD_LOG("NtQuerySection called (handle=0x{:X}, class={}, buf=0x{:X}, len=0x{:X})",
+		section_handle, info_class, buffer_address, buffer_length);
+
+	constexpr std::uint32_t status_invalid_handle = 0xC0000008;
+	constexpr std::uint32_t status_info_length_mismatch = 0xC0000004;
+	constexpr std::uint32_t status_invalid_info_class = 0xC0000003;
+	constexpr std::uint32_t status_section_not_image = 0xC0000048;
+
+	std::uint32_t required_size = 0;
+
+	switch (info_class)
+	{
+	case 0:
+		required_size = 24;
+		break;
+	case 1:
+		required_size = 64;
+		break;
+	case 2:
+	case 3:
+		required_size = 8;
+		break;
+	default:
+		THREAD_WARN_LOG("NtQuerySection: unsupported class {}", info_class);
+		write_nt_status(emulator, status_invalid_info_class);
+		return;
+	}
+
+	if (buffer_length < required_size)
+	{
+		if (return_length_ptr)
+		{
+			static_cast<void>(emulator->write_virtual_memory(return_length_ptr, &required_size, sizeof(required_size)));
+		}
+
+		write_nt_status(emulator, status_info_length_mismatch);
+		return;
+	}
+
+	const auto section = kernel::active_handle_table().get_object_from_handle<section_object_t>(section_handle);
+
+	if (!section)
+	{
+		THREAD_WARN_LOG("NtQuerySection: invalid handle 0x{:X}", section_handle);
+		write_nt_status(emulator, status_invalid_handle);
+		return;
+	}
+
+	if (info_class == 0)
+	{
+		struct section_basic_information_t
+		{
+			std::uint64_t base_address;
+			std::uint32_t allocation_attributes;
+			std::uint32_t padding;
+			std::int64_t maximum_size;
+		};
+
+		static_assert(sizeof(section_basic_information_t) == 24);
+
+		std::uint32_t attrs = 0;
+
+		if (section->is_image)
+		{
+			attrs = sec_image;
+		}
+		else
+		{
+			attrs = 0x4000000; // SEC_COMMIT
+		}
+
+		std::int64_t size = 0;
+
+		if (section->file)
+		{
+			size = static_cast<std::int64_t>(section->file->size());
+		}
+
+		section_basic_information_t info = { };
+		info.base_address = 0;
+		info.allocation_attributes = attrs;
+		info.maximum_size = size;
+
+		const emulator_err_t error = emulator->write_virtual_memory(buffer_address, &info, sizeof(info));
+		error.throw_if("NtQuerySection: write SectionBasicInformation");
+
+		if (return_length_ptr)
+		{
+			static_cast<void>(emulator->write_virtual_memory(return_length_ptr, &required_size, sizeof(required_size)));
+		}
+
+		THREAD_LOG("NtQuerySection: basic info -> attrs=0x{:X}, size=0x{:X}", attrs, size);
+
+		write_nt_success(emulator);
+		return;
+	}
+
+	if (info_class == 1)
+	{
+		if (!section->is_image)
+		{
+			THREAD_WARN_LOG("NtQuerySection: class 1 on non-image section");
+			write_nt_status(emulator, status_section_not_image);
+			return;
+		}
+
+		struct section_image_information_t
+		{
+			std::uint64_t transfer_address;
+			std::uint32_t zero_bits;
+			std::uint32_t padding0;
+			std::uint64_t maximum_stack_size;
+			std::uint64_t committed_stack_size;
+			std::uint32_t sub_system_type;
+			std::uint16_t sub_system_minor_version;
+			std::uint16_t sub_system_major_version;
+			std::uint32_t gp_value;
+			std::uint16_t image_characteristics;
+			std::uint16_t dll_characteristics;
+			std::uint16_t machine;
+			std::uint8_t image_contains_code;
+			std::uint8_t image_flags;
+			std::uint32_t loader_flags;
+			std::uint32_t image_file_size;
+			std::uint32_t check_sum;
+		};
+
+		static_assert(sizeof(section_image_information_t) == 64);
+
+		section_image_information_t info = { };
+
+		if (section->file)
+		{
+			const auto data = section->file->read();
+
+			if (data.size() >= sizeof(portable_executable::dos_header_t))
+			{
+				const auto* pe = reinterpret_cast<const portable_executable::image_t*>(data.data());
+				const auto* dos = pe->dos_header();
+
+				if (dos->valid())
+				{
+					const auto* nt = pe->nt_headers();
+					const auto& opt = nt->optional_header;
+
+					info.transfer_address = opt.image_base + opt.address_of_entry_point;
+					info.maximum_stack_size = opt.size_of_stack_reserve;
+					info.committed_stack_size = opt.size_of_stack_commit;
+					info.sub_system_type = opt.subsystem;
+					info.sub_system_minor_version = opt.minor_subsystem_version;
+					info.sub_system_major_version = opt.major_subsystem_version;
+					info.image_characteristics = nt->file_header.characteristics;
+					info.dll_characteristics = opt.dll_characteristics;
+					info.machine = nt->file_header.machine;
+					info.image_contains_code = (opt.size_of_code > 0) ? 1 : 0;
+					info.loader_flags = opt.loader_flags;
+					info.check_sum = opt.check_sum;
+					info.image_file_size = static_cast<std::uint32_t>(data.size());
+				}
+			}
+		}
+
+		const emulator_err_t error = emulator->write_virtual_memory(buffer_address, &info, sizeof(info));
+		error.throw_if("NtQuerySection: write SectionImageInformation");
+
+		if (return_length_ptr)
+		{
+			static_cast<void>(emulator->write_virtual_memory(return_length_ptr, &required_size, sizeof(required_size)));
+		}
+
+		THREAD_LOG("NtQuerySection: image info -> transfer=0x{:X}, machine=0x{:X}, subsystem={}",
+			info.transfer_address, info.machine, info.sub_system_type);
+
+		write_nt_success(emulator);
+		return;
+	}
+
+	std::int64_t value = static_cast<std::int64_t>(section->preferred_base);
+
+	const emulator_err_t error = emulator->write_virtual_memory(buffer_address, &value, sizeof(value));
+	error.throw_if("NtQuerySection: write relocation/original base");
+
+	if (return_length_ptr)
+	{
+		static_cast<void>(emulator->write_virtual_memory(return_length_ptr, &required_size, sizeof(required_size)));
+	}
+
+	THREAD_LOG("NtQuerySection: class {} -> value=0x{:X}", info_class, value);
+
+	write_nt_success(emulator);
+}
+
 void redirect_ntoskrnl_memory_functions(const std::shared_ptr<emulator_t>& emulator,
 	const image_t& mapped_image)
 {
@@ -1261,466 +1880,20 @@ void redirect_ntoskrnl_memory_functions(const std::shared_ptr<emulator_t>& emula
 	redirect_handler<handle_unmap_view_in_system_space>(emulator, mapped_image, "MmUnmapViewInSystemSpace");
 	redirect_handler<handle_build_mdl_for_non_paged_pool>(emulator, mapped_image, "MmBuildMdlForNonPagedPool");
 
-	// NtAllocateVirtualMemory(ProcessHandle, BaseAddress*, ZeroBits, RegionSize*, AllocationType, Protect)
-	const auto allocate_virtual_memory = [emulator]
-	{
-		const auto process_handle = read_raw_arg(emulator, 0);
-		const auto base_address_ptr = read_raw_arg(emulator, 1);
-		const auto zero_bits = read_raw_arg(emulator, 2);
-		const auto region_size_ptr = read_raw_arg(emulator, 3);
-		const auto allocation_type = static_cast<std::uint32_t>(read_raw_arg(emulator, 4));
-		const auto protection = static_cast<std::uint32_t>(read_raw_arg(emulator, 5));
+	redirect_handler<handle_allocate_virtual_memory>(emulator, mapped_image, "NtAllocateVirtualMemory");
+	redirect_handler<handle_allocate_virtual_memory>(emulator, mapped_image, "ZwAllocateVirtualMemory");
 
-		emulator_t::address_type base_address = 0;
-		emulator_t::size_type region_size = 0;
+	redirect_handler<handle_allocate_virtual_memory_ex>(emulator, mapped_image, "NtAllocateVirtualMemoryEx");
+	redirect_handler<handle_allocate_virtual_memory_ex>(emulator, mapped_image, "ZwAllocateVirtualMemoryEx");
 
-		if (base_address_ptr)
-		{
-			static_cast<void>(emulator->read_virtual_memory(base_address_ptr, &base_address, sizeof(base_address)));
-		}
+	redirect_handler<handle_free_virtual_memory>(emulator, mapped_image, "NtFreeVirtualMemory");
+	redirect_handler<handle_free_virtual_memory>(emulator, mapped_image, "ZwFreeVirtualMemory");
 
-		if (region_size_ptr)
-		{
-			static_cast<void>(emulator->read_virtual_memory(region_size_ptr, &region_size, sizeof(region_size)));
-		}
+	redirect_handler<handle_protect_virtual_memory>(emulator, mapped_image, "NtProtectVirtualMemory");
+	redirect_handler<handle_protect_virtual_memory>(emulator, mapped_image, "ZwProtectVirtualMemory");
 
-		THREAD_LOG("NtAllocateVirtualMemory called (process=0x{:X}, base=0x{:X}, size=0x{:X}, type=0x{:X}, prot=0x{:X})",
-			process_handle, base_address, region_size, allocation_type, protection);
-
-		if (!user::memory_manager)
-		{
-			const auto alloc = emulator->heap_allocate(region_size, prot_read_write, true);
-
-			if (alloc)
-			{
-				base_address = *alloc;
-
-				if (base_address_ptr)
-				{
-					static_cast<void>(emulator->write_virtual_memory(base_address_ptr, &base_address, sizeof(base_address)));
-				}
-
-				if (region_size_ptr)
-				{
-					const auto aligned = (region_size + 0xFFF) & ~static_cast<emulator_t::size_type>(0xFFF);
-					static_cast<void>(emulator->write_virtual_memory(region_size_ptr, &aligned, sizeof(aligned)));
-				}
-
-				write_nt_success(emulator);
-			}
-			else
-			{
-				write_nt_status(emulator, 0xC0000017); // STATUS_NO_MEMORY
-			}
-
-			return;
-		}
-
-		const auto status = user::memory_manager->allocate(base_address, region_size, allocation_type, protection);
-
-		if (base_address_ptr)
-		{
-			static_cast<void>(emulator->write_virtual_memory(base_address_ptr, &base_address, sizeof(base_address)));
-		}
-
-		if (region_size_ptr)
-		{
-			static_cast<void>(emulator->write_virtual_memory(region_size_ptr, &region_size, sizeof(region_size)));
-		}
-
-		THREAD_LOG("NtAllocateVirtualMemory -> base=0x{:X}, size=0x{:X}, status=0x{:X}",
-			base_address, region_size, status);
-
-		write_nt_status(emulator, status);
-	};
-
-	redirect_function(allocate_virtual_memory, mapped_image, "NtAllocateVirtualMemory");
-	redirect_function(allocate_virtual_memory, mapped_image, "ZwAllocateVirtualMemory");
-
-	// NtAllocateVirtualMemoryEx(ProcessHandle, BaseAddress*, RegionSize*, AllocationType, PageProtection, ExtendedParameters*, ExtendedParameterCount)
-	const auto allocate_virtual_memory_ex = [emulator]
-	{
-		const auto process_handle = read_raw_arg(emulator, 0);
-		const auto base_address_ptr = read_raw_arg(emulator, 1);
-		const auto region_size_ptr = read_raw_arg(emulator, 2);
-		const auto allocation_type = static_cast<std::uint32_t>(read_raw_arg(emulator, 3));
-		const auto protection = static_cast<std::uint32_t>(read_raw_arg(emulator, 4));
-		const auto extended_params = read_raw_arg(emulator, 5);
-		const auto extended_param_count = static_cast<std::uint32_t>(read_raw_arg(emulator, 6));
-
-		emulator_t::address_type base_address = 0;
-		emulator_t::size_type region_size = 0;
-
-		if (base_address_ptr)
-		{
-			static_cast<void>(emulator->read_virtual_memory(base_address_ptr, &base_address, sizeof(base_address)));
-		}
-
-		if (region_size_ptr)
-		{
-			static_cast<void>(emulator->read_virtual_memory(region_size_ptr, &region_size, sizeof(region_size)));
-		}
-
-		// parse MEM_EXTENDED_PARAMETER for alignment requirements
-		emulator_t::size_type requested_alignment = 0;
-
-		if (extended_params && extended_param_count > 0)
-		{
-			for (std::uint32_t i = 0; i < extended_param_count; ++i)
-			{
-				struct mem_extended_parameter_t
-				{
-					std::uint64_t type_and_reserved;
-					std::uint64_t value;
-				};
-
-				mem_extended_parameter_t param{};
-				const auto param_addr = extended_params + i * sizeof(param);
-				static_cast<void>(emulator->read_virtual_memory(param_addr, &param, sizeof(param)));
-
-				const auto param_type = param.type_and_reserved & 0xFF;
-
-				if (param_type == 1) // MemExtendedParameterAddressRequirements
-				{
-					struct mem_address_requirements_t
-					{
-						std::uint64_t lowest_starting_address;
-						std::uint64_t highest_ending_address;
-						std::uint64_t alignment;
-					};
-
-					mem_address_requirements_t reqs{};
-					static_cast<void>(emulator->read_virtual_memory(param.value, &reqs, sizeof(reqs)));
-
-					requested_alignment = reqs.alignment;
-
-					THREAD_LOG("NtAllocateVirtualMemoryEx: address requirements (lowest=0x{:X}, highest=0x{:X}, alignment=0x{:X})",
-						reqs.lowest_starting_address, reqs.highest_ending_address, reqs.alignment);
-				}
-			}
-		}
-
-		THREAD_LOG("NtAllocateVirtualMemoryEx called (process=0x{:X}, base=0x{:X}, size=0x{:X}, type=0x{:X}, prot=0x{:X}, ext_params=0x{:X}, ext_count={})",
-			process_handle, base_address, region_size, allocation_type, protection, extended_params, extended_param_count);
-
-		if (!user::memory_manager)
-		{
-			const auto alloc = emulator->heap_allocate(region_size, prot_read_write, true);
-
-			if (alloc)
-			{
-				base_address = *alloc;
-
-				if (base_address_ptr)
-				{
-					static_cast<void>(emulator->write_virtual_memory(base_address_ptr, &base_address, sizeof(base_address)));
-				}
-
-				if (region_size_ptr)
-				{
-					const auto aligned = (region_size + 0xFFF) & ~static_cast<emulator_t::size_type>(0xFFF);
-					static_cast<void>(emulator->write_virtual_memory(region_size_ptr, &aligned, sizeof(aligned)));
-				}
-
-				write_nt_success(emulator);
-			}
-			else
-			{
-				write_nt_status(emulator, 0xC0000017); // STATUS_NO_MEMORY
-			}
-
-			return;
-		}
-
-		const auto status = user::memory_manager->allocate(base_address, region_size, allocation_type, protection, requested_alignment);
-
-		if (base_address_ptr)
-		{
-			static_cast<void>(emulator->write_virtual_memory(base_address_ptr, &base_address, sizeof(base_address)));
-		}
-
-		if (region_size_ptr)
-		{
-			static_cast<void>(emulator->write_virtual_memory(region_size_ptr, &region_size, sizeof(region_size)));
-		}
-
-		THREAD_LOG("NtAllocateVirtualMemoryEx -> base=0x{:X}, size=0x{:X}, status=0x{:X}",
-			base_address, region_size, status);
-
-		write_nt_status(emulator, status);
-	};
-
-	redirect_function(allocate_virtual_memory_ex, mapped_image, "NtAllocateVirtualMemoryEx");
-	redirect_function(allocate_virtual_memory_ex, mapped_image, "ZwAllocateVirtualMemoryEx");
-
-	// NtFreeVirtualMemory(ProcessHandle, BaseAddress*, RegionSize*, FreeType)
-	const auto free_virtual_memory = [emulator]
-	{
-		const auto process_handle = read_raw_arg(emulator, 0);
-		const auto base_address_ptr = read_raw_arg(emulator, 1);
-		const auto region_size_ptr = read_raw_arg(emulator, 2);
-		const auto free_type = static_cast<std::uint32_t>(read_raw_arg(emulator, 3));
-
-		emulator_t::address_type base_address = 0;
-		emulator_t::size_type region_size = 0;
-
-		if (base_address_ptr)
-		{
-			static_cast<void>(emulator->read_virtual_memory(base_address_ptr, &base_address, sizeof(base_address)));
-		}
-
-		if (region_size_ptr)
-		{
-			static_cast<void>(emulator->read_virtual_memory(region_size_ptr, &region_size, sizeof(region_size)));
-		}
-
-		THREAD_LOG("NtFreeVirtualMemory called (process=0x{:X}, base=0x{:X}, size=0x{:X}, type=0x{:X})",
-			process_handle, base_address, region_size, free_type);
-
-		if (!user::memory_manager)
-		{
-			write_nt_success(emulator);
-			return;
-		}
-
-		const auto status = user::memory_manager->free(base_address, region_size, free_type);
-
-		if (status == 0)
-		{
-			if (base_address_ptr)
-			{
-				static_cast<void>(emulator->write_virtual_memory(base_address_ptr, &base_address, sizeof(base_address)));
-			}
-
-			if (region_size_ptr)
-			{
-				static_cast<void>(emulator->write_virtual_memory(region_size_ptr, &region_size, sizeof(region_size)));
-			}
-		}
-
-		write_nt_status(emulator, status);
-	};
-
-	redirect_function(free_virtual_memory, mapped_image, "NtFreeVirtualMemory");
-	redirect_function(free_virtual_memory, mapped_image, "ZwFreeVirtualMemory");
-
-	// NtProtectVirtualMemory(ProcessHandle, BaseAddress*, RegionSize*, NewProtect, OldProtect*)
-	const auto protect_virtual_memory = [emulator]
-	{
-		const auto process_handle = read_raw_arg(emulator, 0);
-		const auto base_address_ptr = read_raw_arg(emulator, 1);
-		const auto region_size_ptr = read_raw_arg(emulator, 2);
-		const auto new_protection = static_cast<std::uint32_t>(read_raw_arg(emulator, 3));
-		const auto old_protection_ptr = read_raw_arg(emulator, 4);
-
-		emulator_t::address_type base_address = 0;
-		emulator_t::size_type region_size = 0;
-
-		if (base_address_ptr)
-		{
-			static_cast<void>(emulator->read_virtual_memory(base_address_ptr, &base_address, sizeof(base_address)));
-		}
-
-		if (region_size_ptr)
-		{
-			static_cast<void>(emulator->read_virtual_memory(region_size_ptr, &region_size, sizeof(region_size)));
-		}
-
-		THREAD_LOG("NtProtectVirtualMemory called (process=0x{:X}, base=0x{:X}, size=0x{:X}, new_prot=0x{:X})",
-			process_handle, base_address, region_size, new_protection);
-
-		std::uint32_t old_protection = user::page_readwrite;
-
-		if (user::memory_manager)
-		{
-			const auto status = user::memory_manager->protect(base_address, region_size, new_protection, old_protection);
-
-			if (base_address_ptr)
-			{
-				static_cast<void>(emulator->write_virtual_memory(base_address_ptr, &base_address, sizeof(base_address)));
-			}
-
-			if (region_size_ptr)
-			{
-				static_cast<void>(emulator->write_virtual_memory(region_size_ptr, &region_size, sizeof(region_size)));
-			}
-
-			if (old_protection_ptr)
-			{
-				static_cast<void>(emulator->write_virtual_memory(old_protection_ptr, &old_protection, sizeof(old_protection)));
-			}
-
-			write_nt_status(emulator, status);
-		}
-		else
-		{
-			if (old_protection_ptr)
-			{
-				static_cast<void>(emulator->write_virtual_memory(old_protection_ptr, &old_protection, sizeof(old_protection)));
-			}
-
-			write_nt_success(emulator);
-		}
-	};
-
-	redirect_function(protect_virtual_memory, mapped_image, "NtProtectVirtualMemory");
-	redirect_function(protect_virtual_memory, mapped_image, "ZwProtectVirtualMemory");
-
-	// NtQueryVirtualMemory(ProcessHandle, BaseAddress, InfoClass, Buffer, Length, ReturnLength*)
-	const auto query_virtual_memory = [emulator]
-	{
-		const auto process_handle = read_raw_arg(emulator, 0);
-		const auto base_address = read_raw_arg(emulator, 1);
-		const auto info_class = static_cast<std::uint32_t>(read_raw_arg(emulator, 2));
-		const auto buffer_address = read_raw_arg(emulator, 3);
-		const auto buffer_length = static_cast<std::uint32_t>(read_raw_arg(emulator, 4));
-		const auto return_length_ptr = read_raw_arg(emulator, 5);
-
-		THREAD_LOG("NtQueryVirtualMemory called (process=0x{:X}, base=0x{:X}, class=0x{:X}, buf=0x{:X}, len=0x{:X})",
-			process_handle, base_address, info_class, buffer_address, buffer_length);
-
-		constexpr std::uint32_t memory_basic_information_class = 0;
-		constexpr std::uint32_t memory_working_set_ex_class = 4;
-		constexpr std::uint32_t memory_image_information_class = 6;
-		constexpr std::uint32_t memory_region_information_class = 9;
-
-		if (info_class == memory_basic_information_class)
-		{
-			user::memory_basic_information_t info = {};
-			constexpr std::uint32_t info_size = sizeof(info);
-
-			if (buffer_length < info_size)
-			{
-				if (return_length_ptr)
-				{
-					static_cast<void>(emulator->write_virtual_memory(return_length_ptr, &info_size, sizeof(info_size)));
-				}
-
-				write_nt_status(emulator, 0xC0000004); // STATUS_INFO_LENGTH_MISMATCH
-				return;
-			}
-
-			if (user::memory_manager)
-			{
-				user::memory_manager->query_basic(base_address, info);
-			}
-			else
-			{
-				info.base_address = base_address & ~static_cast<std::uint64_t>(0xFFF);
-				info.region_size = 0x1000;
-				info.state = user::mem_free;
-				info.protect = user::page_noaccess;
-			}
-
-			static_cast<void>(emulator->write_virtual_memory(buffer_address, &info, info_size));
-
-			if (return_length_ptr)
-			{
-				static_cast<void>(emulator->write_virtual_memory(return_length_ptr, &info_size, sizeof(info_size)));
-			}
-
-			THREAD_LOG("NtQueryVirtualMemory: basic info for 0x{:X} -> state=0x{:X}, prot=0x{:X}, size=0x{:X}, type=0x{:X}",
-				base_address, info.state, info.protect, info.region_size, info.type);
-
-			write_nt_success(emulator);
-		}
-		else if (info_class == memory_working_set_ex_class)
-		{
-			THREAD_LOG("NtQueryVirtualMemory: working set ex -> STATUS_NOT_SUPPORTED");
-			write_nt_status(emulator, 0xC00000BB); // STATUS_NOT_SUPPORTED
-		}
-		else if (info_class == memory_image_information_class)
-		{
-			if (base_address >= 0x00007FFFFFFF0000ULL)
-			{
-				THREAD_LOG("NtQueryVirtualMemory: class 6 invalid base 0x{:X} -> STATUS_INVALID_PARAMETER", base_address);
-				write_nt_status(emulator, 0xC000000D); // STATUS_INVALID_PARAMETER
-				return;
-			}
-
-			// MEMORY_IMAGE_INFORMATION: ImageBase(8), SizeOfImage(8), ImageFlags(4)
-			struct
-			{
-				std::uint64_t image_base;
-				std::uint64_t size_of_image;
-				std::uint32_t image_flags;
-			} image_info = {};
-
-			if (user::memory_manager)
-			{
-				user::memory_basic_information_t basic = {};
-				user::memory_manager->query_basic(base_address, basic);
-
-				if (basic.type == user::mem_image)
-				{
-					image_info.image_base = basic.allocation_base;
-					image_info.size_of_image = basic.region_size;
-					image_info.image_flags = 0;
-				}
-			}
-
-			const auto write_size = std::min(static_cast<std::size_t>(buffer_length), sizeof(image_info));
-
-			if (buffer_address && write_size)
-			{
-				static_cast<void>(emulator->write_virtual_memory(buffer_address, &image_info, write_size));
-			}
-
-			if (return_length_ptr)
-			{
-				const auto ret_len = static_cast<std::uint32_t>(sizeof(image_info));
-				static_cast<void>(emulator->write_virtual_memory(return_length_ptr, &ret_len, sizeof(ret_len)));
-			}
-
-			write_nt_success(emulator);
-		}
-		else if (info_class == memory_region_information_class)
-		{
-			// MEMORY_REGION_INFORMATION
-			struct
-			{
-				std::uint64_t allocation_base;
-				std::uint32_t allocation_protect;
-				std::uint32_t padding;
-				std::uint64_t region_size;
-				std::uint64_t commit_size;
-			} region_info = {};
-
-			if (user::memory_manager)
-			{
-				user::memory_basic_information_t basic = {};
-				user::memory_manager->query_basic(base_address, basic);
-
-				region_info.allocation_base = basic.allocation_base;
-				region_info.allocation_protect = basic.allocation_protect;
-				region_info.region_size = basic.region_size;
-				region_info.commit_size = (basic.state == user::mem_commit) ? basic.region_size : 0;
-			}
-
-			const auto write_size = std::min(static_cast<std::size_t>(buffer_length), sizeof(region_info));
-
-			if (buffer_address && write_size)
-			{
-				static_cast<void>(emulator->write_virtual_memory(buffer_address, &region_info, write_size));
-			}
-
-			if (return_length_ptr)
-			{
-				const auto ret_len = static_cast<std::uint32_t>(sizeof(region_info));
-				static_cast<void>(emulator->write_virtual_memory(return_length_ptr, &ret_len, sizeof(ret_len)));
-			}
-
-			write_nt_success(emulator);
-		}
-		else
-		{
-			THREAD_WARN_LOG("NtQueryVirtualMemory: unhandled class 0x{:X}", info_class);
-			write_nt_status(emulator, 0xC0000003); // STATUS_INVALID_INFO_CLASS
-		}
-	};
-
-	redirect_function(query_virtual_memory, mapped_image, "NtQueryVirtualMemory");
-	redirect_function(query_virtual_memory, mapped_image, "ZwQueryVirtualMemory");
+	redirect_handler<handle_query_virtual_memory>(emulator, mapped_image, "NtQueryVirtualMemory");
+	redirect_handler<handle_query_virtual_memory>(emulator, mapped_image, "ZwQueryVirtualMemory");
 
 	// NtFlushInstructionCache(ProcessHandle, BaseAddress, Length)
 	redirect_handler<handle_flush_instruction_cache>(emulator, mapped_image, "NtFlushInstructionCache");
@@ -1728,213 +1901,6 @@ void redirect_ntoskrnl_memory_functions(const std::shared_ptr<emulator_t>& emula
 	// NtFlushProcessWriteBuffers()
 	redirect_handler<handle_flush_process_write_buffers>(emulator, mapped_image, "NtFlushProcessWriteBuffers");
 
-	// NtQuerySection(Handle, SectionInformationClass, SectionInformation, SectionInformationLength, ReturnLength*)
-	// classes: 0=SectionBasicInformation (24 bytes), 1=SectionImageInformation (64 bytes),
-	//          2=SectionRelocationInformation (8 bytes), 3=SectionOriginalBaseInformation (8 bytes)
-	const auto query_section_handler = [emulator]
-	{
-		const auto section_handle = read_raw_arg(emulator, 0);
-		const auto info_class = static_cast<std::uint32_t>(read_raw_arg(emulator, 1));
-		const auto buffer_address = read_raw_arg(emulator, 2);
-		const auto buffer_length = static_cast<std::uint32_t>(read_raw_arg(emulator, 3));
-		const auto return_length_ptr = read_raw_arg(emulator, 4);
-
-		THREAD_LOG("NtQuerySection called (handle=0x{:X}, class={}, buf=0x{:X}, len=0x{:X})",
-			section_handle, info_class, buffer_address, buffer_length);
-
-		constexpr std::uint32_t status_invalid_handle = 0xC0000008;
-		constexpr std::uint32_t status_info_length_mismatch = 0xC0000004;
-		constexpr std::uint32_t status_invalid_info_class = 0xC0000003;
-		constexpr std::uint32_t status_section_not_image = 0xC0000048;
-
-		std::uint32_t required_size = 0;
-
-		switch (info_class)
-		{
-		case 0:
-			required_size = 24;
-			break;
-		case 1:
-			required_size = 64;
-			break;
-		case 2:
-		case 3:
-			required_size = 8;
-			break;
-		default:
-			THREAD_WARN_LOG("NtQuerySection: unsupported class {}", info_class);
-			write_nt_status(emulator, status_invalid_info_class);
-			return;
-		}
-
-		if (buffer_length < required_size)
-		{
-			if (return_length_ptr)
-			{
-				static_cast<void>(emulator->write_virtual_memory(return_length_ptr, &required_size, sizeof(required_size)));
-			}
-
-			write_nt_status(emulator, status_info_length_mismatch);
-			return;
-		}
-
-		const auto section = kernel::active_handle_table().get_object_from_handle<section_object_t>(section_handle);
-
-		if (!section)
-		{
-			THREAD_WARN_LOG("NtQuerySection: invalid handle 0x{:X}", section_handle);
-			write_nt_status(emulator, status_invalid_handle);
-			return;
-		}
-
-		if (info_class == 0)
-		{
-			// SectionBasicInformation: BaseAddress (8), AllocationAttributes (4), padding (4), MaximumSize (8)
-			struct section_basic_information_t
-			{
-				std::uint64_t base_address;
-				std::uint32_t allocation_attributes;
-				std::uint32_t padding;
-				std::int64_t maximum_size;
-			};
-
-			static_assert(sizeof(section_basic_information_t) == 24);
-
-			std::uint32_t attrs = 0;
-
-			if (section->is_image)
-			{
-				attrs = sec_image;
-			}
-			else
-			{
-				attrs = 0x4000000; // SEC_COMMIT
-			}
-
-			std::int64_t size = 0;
-
-			if (section->file)
-			{
-				size = static_cast<std::int64_t>(section->file->size());
-			}
-
-			section_basic_information_t info = { };
-			info.base_address = 0;
-			info.allocation_attributes = attrs;
-			info.maximum_size = size;
-
-			const emulator_err_t error = emulator->write_virtual_memory(buffer_address, &info, sizeof(info));
-			error.throw_if("NtQuerySection: write SectionBasicInformation");
-
-			if (return_length_ptr)
-			{
-				static_cast<void>(emulator->write_virtual_memory(return_length_ptr, &required_size, sizeof(required_size)));
-			}
-
-			THREAD_LOG("NtQuerySection: basic info -> attrs=0x{:X}, size=0x{:X}", attrs, size);
-
-			write_nt_success(emulator);
-			return;
-		}
-
-		if (info_class == 1)
-		{
-			// SectionImageInformation (64 bytes) - only valid for SEC_IMAGE sections
-			if (!section->is_image)
-			{
-				THREAD_WARN_LOG("NtQuerySection: class 1 on non-image section");
-				write_nt_status(emulator, status_section_not_image);
-				return;
-			}
-
-			// parsed from the PE header in the backing file
-			struct section_image_information_t
-			{
-				std::uint64_t transfer_address;
-				std::uint32_t zero_bits;
-				std::uint32_t padding0;
-				std::uint64_t maximum_stack_size;
-				std::uint64_t committed_stack_size;
-				std::uint32_t sub_system_type;
-				std::uint16_t sub_system_minor_version;
-				std::uint16_t sub_system_major_version;
-				std::uint32_t gp_value;
-				std::uint16_t image_characteristics;
-				std::uint16_t dll_characteristics;
-				std::uint16_t machine;
-				std::uint8_t image_contains_code;
-				std::uint8_t image_flags;
-				std::uint32_t loader_flags;
-				std::uint32_t image_file_size;
-				std::uint32_t check_sum;
-			};
-
-			static_assert(sizeof(section_image_information_t) == 64);
-
-			section_image_information_t info = { };
-
-			if (section->file)
-			{
-				const auto data = section->file->read();
-
-				if (data.size() >= sizeof(portable_executable::dos_header_t))
-				{
-					const auto* pe = reinterpret_cast<const portable_executable::image_t*>(data.data());
-					const auto* dos = pe->dos_header();
-
-					if (dos->valid())
-					{
-						const auto* nt = pe->nt_headers();
-						const auto& opt = nt->optional_header;
-
-						info.transfer_address = opt.image_base + opt.address_of_entry_point;
-						info.maximum_stack_size = opt.size_of_stack_reserve;
-						info.committed_stack_size = opt.size_of_stack_commit;
-						info.sub_system_type = opt.subsystem;
-						info.sub_system_minor_version = opt.minor_subsystem_version;
-						info.sub_system_major_version = opt.major_subsystem_version;
-						info.image_characteristics = nt->file_header.characteristics;
-						info.dll_characteristics = opt.dll_characteristics;
-						info.machine = nt->file_header.machine;
-						info.image_contains_code = (opt.size_of_code > 0) ? 1 : 0;
-						info.loader_flags = opt.loader_flags;
-						info.check_sum = opt.check_sum;
-						info.image_file_size = static_cast<std::uint32_t>(data.size());
-					}
-				}
-			}
-
-			const emulator_err_t error = emulator->write_virtual_memory(buffer_address, &info, sizeof(info));
-			error.throw_if("NtQuerySection: write SectionImageInformation");
-
-			if (return_length_ptr)
-			{
-				static_cast<void>(emulator->write_virtual_memory(return_length_ptr, &required_size, sizeof(required_size)));
-			}
-
-			THREAD_LOG("NtQuerySection: image info -> transfer=0x{:X}, machine=0x{:X}, subsystem={}",
-				info.transfer_address, info.machine, info.sub_system_type);
-
-			write_nt_success(emulator);
-			return;
-		}
-
-		// class 2 (SectionRelocationInformation) and class 3 (SectionOriginalBaseInformation) - return preferred base
-		std::int64_t value = static_cast<std::int64_t>(section->preferred_base);
-
-		const emulator_err_t error = emulator->write_virtual_memory(buffer_address, &value, sizeof(value));
-		error.throw_if("NtQuerySection: write relocation/original base");
-
-		if (return_length_ptr)
-		{
-			static_cast<void>(emulator->write_virtual_memory(return_length_ptr, &required_size, sizeof(required_size)));
-		}
-
-		THREAD_LOG("NtQuerySection: class {} -> value=0x{:X}", info_class, value);
-
-		write_nt_success(emulator);
-	};
-
-	redirect_function(query_section_handler, mapped_image, "NtQuerySection");
-	redirect_function(query_section_handler, mapped_image, "ZwQuerySection");
+	redirect_handler<handle_query_section>(emulator, mapped_image, "NtQuerySection");
+	redirect_handler<handle_query_section>(emulator, mapped_image, "ZwQuerySection");
 }

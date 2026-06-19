@@ -96,6 +96,7 @@ T resolve_argument(const std::shared_ptr<emulator_t>& emulator, std::size_t& ind
 
 template <typename Result, typename... Args>
 void forward_redirect(
+	[[maybe_unused]] bool& skip_return,
 	const std::shared_ptr<emulator_t>& emulator,
 	Result (*handler)(const std::shared_ptr<emulator_t>&, Args...))
 {
@@ -116,12 +117,37 @@ void forward_redirect(
 	}
 }
 
+template <typename Result, typename... Args>
+void forward_redirect(
+	bool& skip_return,
+	const std::shared_ptr<emulator_t>& emulator,
+	Result (*handler)(bool&, const std::shared_ptr<emulator_t>&, Args...))
+{
+	std::size_t index = 0;
+	std::tuple<bool&, const std::shared_ptr<emulator_t>&, Args...> args{
+		skip_return,
+		emulator,
+		resolve_argument<std::remove_cv_t<std::remove_reference_t<Args>>>(emulator, index)...
+	};
+
+	if constexpr (std::is_void_v<Result>)
+	{
+		std::apply(handler, std::move(args));
+	}
+	else
+	{
+		const auto result = std::apply(handler, std::move(args));
+		write_return_value(emulator, static_cast<std::uint64_t>(result));
+	}
+}
+
 template <auto Handler>
 void redirect_handler(const std::shared_ptr<emulator_t>& emulator,
 	const image_t& mapped_image, std::string_view name)
 {
 	redirect_function(
-		[emulator] { forward_redirect(emulator, Handler); },
+		kernel::function_implementation_t(
+			[emulator](bool& skip_return) { forward_redirect(skip_return, emulator, Handler); }),
 		mapped_image,
 		name
 	);
