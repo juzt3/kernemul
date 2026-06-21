@@ -308,36 +308,33 @@ void kernel::run_all_threads(const std::shared_ptr<emulator_t>& emulator, const 
 	{
 		do
 		{
-			if (pending_thread_switch)
+			if (!wait_for_runnable_thread())
 			{
-				if (!wait_for_runnable_thread())
+				if (pending_threads.empty() && delete_current_thread)
 				{
-					if (pending_threads.empty() && delete_current_thread)
+					break;
+				}
+
+				GLOBAL_LOG("switching thread {} -> {}", current_thread->id(), pending_threads.front()->id());
+				perform_thread_switch();
+
+				if (current_thread)
+				{
+					const auto thread_addr = current_thread->address();
+
+					if (kprcb_address)
 					{
-						break;
+						static_cast<void>(emulator->write_virtual_memory(
+							kprcb_address + offsetof(_KPRCB, CurrentThread),
+							&thread_addr, sizeof(thread_addr)));
 					}
 
-					GLOBAL_LOG("switching thread {} -> {}", current_thread->id(), pending_threads.front()->id());
-					perform_thread_switch();
-
-					if (current_thread)
+					if (kpcr_address)
 					{
-						const auto thread_addr = current_thread->address();
-
-						if (kprcb_address)
-						{
-							static_cast<void>(emulator->write_virtual_memory(
-								kprcb_address + offsetof(_KPRCB, CurrentThread),
-								&thread_addr, sizeof(thread_addr)));
-						}
-
-						if (kpcr_address)
-						{
-							constexpr std::uint64_t embedded_current_thread_offset = 0x188;
-							static_cast<void>(emulator->write_virtual_memory(
-								kpcr_address + embedded_current_thread_offset,
-								&thread_addr, sizeof(thread_addr)));
-						}
+						constexpr std::uint64_t embedded_current_thread_offset = 0x188;
+						static_cast<void>(emulator->write_virtual_memory(
+							kpcr_address + embedded_current_thread_offset,
+							&thread_addr, sizeof(thread_addr)));
 					}
 				}
 			}
@@ -372,10 +369,11 @@ void kernel::run_all_threads(const std::shared_ptr<emulator_t>& emulator, const 
 				}
 
 				delete_current_thread = true;
-				pending_thread_switch = true;
 			}
 
-		} while (pending_thread_switch);
+			pending_thread_switch = true;
+
+		} while (true);
 
 		GLOBAL_LOG("run_all_threads finished (pending_threads={})", pending_threads.size());
 	}

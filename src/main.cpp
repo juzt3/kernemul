@@ -213,6 +213,33 @@ static void set_up_ntoskrnl_globals(const std::shared_ptr<emulator_t>& emulator,
 	}
 }
 
+static void patch_dbgctl_check(const std::shared_ptr<emulator_t>& emulator)
+{
+	const auto image_buffer = kernel::emulated_module->buffer();
+	const auto image = reinterpret_cast<const portable_executable::image_t*>(image_buffer.data());
+
+	if (const auto dbgctl_signature = image->signature_scan("0F 30 0F 32"))
+	{
+		const std::int64_t dbgctl_rva = dbgctl_signature - image_buffer.data();
+		const emulator_t::address_type dbgctl_runtime_address = kernel::emulated_module->base_address() + dbgctl_rva;
+
+		constexpr std::array<std::uint8_t, 4> stub = {
+			0x31, 0xD2, // xor edx, edx
+			0xB0, 0x03  // mov al, 3
+		};
+
+		const emulator_err_t error = emulator->write_virtual_memory(dbgctl_runtime_address, stub);
+
+		error.throw_if("write MSR stub memory");
+
+		GLOBAL_LOG("patched dbgctl wrmsr;rdmsr at 0x{:X}", dbgctl_runtime_address);
+	}
+	else
+	{
+		GLOBAL_LOG("dbgctl wrmsr;rdmsr signature not found in emulated module");
+	}
+}
+
 static void set_up_lstar_msr(const std::shared_ptr<emulator_t>& emulator, const std::shared_ptr<image_t>& nt_image)
 {
 	if (const auto ki_system_call = nt_image->find_symbol("KiSystemCall64"))
@@ -269,7 +296,11 @@ std::int32_t main()
 {
 	try
 	{
+#ifdef USE_UNICORN_BACKEND
+		const auto emulator = std::static_pointer_cast<emulator_t>(std::make_shared<unicorn_emulator_t>());
+#else
 		const auto emulator = std::static_pointer_cast<emulator_t>(std::make_shared<hypermulator_t>());
+#endif
 
 		kernel::filesystem = std::make_shared<filesystem_t>();
 		kernel::registry = std::make_shared<registry_t>();
@@ -597,6 +628,15 @@ std::int32_t main()
 
 				THREAD_LOG("cpuid executed at 0x{:X} (rax=0x{:X}, rcx=0x{:X})", rip, rax, rcx);
 
+#ifdef EMULATED_MODULE_DO_PATCH
+				static bool patched = false;
+				if (!patched)
+				{
+					patch_dbgctl_check(emulator);
+					patched = true;
+				}
+#endif
+
 				std::array<std::int32_t, 4> result;
 
 				__cpuidex(result.data(), rax, rcx);
@@ -729,6 +769,12 @@ std::int32_t main()
 		msr_values[0x40000071] = 1;                      // HV_X64_MSR_SVERSION
 		msr_values[0x40000100] = 0;                      // HV_X64_MSR_VP_ASSIST_PAGE
 
+#ifdef USE_UNICORN_BACKEND
+		for (const auto& [msr_id, msr_val] : msr_values)
+		{
+			emulator->write_msr(static_cast<x86::msr>(msr_id), msr_val);
+		}
+#endif
 
 		error = emulator->hook_msr(
 			[emulator](const std::uint32_t msr_number, const bool write)

@@ -13,11 +13,7 @@
 #include <array>
 #include <format>
 
-constexpr std::uint16_t kernel_cs_selector = 2 * sizeof(segment_descriptor_32);
-constexpr std::uint16_t kernel_ds_selector = 3 * sizeof(segment_descriptor_32);
 constexpr std::uint16_t tss_selector_value = 8 * sizeof(segment_descriptor_32);
-
-constexpr std::uint32_t segment_limit = 0xFFFFF;
 
 constexpr std::uint16_t data_segment_attributes =
 	SEGMENT_DESCRIPTOR_TYPE_DATA_READ_WRITE_ACCESSED
@@ -55,8 +51,8 @@ segment_descriptor_32 make_gdt_descriptor(const std::uint32_t privilege_level)
 	descriptor.granularity = 1;
 	descriptor.descriptor_privilege_level = privilege_level;
 	descriptor.descriptor_type = SEGMENT_DESCRIPTOR_TYPE_CODE_OR_DATA;
-	descriptor.segment_limit_low = segment_limit & 0xFFFF;
-	descriptor.segment_limit_high = (segment_limit >> 16) & 0xF;
+	descriptor.segment_limit_low = kernel::segment_limit & 0xFFFF;
+	descriptor.segment_limit_high = (kernel::segment_limit >> 16) & 0xF;
 
 	return descriptor;
 }
@@ -84,19 +80,19 @@ segment_descriptor_32 make_data_gdt_descriptor(const std::uint32_t privilege_lev
 
 void kernel::set_up_segments(const std::shared_ptr<emulator_t>& emulator)
 {
-	auto error = emulator->write_segment(x86::segment_reg::cs, kernel_cs_selector, 0, segment_limit, code_segment_attributes);
+	auto error = emulator->write_segment(x86::segment_reg::cs, kernel_cs_selector, 0, kernel::segment_limit, code_segment_attributes);
 	error.throw_if("write CS");
 
-	error = emulator->write_segment(x86::segment_reg::ss, kernel_ds_selector, 0, segment_limit, data_segment_attributes);
+	error = emulator->write_segment(x86::segment_reg::ss, kernel_ds_selector, 0, kernel::segment_limit, data_segment_attributes);
 	error.throw_if("write SS");
 
-	error = emulator->write_segment(x86::segment_reg::ds, kernel_ds_selector, 0, segment_limit, data_segment_attributes);
+	error = emulator->write_segment(x86::segment_reg::ds, kernel_ds_selector, 0, kernel::segment_limit, data_segment_attributes);
 	error.throw_if("write DS");
 
-	error = emulator->write_segment(x86::segment_reg::es, kernel_ds_selector, 0, segment_limit, data_segment_attributes);
+	error = emulator->write_segment(x86::segment_reg::es, kernel_ds_selector, 0, kernel::segment_limit, data_segment_attributes);
 	error.throw_if("write ES");
 
-	error = emulator->write_segment(x86::segment_reg::fs, kernel_ds_selector, 0, segment_limit, data_segment_attributes);
+	error = emulator->write_segment(x86::segment_reg::fs, kernel_ds_selector, 0, kernel::segment_limit, data_segment_attributes);
 	error.throw_if("write FS");
 
 	GLOBAL_LOG("configured segment registers: CS=0x{:X} SS/DS/ES/FS=0x{:X}", kernel_cs_selector, kernel_ds_selector);
@@ -105,7 +101,7 @@ void kernel::set_up_segments(const std::shared_ptr<emulator_t>& emulator)
 void kernel::set_up_kernel_gs(const std::shared_ptr<emulator_t>& emulator, const emulator_t::address_type kpcr_address)
 {
 	const emulator_err_t error = emulator->write_segment(
-		x86::segment_reg::gs, kernel_ds_selector, kpcr_address, segment_limit, data_segment_attributes);
+		x86::segment_reg::gs, kernel_ds_selector, kpcr_address, kernel::segment_limit, data_segment_attributes);
 
 	error.throw_if("write kernel gs segment");
 
@@ -381,7 +377,7 @@ void kernel::set_up_idt(const std::shared_ptr<emulator_t>& emulator, const image
 void kernel::swap_to_kernel_gs(const std::shared_ptr<emulator_t>& emulator)
 {
 	const emulator_err_t error = emulator->write_segment(
-		x86::segment_reg::gs, kernel_ds_selector, kpcr_address, segment_limit, data_segment_attributes);
+		x86::segment_reg::gs, kernel_ds_selector, kpcr_address, kernel::segment_limit, data_segment_attributes);
 
 	error.throw_if("swap to kernel gs");
 }
@@ -390,7 +386,7 @@ void kernel::swap_to_usermode_gs(const std::shared_ptr<emulator_t>& emulator,
                                  const emulator_t::address_type teb_address)
 {
 	const emulator_err_t error = emulator->write_segment(
-		x86::segment_reg::gs, user_ds_selector, teb_address, segment_limit, user_data_segment_attributes);
+		x86::segment_reg::gs, user_ds_selector, teb_address, kernel::segment_limit, user_data_segment_attributes);
 
 	error.throw_if("swap to usermode gs");
 }
@@ -398,21 +394,21 @@ void kernel::swap_to_usermode_gs(const std::shared_ptr<emulator_t>& emulator,
 void kernel::swap_to_kernel_segments(const std::shared_ptr<emulator_t>& emulator)
 {
 	auto error = emulator->write_segment(
-		x86::segment_reg::cs, kernel_cs_selector, 0, segment_limit, code_segment_attributes);
+		x86::segment_reg::cs, kernel_cs_selector, 0, kernel::segment_limit, code_segment_attributes);
 	error.throw_if("swap to kernel cs");
 
 	error = emulator->write_segment(
-		x86::segment_reg::ss, kernel_ds_selector, 0, segment_limit, data_segment_attributes);
+		x86::segment_reg::ss, kernel_ds_selector, 0, kernel::segment_limit, data_segment_attributes);
 	error.throw_if("swap to kernel ss");
 }
 
 void kernel::swap_to_usermode_segments(const std::shared_ptr<emulator_t>& emulator)
 {
 	auto error = emulator->write_segment(
-		x86::segment_reg::cs, user_cs_selector, 0, segment_limit, user_code_segment_attributes);
+		x86::segment_reg::cs, user_cs_selector, 0, kernel::segment_limit, user_code_segment_attributes);
 	error.throw_if("swap to usermode cs");
 
 	error = emulator->write_segment(
-		x86::segment_reg::ss, user_ds_selector, 0, segment_limit, user_data_segment_attributes);
+		x86::segment_reg::ss, user_ds_selector, 0, kernel::segment_limit, user_data_segment_attributes);
 	error.throw_if("swap to usermode ss");
 }

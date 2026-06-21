@@ -1,6 +1,8 @@
 #pragma once
 #include "../emulator.hpp"
 
+#include <atomic>
+
 class unicorn_hook_t : public emulator_hook_t
 {
 public:
@@ -23,6 +25,11 @@ public:
 	void set_native_hook(const native_hook_type native_hook)
 	{
 		native_hook_ = native_hook;
+	}
+
+	[[nodiscard]] const owning_emulator_type& owning_emulator() const noexcept
+	{
+		return owning_emulator_;
 	}
 
 protected:
@@ -79,10 +86,14 @@ public:
 
 	void cancel_pending_single_step() override { }
 
+	emulator_err_t monitor_msr(std::uint32_t msr_index) override { return {}; }
+
 	[[nodiscard]] std::expected<msr_value_type, emulator_err_t> read_msr(x86::msr msr) const override;
 	[[nodiscard]] emulator_err_t write_msr(x86::msr msr, msr_value_type value) override;
 
 	[[nodiscard]] backend_type native_backend() const;
+
+	std::atomic<bool> redirect_pending_ = false;
 
 protected:
 	[[nodiscard]] emulator_err_t read_msr_safe(x86::msr msr, msr_value_type* value) const;
@@ -116,4 +127,8 @@ protected:
 
 protected:
 	backend_type backend_ = nullptr;
+
+	static constexpr size_type physical_memory_chunk_size = 64 * 1024 * 1024;
+	address_type mapped_physical_end_ = 0;
+	std::atomic<bool> stop_requested_ = false;
 };

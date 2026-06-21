@@ -1,5 +1,8 @@
 #include "unicorn_backend.hpp"
 #include "../emulator.hpp"
+#include "../../kernel/segments.hpp"
+#include "../../user/user_memory.hpp"
+#include "../../util/logs.hpp"
 
 #include <ia32-doc/ia32.hpp>
 
@@ -196,28 +199,235 @@ unicorn_hook_t::~unicorn_hook_t()
 	uc_hook_del(native_emulator, native_hook_);
 }
 
+static std::int32_t syscall_insn_hook(uc_engine* uc, void* user_data)
+{
+	auto* emulator = static_cast<unicorn_emulator_t*>(user_data);
+
+	const auto lstar_result = emulator->read_msr(static_cast<x86::msr>(0xC0000082));
+	if (!lstar_result || *lstar_result == 0)
+	{
+		return 0;
+	}
+	const auto lstar = *lstar_result;
+
+	std::uint64_t rip = 0;
+	uc_reg_read(uc, UC_X86_REG_RIP, &rip);
+
+	std::uint64_t old_rflags = 0;
+	uc_reg_read(uc, UC_X86_REG_RFLAGS, &old_rflags);
+
+	const std::uint64_t return_rip = rip + 2;
+	uc_reg_write(uc, UC_X86_REG_RCX, &return_rip);
+	uc_reg_write(uc, UC_X86_REG_R11, &old_rflags);
+
+	const auto sfmask_result = emulator->read_msr(static_cast<x86::msr>(0xC0000084));
+	const std::uint64_t sfmask = sfmask_result ? *sfmask_result : 0;
+	const std::uint64_t new_rflags = old_rflags & ~sfmask;
+	uc_reg_write(uc, UC_X86_REG_RFLAGS, &new_rflags);
+
+	// compensate for Unicorn's skip-advance (adds insn length after returning 1)
+	const std::uint64_t target_rip = lstar - 2;
+	uc_reg_write(uc, UC_X86_REG_RIP, &target_rip);
+
+	emulator->write_segment(x86::segment_reg::cs, kernel::kernel_cs_selector, 0, kernel::segment_limit, kernel::kernel_code_attributes);
+	emulator->write_segment(x86::segment_reg::ss, kernel::kernel_ds_selector, 0, kernel::segment_limit, kernel::kernel_data_attributes);
+
+	emulator->redirect_pending_ = true;
+	uc_emu_stop(uc);
+
+	return 1;
+}
+
+static void interrupt_hook_callback(uc_engine* uc, uint32_t intno, void* user_data)
+{
+	auto* emulator = static_cast<unicorn_emulator_t*>(user_data);
+
+	uint64_t rip = 0;
+	uc_reg_read(uc, UC_X86_REG_RIP, &rip);
+
+	static uint64_t intr_count = 0;
+	if (++intr_count <= 20)
+	{
+		GLOBAL_LOG("UC_HOOK_INTR: intno={} rip=0x{:X}", intno, rip);
+	}
+
+	// sysret (0F 07) causes #UD because Unicorn doesn't support UC_X86_INS_SYSRET hooks
+	if (intno == 6)
+	{
+		std::uint8_t insn_bytes[2] = {};
+		emulator->read_virtual_memory(rip, insn_bytes, sizeof(insn_bytes));
+
+		if (insn_bytes[0] == 0x0F && insn_bytes[1] == 0x07)
+		{
+			std::uint64_t target_rip = 0;
+			uc_reg_read(uc, UC_X86_REG_RCX, &target_rip);
+
+			std::uint64_t saved_rflags = 0;
+			uc_reg_read(uc, UC_X86_REG_R11, &saved_rflags);
+			uc_reg_write(uc, UC_X86_REG_RFLAGS, &saved_rflags);
+
+			uc_reg_write(uc, UC_X86_REG_RIP, &target_rip);
+
+			const auto star_result = emulator->read_msr(static_cast<x86::msr>(0xC0000081));
+			const std::uint64_t star = star_result ? *star_result : 0;
+			const auto user_cs = static_cast<std::uint16_t>((star >> 48) + 16);
+			const auto user_ss = static_cast<std::uint16_t>((star >> 48) + 8);
+
+			emulator->write_segment(x86::segment_reg::cs, user_cs, 0, kernel::segment_limit, kernel::user_code_attributes);
+			emulator->write_segment(x86::segment_reg::ss, user_ss, 0, kernel::segment_limit, kernel::user_data_attributes);
+			return;
+		}
+	}
+
+	// #PF: try demand-commit before delivering through the IDT
+	if (intno == 14 && user::memory_manager)
+	{
+		uint64_t cr2 = 0;
+		uc_reg_read(uc, UC_X86_REG_CR2, &cr2);
+
+		if (user::memory_manager->try_demand_commit(cr2)
+			|| user::memory_manager->try_handle_guard_page(cr2))
+		{
+			uc_ctl_flush_tlb(uc);
+			return;
+		}
+	}
+
+	// deliver all other exceptions through the IDT
+	uc_x86_mmr idtr = {};
+	uc_reg_read(uc, UC_X86_REG_IDTR, &idtr);
+	if (idtr.base == 0)
+	{
+		return;
+	}
+
+	std::uint8_t idt_entry[16] = {};
+	if (emulator->read_virtual_memory(idtr.base + intno * 16, idt_entry, sizeof(idt_entry)))
+	{
+		return;
+	}
+
+	const auto offset_low = *reinterpret_cast<std::uint16_t*>(idt_entry);
+	const auto handler_cs = *reinterpret_cast<std::uint16_t*>(idt_entry + 2);
+	const auto offset_mid = *reinterpret_cast<std::uint16_t*>(idt_entry + 6);
+	const auto offset_high = *reinterpret_cast<std::uint32_t*>(idt_entry + 8);
+
+	const uint64_t handler =
+		static_cast<uint64_t>(offset_low) |
+		(static_cast<uint64_t>(offset_mid) << 16) |
+		(static_cast<uint64_t>(offset_high) << 32);
+
+	if (handler == 0)
+	{
+		return;
+	}
+
+	uint64_t old_rsp = 0;
+	uc_reg_read(uc, UC_X86_REG_RSP, &old_rsp);
+
+	uint64_t old_rflags = 0;
+	uc_reg_read(uc, UC_X86_REG_RFLAGS, &old_rflags);
+
+	uc_x86_mmr cs_seg = {};
+	uc_reg_read(uc, UC_X86_REG_CS, &cs_seg);
+
+	uc_x86_mmr ss_seg = {};
+	uc_reg_read(uc, UC_X86_REG_SS, &ss_seg);
+
+	const bool privilege_change = (cs_seg.selector & 3) != 0;
+
+	uint64_t new_rsp;
+	if (privilege_change)
+	{
+		uc_x86_mmr tr = {};
+		uc_reg_read(uc, UC_X86_REG_TR, &tr);
+		uint64_t tss_rsp0 = 0;
+		if (emulator->read_virtual_memory(tr.base + 4, &tss_rsp0, 8) || tss_rsp0 == 0)
+		{
+			return;
+		}
+		new_rsp = tss_rsp0;
+	}
+	else
+	{
+		new_rsp = old_rsp;
+	}
+
+	// push interrupt frame: SS, RSP, RFLAGS, CS, RIP
+	const uint64_t ss_val = static_cast<uint64_t>(ss_seg.selector);
+	const uint64_t cs_val = static_cast<uint64_t>(cs_seg.selector);
+
+	new_rsp -= 8;
+	emulator->write_virtual_memory(new_rsp, &ss_val, 8);
+	new_rsp -= 8;
+	emulator->write_virtual_memory(new_rsp, &old_rsp, 8);
+	new_rsp -= 8;
+	emulator->write_virtual_memory(new_rsp, &old_rflags, 8);
+	new_rsp -= 8;
+	emulator->write_virtual_memory(new_rsp, &cs_val, 8);
+	new_rsp -= 8;
+	emulator->write_virtual_memory(new_rsp, &rip, 8);
+
+	constexpr std::uint32_t error_code_vectors[] = { 8, 10, 11, 12, 13, 14, 17, 21, 29, 30 };
+	bool needs_error_code = false;
+	for (const auto v : error_code_vectors)
+	{
+		if (v == intno)
+		{
+			needs_error_code = true;
+			break;
+		}
+	}
+
+	if (needs_error_code)
+	{
+		uint64_t error_code = 0;
+		if (intno == 14)
+		{
+			// basic #PF error code: U/S from current privilege level
+			if (privilege_change)
+			{
+				error_code |= 4;
+			}
+		}
+		new_rsp -= 8;
+		emulator->write_virtual_memory(new_rsp, &error_code, 8);
+	}
+
+	uc_reg_write(uc, UC_X86_REG_RSP, &new_rsp);
+	uc_reg_write(uc, UC_X86_REG_RIP, &handler);
+
+	emulator->write_segment(x86::segment_reg::cs, handler_cs, 0, kernel::segment_limit, kernel::kernel_code_attributes);
+
+	if (privilege_change)
+	{
+		emulator->write_segment(x86::segment_reg::ss, kernel::kernel_ds_selector, 0, kernel::segment_limit, kernel::kernel_data_attributes);
+	}
+}
+
 unicorn_emulator_t::unicorn_emulator_t()
 {
 	auto error = emulator_err_t{ uc_open(UC_ARCH_X86, UC_MODE_64, &backend_) };
-
 	error.throw_if("unable to create backend engine");
 
 	set_up_page_tables();
-
 	enable_protected_mode(*this);
-
 	enable_paging(*this);
 	enable_physical_address_extension(*this);
-
 	enable_ia32e_mode(*this);
 
 	error = emulator_err_t{ uc_ctl_tlb_mode(backend_, UC_TLB_CPU) };
-
 	error.throw_if("unable to set TLB mode");
 
-	error = emulator_err_t{ uc_ctl_flush_tlb(backend_) };
+	uc_hook intr_hook = 0;
+	error = emulator_err_t{ uc_hook_add(backend_, &intr_hook, UC_HOOK_INTR,
+		reinterpret_cast<void*>(interrupt_hook_callback), this, 1, 0) };
+	error.throw_if("unable to add interrupt hook");
 
-	error.throw_if("unable to flush TLB");
+	uc_hook sc_hook = 0;
+	error = emulator_err_t{ uc_hook_add(backend_, &sc_hook, UC_HOOK_INSN,
+		reinterpret_cast<void*>(syscall_insn_hook), this, 1, 0, UC_X86_INS_SYSCALL) };
+	error.throw_if("unable to add SYSCALL hook");
 }
 
 unicorn_emulator_t::~unicorn_emulator_t()
@@ -230,11 +440,62 @@ unicorn_emulator_t::~unicorn_emulator_t()
 
 emulator_err_t unicorn_emulator_t::run_at(const address_type start_address, const address_type end_address)
 {
-	return emulator_err_t{ uc_emu_start(backend_, start_address, end_address, 0, 0) };
+	stop_requested_ = false;
+	redirect_pending_ = false;
+
+	address_type current_address = start_address;
+
+	while (true)
+	{
+		const auto uc_result = uc_emu_start(backend_, current_address, end_address, 0, 0);
+
+		address_type rip = 0;
+		static_cast<void>(read_register(x86::reg::rip, &rip));
+
+		if (redirect_pending_)
+		{
+			redirect_pending_ = false;
+			current_address = rip;
+			continue;
+		}
+
+		if (rip == thread_return_address)
+		{
+			return emulator_err_t{ true };
+		}
+
+		if (stop_requested_)
+		{
+			stop_requested_ = false;
+			redirect_pending_ = false;
+			return emulator_err_t{ false };
+		}
+
+		if (uc_result == UC_ERR_EXCEPTION)
+		{
+			GLOBAL_WARN_LOG("run_at: CPU exception at rip=0x{:X}", rip);
+			return emulator_err_t{ false };
+		}
+
+		if (uc_result != UC_ERR_OK)
+		{
+			GLOBAL_WARN_LOG("run_at: uc_emu_start error {} ({}) at rip=0x{:X}",
+				static_cast<int>(uc_result), uc_strerror(uc_result), rip);
+			return emulator_err_t{ uc_result };
+		}
+
+		if (end_address != 0 && rip == end_address)
+		{
+			return {};
+		}
+
+		current_address = rip;
+	}
 }
 
 emulator_err_t unicorn_emulator_t::stop()
 {
+	stop_requested_ = true;
 	return emulator_err_t{ uc_emu_stop(backend_) };
 }
 
@@ -243,16 +504,37 @@ emulator_err_t unicorn_emulator_t::map_physical_memory(const address_type addres
 {
 	const address_type aligned_address = align_down(address, page_size);
 	const size_type aligned_size = align_up(size, page_size);
+	const address_type required_end = aligned_address + aligned_size;
 
-	return emulator_err_t{ uc_mem_map(backend_, aligned_address, aligned_size, convert_prot(protection)) };
+	if (required_end <= mapped_physical_end_)
+	{
+		return {};
+	}
+
+	const address_type map_start = (mapped_physical_end_ > aligned_address)
+		? mapped_physical_end_
+		: aligned_address;
+
+	const size_type needed = required_end - map_start;
+	const size_type map_size = (needed < physical_memory_chunk_size)
+		? physical_memory_chunk_size
+		: align_up(needed, physical_memory_chunk_size);
+
+	const auto error = emulator_err_t{ uc_mem_map(backend_, map_start, map_size, UC_PROT_ALL) };
+
+	if (error)
+	{
+		return error;
+	}
+
+	mapped_physical_end_ = map_start + map_size;
+
+	return {};
 }
 
 emulator_err_t unicorn_emulator_t::unmap_physical_memory(const address_type address, const size_type size)
 {
-	const address_type aligned_address = align_down(address, page_size);
-	const size_type aligned_size = align_up(size, page_size);
-
-	return emulator_err_t{ uc_mem_unmap(backend_, aligned_address, aligned_size) };
+	return {};
 }
 
 emulator_err_t unicorn_emulator_t::protect_physical_memory(const address_type address, const size_type size,
@@ -342,15 +624,45 @@ emulator_err_t unicorn_emulator_t::write_segment(const x86::segment_reg seg, con
 		.flags = attributes
 	};
 
-	return emulator_err_t{ uc_reg_write(backend_, uc_reg, &segment) };
+	const auto result = uc_reg_write(backend_, uc_reg, &segment);
+
+	if (result == UC_ERR_OK)
+	{
+		if (uc_reg == UC_X86_REG_GS)
+		{
+			std::uint64_t gs_base = base;
+			uc_reg_write(backend_, UC_X86_REG_GS_BASE, &gs_base);
+		}
+		else if (uc_reg == UC_X86_REG_FS)
+		{
+			std::uint64_t fs_base = base;
+			uc_reg_write(backend_, UC_X86_REG_FS_BASE, &fs_base);
+		}
+	}
+
+	return emulator_err_t{ result };
 }
 
-static std::int32_t uc_wrapper_insn_hook([[maybe_unused]] const uc_engine* const engine,
+static std::int32_t uc_wrapper_insn_hook(uc_engine* const engine,
                                          const unicorn_hook_t* const hook)
 {
-	const auto& hook_callback = hook->callback();
+	std::uint64_t rip_before = 0;
+	uc_reg_read(engine, UC_X86_REG_RIP, &rip_before);
 
-	return std::get<emulator_hook_t::instruction_callback>(hook_callback)();
+	const auto& hook_callback = hook->callback();
+	const auto result = std::get<emulator_hook_t::instruction_callback>(hook_callback)();
+
+	std::uint64_t rip_after = 0;
+	uc_reg_read(engine, UC_X86_REG_RIP, &rip_after);
+
+	if (rip_after != rip_before)
+	{
+		auto* emulator = static_cast<unicorn_emulator_t*>(hook->owning_emulator().get());
+		emulator->redirect_pending_ = true;
+		uc_emu_stop(engine);
+	}
+
+	return result;
 }
 
 static void uc_wrapper_bb_hook([[maybe_unused]] const uc_engine* const engine,
@@ -397,6 +709,26 @@ static void uc_wrapper_mem_access_hook([[maybe_unused]] const uc_engine* const e
 	std::get<emulator_hook_t::memory_access_callback>(hook_callback)(address, convert_access_to_prot(type));
 }
 
+static void uc_wrapper_execute_redirect_hook(uc_engine* const engine,
+                                             const std::uint64_t address,
+                                             [[maybe_unused]] const std::uint32_t size,
+                                             const unicorn_hook_t* const hook)
+{
+	const auto& hook_callback = hook->callback();
+
+	std::get<emulator_hook_t::memory_access_callback>(hook_callback)(address, prot_execute);
+
+	std::uint64_t rip = 0;
+	uc_reg_read(engine, UC_X86_REG_RIP, &rip);
+
+	if (rip != address)
+	{
+		auto* emulator = static_cast<unicorn_emulator_t*>(hook->owning_emulator().get());
+		emulator->redirect_pending_ = true;
+		uc_emu_stop(engine);
+	}
+}
+
 std::expected<emulator_t::hook_type, emulator_err_t> unicorn_emulator_t::hook_instruction(
 	const x86::insn instruction, const emulator_hook_t::instruction_callback& callback,
 	const address_type start_address, const address_type end_address)
@@ -432,6 +764,11 @@ std::expected<emulator_t::hook_type, emulator_err_t> unicorn_emulator_t::hook_me
 	const emulator_hook_t::memory_access_callback& callback, const protection_type monitored_protection,
 	const address_type start_address, const address_type end_address)
 {
+	if (monitored_protection == prot_execute)
+	{
+		return add_native_hook(UC_HOOK_CODE, uc_wrapper_execute_redirect_hook, callback, start_address, end_address);
+	}
+
 	const uc_hook_type hook_type = convert_prot_to_mem_access_hook(monitored_protection);
 
 	return add_native_hook(hook_type, uc_wrapper_mem_access_hook, callback, start_address, end_address);
@@ -443,7 +780,7 @@ std::expected<emulator_t::msr_value_type, emulator_err_t> unicorn_emulator_t::re
 
 	const emulator_err_t error = read_msr_safe(msr, &value);
 
-	if (!error)
+	if (error)
 	{
 		return std::unexpected(error);
 	}
@@ -483,7 +820,13 @@ emulator_err_t unicorn_emulator_t::write_msr_safe(const x86::msr msr, const msr_
 std::expected<emulator_t::hook_type, emulator_err_t> unicorn_emulator_t::hook_msr(
 	const emulator_hook_t::msr_callback& callback)
 {
-	return std::unexpected(emulator_err_t{ false });
+	// Unicorn 2 does not support UC_HOOK_INSN for RDMSR/WRMSR.
+	// Guest RDMSR/WRMSR operate on Unicorn's internal MSR state directly.
+	// Pre-seed MSR values via write_msr before emulation starts.
+	const auto casted_this = std::static_pointer_cast<unicorn_emulator_t>(shared_from_this());
+	auto hook = std::make_shared<unicorn_hook_t>(casted_this, uc_hook{}, callback);
+	push_hook(hook);
+	return hook;
 }
 
 unicorn_emulator_t::backend_type unicorn_emulator_t::native_backend() const
