@@ -8,23 +8,14 @@
 #include "../../user/user_memory.hpp"
 #include "../../user/exception_dispatch.hpp"
 
-#include <Windows.h>
+#include "../../util/time.hpp"
+
 #include <numeric>
 #include <thread>
 #include <atomic>
 #include <chrono>
 #include <cstring>
 #include <vector>
-
-using nt_query_information_process_fn = NTSTATUS(NTAPI*)(HANDLE, ULONG, PVOID, ULONG, PULONG);
-
-static nt_query_information_process_fn get_host_nt_query_information_process()
-{
-	static const auto fn = reinterpret_cast<nt_query_information_process_fn>(
-		GetProcAddress(GetModuleHandleA("ntdll.dll"), "NtQueryInformationProcess"));
-
-	return fn;
-}
 
 static std::uint8_t get_guest_irql(const std::shared_ptr<emulator_t>& emulator)
 {
@@ -148,9 +139,7 @@ static void handle_set_timer(const std::shared_ptr<emulator_t>& emulator,
 
 	if (due_time < 0)
 	{
-		FILETIME ft;
-		GetSystemTimeAsFileTime(&ft);
-		const auto now = (static_cast<std::uint64_t>(ft.dwHighDateTime) << 32) | ft.dwLowDateTime;
+		const auto now = util::filetime_now();
 		absolute_due_time = now + static_cast<std::uint64_t>(-due_time);
 	}
 	else
@@ -2427,14 +2416,14 @@ static void handle_query_performance_counter(const std::shared_ptr<emulator_t>& 
 	if (counter_ptr)
 	{
 		LARGE_INTEGER counter;
-		QueryPerformanceCounter(&counter);
+		counter.QuadPart = util::performance_counter();
 		static_cast<void>(emulator->write_virtual_memory(counter_ptr, &counter, sizeof(counter)));
 	}
 
 	if (frequency_ptr)
 	{
 		LARGE_INTEGER frequency;
-		QueryPerformanceFrequency(&frequency);
+		frequency.QuadPart = util::performance_frequency();
 		static_cast<void>(emulator->write_virtual_memory(frequency_ptr, &frequency, sizeof(frequency)));
 	}
 
@@ -2451,7 +2440,7 @@ static void handle_query_system_time(const std::shared_ptr<emulator_t>& emulator
 	if (time_ptr)
 	{
 		LARGE_INTEGER time;
-		GetSystemTimeAsFileTime(reinterpret_cast<FILETIME*>(&time));
+		time.QuadPart = static_cast<LONGLONG>(util::filetime_now());
 		static_cast<void>(emulator->write_virtual_memory(time_ptr, &time, sizeof(time)));
 	}
 
@@ -3948,9 +3937,7 @@ static void wait_for_single_impl(const std::shared_ptr<emulator_t>& emulator,
 
 			if (due_time.QuadPart != 0)
 			{
-				FILETIME ft;
-				GetSystemTimeAsFileTime(&ft);
-				const auto now = (static_cast<std::uint64_t>(ft.dwHighDateTime) << 32) | ft.dwLowDateTime;
+				const auto now = util::filetime_now();
 
 				if (now >= due_time.QuadPart)
 				{
@@ -4112,9 +4099,7 @@ static void handle_wait_for_multiple_objects(bool& skip_return, const std::share
 			return;
 		}
 
-		FILETIME ft;
-		GetSystemTimeAsFileTime(&ft);
-		const auto now = (static_cast<std::uint64_t>(ft.dwHighDateTime) << 32) | ft.dwLowDateTime;
+		const auto now = util::filetime_now();
 
 		if (now >= due_time.QuadPart)
 		{

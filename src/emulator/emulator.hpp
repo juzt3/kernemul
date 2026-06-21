@@ -10,6 +10,7 @@
 #include <span>
 #include <stdexcept>
 #include <array>
+#include <cstring>
 #include <optional>
 
 union paging_virtual_address_t

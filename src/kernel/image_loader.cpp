@@ -409,7 +409,7 @@ static void add_to_loaded_module_list(const std::shared_ptr<emulator_t>& emulato
 std::shared_ptr<image_t> kernel::map_image(const std::shared_ptr<emulator_t>& emulator,
 	const std::string_view name, const image_load_options_t& options)
 {
-	const std::filesystem::path vfs_path = std::filesystem::path("vfs\\").append(name);
+	const std::filesystem::path vfs_path = std::filesystem::path("vfs").append(name);
 
 	portable_executable::file_t pe_file(vfs_path);
 

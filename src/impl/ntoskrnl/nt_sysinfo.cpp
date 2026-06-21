@@ -1,26 +1,10 @@
 #include "nt_helpers.hpp"
 #include "../../kernel/process_loader.hpp"
-#include <Windows.h>
 
-// todo: remove this once all needed classes are implemented
-using nt_query_system_information_fn = NTSTATUS(NTAPI*)(ULONG, PVOID, ULONG, PULONG);
-using nt_query_system_information_ex_fn = NTSTATUS(NTAPI*)(ULONG, PVOID, ULONG, PVOID, ULONG, PULONG);
-
-static nt_query_system_information_fn get_host_nt_query_system_information()
-{
-	static const auto fn = reinterpret_cast<nt_query_system_information_fn>(
-		GetProcAddress(GetModuleHandleA("ntdll.dll"), "NtQuerySystemInformation"));
-
-	return fn;
-}
-
-static nt_query_system_information_ex_fn get_host_nt_query_system_information_ex()
-{
-	static const auto fn = reinterpret_cast<nt_query_system_information_ex_fn>(
-		GetProcAddress(GetModuleHandleA("ntdll.dll"), "NtQuerySystemInformationEx"));
-
-	return fn;
-}
+#ifndef _MSC_VER
+#include <strings.h>
+#define _stricmp strcasecmp
+#endif
 
 constexpr std::uint32_t status_info_length_mismatch = 0xC0000004;
 constexpr std::uint32_t status_not_implemented = 0xC0000002;
@@ -1015,76 +999,8 @@ static void handle_query_system_information(const std::shared_ptr<emulator_t>& e
 		return;
 	}
 
-	// fallback: forward to host for classes we haven't implemented
-	const auto host_fn = get_host_nt_query_system_information();
-
-	std::uint32_t status = status_not_implemented;
-
-	if (!host_fn)
-	{
-		THREAD_WARN_LOG("NtQuerySystemInformation: class 0x{:X}, host fallback unavailable", info_class);
-	}
-	else
-	{
-		THREAD_LOG("NtQuerySystemInformation: forwarding class 0x{:X} to host", info_class);
-
-		std::vector<std::uint8_t> host_buffer(buffer_length);
-		ULONG host_return_length = 0;
-
-		status = static_cast<std::uint32_t>(host_fn(
-			info_class, host_buffer.data(), buffer_length, &host_return_length));
-
-		if (buffer_length && buffer_address)
-		{
-			if (const auto write_size = std::min(static_cast<std::uint32_t>(host_return_length), buffer_length))
-			{
-				emulator_err_t error = emulator->write_virtual_memory(
-					buffer_address, host_buffer.data(), write_size);
-
-				error.throw_if("write host query result to guest");
-			}
-		}
-
-		if (return_length_address)
-		{
-			emulator_err_t error = emulator->write_virtual_memory(
-				return_length_address, &host_return_length, sizeof(host_return_length));
-
-			error.throw_if("write host return length to guest");
-		}
-
-		THREAD_LOG("NtQuerySystemInformation: host returned 0x{:X} (return_length=0x{:X})",
-			status, host_return_length);
-
-		if (info_class == system_module_information_ex && status == 0)
-		{
-			fixup_module_information_ex(emulator, host_buffer, host_return_length,
-				buffer_address, buffer_length, "NtQuerySystemInformation");
-		}
-
-		if (info_class == system_module_information && status == 0)
-		{
-			fixup_module_information(emulator, host_buffer, host_return_length,
-				buffer_address, buffer_length);
-		}
-	}
-
-	if (status == status_info_length_mismatch && return_length_address)
-	{
-		std::uint32_t returned_length = 0;
-
-		emulator_err_t error = emulator->read_virtual_memory(return_length_address, &returned_length, sizeof(returned_length));
-
-		error.throw_if("read return length for logging");
-
-		THREAD_LOG("NtQuerySystemInformation returning 0x{:X} (required_size=0x{:X})", status, returned_length);
-	}
-	else
-	{
-		THREAD_LOG("NtQuerySystemInformation returning 0x{:X}", status);
-	}
-
-	write_nt_status(emulator, status);
+	THREAD_WARN_LOG("NtQuerySystemInformation: unhandled class 0x{:X}, returning STATUS_NOT_IMPLEMENTED", info_class);
+	write_nt_status(emulator, status_not_implemented);
 }
 
 static void handle_query_system_information_ex(const std::shared_ptr<emulator_t>& emulator,
@@ -1234,91 +1150,8 @@ static void handle_query_system_information_ex(const std::shared_ptr<emulator_t>
 		return;
 	}
 
-	// todo: implement needed classes and remove host passthrough
-	const auto host_fn = get_host_nt_query_system_information_ex();
-
-	std::uint32_t status = status_not_implemented;
-
-	if (!host_fn)
-	{
-		THREAD_WARN_LOG("NtQuerySystemInformationEx: class 0x{:X}, host fallback unavailable", info_class);
-	}
-	else
-	{
-		THREAD_LOG("NtQuerySystemInformationEx: forwarding class 0x{:X} to host", info_class);
-
-		std::vector<std::uint8_t> input_buffer(input_buffer_length);
-
-		if (input_buffer_length && input_buffer_address)
-		{
-			emulator_err_t error = emulator->read_virtual_memory(
-				input_buffer_address, input_buffer.data(), input_buffer_length);
-
-			error.throw_if("read host query input buffer from guest");
-		}
-
-		std::vector<std::uint8_t> host_buffer(buffer_length);
-		ULONG host_return_length = 0;
-
-		status = static_cast<std::uint32_t>(host_fn(
-			info_class,
-			input_buffer_length ? input_buffer.data() : nullptr,
-			input_buffer_length,
-			host_buffer.data(),
-			buffer_length,
-			&host_return_length));
-
-		if (buffer_length && buffer_address)
-		{
-			if (const auto write_size = std::min(static_cast<std::uint32_t>(host_return_length), buffer_length))
-			{
-				emulator_err_t error = emulator->write_virtual_memory(
-					buffer_address, host_buffer.data(), write_size);
-
-				error.throw_if("write host query result to guest");
-			}
-		}
-
-		if (return_length_address)
-		{
-			emulator_err_t error = emulator->write_virtual_memory(
-				return_length_address, &host_return_length, sizeof(host_return_length));
-
-			error.throw_if("write host return length to guest");
-		}
-
-		THREAD_LOG("NtQuerySystemInformationEx: host returned 0x{:X} (return_length=0x{:X})",
-			status, host_return_length);
-
-		if (info_class == system_module_information_ex && status == 0)
-		{
-			fixup_module_information_ex(emulator, host_buffer, host_return_length,
-				buffer_address, buffer_length, "NtQuerySystemInformationEx");
-		}
-
-		if (info_class == system_module_information && status == 0)
-		{
-			fixup_module_information(emulator, host_buffer, host_return_length,
-				buffer_address, buffer_length);
-		}
-	}
-
-	if (status == status_info_length_mismatch && return_length_address)
-	{
-		std::uint32_t returned_length = 0;
-
-		emulator_err_t error = emulator->read_virtual_memory(return_length_address, &returned_length, sizeof(returned_length));
-
-		error.throw_if("read return length for logging");
-
-		THREAD_LOG("NtQuerySystemInformationEx returning 0x{:X} (required_size=0x{:X})", status, returned_length);
-	}
-	else
-	{
-		THREAD_LOG("NtQuerySystemInformationEx returning 0x{:X}", status);
-	}
-
-	write_nt_status(emulator, status);
+	THREAD_WARN_LOG("NtQuerySystemInformationEx: unhandled class 0x{:X}, returning STATUS_NOT_IMPLEMENTED", info_class);
+	write_nt_status(emulator, status_not_implemented);
 }
 
 void redirect_ntoskrnl_sysinfo_functions(const std::shared_ptr<emulator_t>& emulator,

@@ -1,5 +1,10 @@
-#include "emulator/backend/hypermulator_backend.hpp"
+#include "config.hpp"
+
+#ifdef USE_UNICORN_BACKEND
 #include "emulator/backend/unicorn_backend.hpp"
+#else
+#include "emulator/backend/hypermulator_backend.hpp"
+#endif
 #include "emulator/object.hpp"
 #include "event/event.hpp"
 #include "kernel/kernel.hpp"
@@ -8,7 +13,6 @@
 #include "kernel/image_loader.hpp"
 #include "kernel/process_loader.hpp"
 #include "kernel/segments.hpp"
-#include "config.hpp"
 #include "user/exception_dispatch.hpp"
 #include "user/user.hpp"
 #include "user/user_memory.hpp"
@@ -16,17 +20,35 @@
 #include <ia32-doc/ia32.hpp>
 
 #include "portable_executable/image.hpp"
+#include "util/cpuid.hpp"
 #include "util/logs.hpp"
+#include "util/time.hpp"
 #include "util/util.hpp"
 
 static void set_up_user_shared_data(const std::shared_ptr<emulator_t>& emulator)
 {
-	_KUSER_SHARED_DATA contents;
-	std::memcpy(&contents, reinterpret_cast<const void*>(0x7FFE0000), sizeof(contents));
+	_KUSER_SHARED_DATA contents{};
 
-	contents.Cookie = 0;
+	contents.NtMajorVersion = 10;
+	contents.NtMinorVersion = 0;
+	contents.NtBuildNumber = 19041;
+	contents.NtProductType = static_cast<_NT_PRODUCT_TYPE>(1); // NtProductWinNt
+	contents.ProductTypeIsValid = 1;
+	contents.NativeProcessorArchitecture = 9; // AMD64
+	contents.ImageNumberLow = 0x8664;
+	contents.ImageNumberHigh = 0x8664;
 	contents.ActiveProcessorCount = kernel::processor_count;
 	contents.ActiveGroupCount = 1;
+	contents.NumberOfPhysicalPages = 0x100000;
+	contents.LargePageMinimum = 0x200000;
+
+	const auto now = util::filetime_now();
+	contents.SystemTime.LowPart = static_cast<ULONG>(now & 0xFFFFFFFF);
+	contents.SystemTime.High1Time = static_cast<LONG>(now >> 32);
+	contents.SystemTime.High2Time = static_cast<LONG>(now >> 32);
+
+	contents.TickCountMultiplier = 0x0FA00000;
+	contents.Cookie = 0;
 
 	emulator_object_t<_KUSER_SHARED_DATA>::allocate_at(emulator, contents, 0xFFFFF78000000000);
 
@@ -637,9 +659,7 @@ std::int32_t main()
 				}
 #endif
 
-				std::array<std::int32_t, 4> result;
-
-				__cpuidex(result.data(), rax, rcx);
+				const auto result = host_cpuid(rax, rcx);
 
 				emulator->write_register<x86::reg::rax, std::int32_t>(result[0]);
 				emulator->write_register<x86::reg::rbx, std::int32_t>(result[1]);
@@ -652,7 +672,7 @@ std::int32_t main()
 			emulator_t::default_end_address
 		).error_or({});
 
-		error.throw_if("instruction hook attach");
+		error.throw_if("cpuid hook attach");
 
 		error = emulator->hook_invalid_memory(
 			[emulator](const emulator_t::address_type faulting_address, const protection_t access) -> bool

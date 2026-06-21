@@ -99,9 +99,9 @@ protected:
 	[[nodiscard]] emulator_err_t read_msr_safe(x86::msr msr, msr_value_type* value) const;
 	emulator_err_t write_msr_safe(x86::msr msr, msr_value_type value);
 
-	template <class ...Args>
+	template <class CallbackT, class ...Args>
 	[[nodiscard]] std::expected<hook_type, emulator_err_t> add_native_hook(
-		const std::int32_t hook_type, void* const uc_callback_wrapper, const emulator_hook_t::callback_type& callback,
+		const std::int32_t hook_type, CallbackT uc_callback_wrapper, const emulator_hook_t::callback_type& callback,
 		const address_type start_address, const address_type end_address, Args... arguments)
 	{
 		const auto casted_this = std::static_pointer_cast<unicorn_emulator_t>(shared_from_this());
@@ -110,7 +110,8 @@ protected:
 
 		uc_hook native_hook = 0;
 
-		const emulator_err_t error(uc_hook_add(backend_, &native_hook, hook_type, uc_callback_wrapper, hook.get(),
+		const emulator_err_t error(uc_hook_add(backend_, &native_hook, hook_type,
+		                                       reinterpret_cast<void*>(uc_callback_wrapper), hook.get(),
 		                                       start_address, end_address, arguments...));
 
 		if (error)

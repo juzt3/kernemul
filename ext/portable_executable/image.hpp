@@ -11,6 +11,7 @@
 #include "exception_directory.hpp"
 #include "load_config_directory.hpp"
 
+#include <cstring>
 #include <vector>
 
 namespace portable_executable

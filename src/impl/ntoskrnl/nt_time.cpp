@@ -1,6 +1,8 @@
 #include "nt_helpers.hpp"
 
+#if defined(_MSC_VER)
 #include <intrin.h>
+#endif
 
 static constexpr std::uint8_t normal_year_day_to_month[365] = {
 	 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -47,9 +49,14 @@ static std::int64_t rtl_extended_magic_divide(const std::int64_t dividend,
 {
 	auto abs_dividend = static_cast<std::uint64_t>(dividend < 0 ? -dividend : dividend);
 
-	unsigned __int64 high = 0;
+	std::uint64_t high = 0;
 
+#if defined(_MSC_VER)
 	_umul128(abs_dividend, static_cast<std::uint64_t>(magic_divisor), &high);
+#else
+	const auto product = static_cast<unsigned __int128>(abs_dividend) * static_cast<std::uint64_t>(magic_divisor);
+	high = static_cast<std::uint64_t>(product >> 64);
+#endif
 
 	const auto result = static_cast<std::int64_t>(high >> shift_count);
 

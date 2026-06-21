@@ -1,7 +1,7 @@
 #include "cng_bcrypt.hpp"
 
+#ifdef _WIN32
 #include <bcrypt.h>
-
 #pragma comment(lib, "bcrypt.lib")
 
 // BCryptOpenAlgorithmProvider(BCRYPT_ALG_HANDLE *phAlgorithm, LPCWSTR pszAlgId, LPCWSTR pszImplementation, ULONG dwFlags)
@@ -688,3 +688,14 @@ void redirect_cng_bcrypt_functions(const std::shared_ptr<emulator_t>& emulator,
 	redirect_handler<handle_import_key_pair>(emulator, mapped_image, "BCryptImportKeyPair");
 	redirect_handler<handle_verify_signature>(emulator, mapped_image, "BCryptVerifySignature");
 }
+
+#else
+
+void redirect_cng_bcrypt_functions(const std::shared_ptr<emulator_t>& emulator,
+	const image_t& mapped_image)
+{
+	(void)emulator;
+	(void)mapped_image;
+}
+
+#endif

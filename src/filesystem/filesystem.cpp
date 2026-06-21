@@ -221,7 +221,7 @@ std::vector<filesystem_t::directory_entry_t> filesystem_t::list_directory(const 
 
 bool filesystem_t::load_at(const std::string& host_path, const path_type& virtual_path)
 {
-	std::filesystem::path vfs_path = std::filesystem::path("vfs\\").append(host_path);
+	std::filesystem::path vfs_path = std::filesystem::path("vfs").append(host_path);
 
 	if (host_path.starts_with("vfs"))
 	{
@@ -248,7 +248,7 @@ bool filesystem_t::load_directory_at(const std::string& host_path, const path_ty
 {
 	std::error_code ec;
 
-	const std::filesystem::path vfs_path = std::filesystem::path("vfs\\").append(host_path);
+	const std::filesystem::path vfs_path = std::filesystem::path("vfs").append(host_path);
 
 	const std::filesystem::path host_root(vfs_path);
 

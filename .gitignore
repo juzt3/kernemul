@@ -15,6 +15,7 @@
 
 *.txt
 
+build_wsl/
 src/config.hpp
 
 *.dll

@@ -17,6 +17,7 @@
 #include <portable_executable/image.hpp>
 
 #include <algorithm>
+#include <cstring>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -132,12 +133,7 @@ static emulator_t::address_type try_load_api_set_from_pe(
 static emulator_t::address_type build_api_set_map(
 	const std::shared_ptr<emulator_t>& emulator)
 {
-	auto schema_data = util::read_file(std::filesystem::path("vfs") / "apisetschema.dll");
-
-	if (!schema_data)
-	{
-		schema_data = util::read_file(std::filesystem::path("C:\\Windows\\System32\\apisetschema.dll"));
-	}
+	const auto schema_data = util::read_file(std::filesystem::path("vfs") / "apisetschema.dll");
 
 	if (schema_data)
 	{

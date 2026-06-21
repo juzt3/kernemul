@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <vector>
 #include <string>
+#include <string_view>
 #include <filesystem>
 
 namespace portable_executable

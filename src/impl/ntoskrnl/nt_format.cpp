@@ -190,10 +190,10 @@ std::wstring guest_vswprintf(const emulator_t& emulator, const std::wstring_view
 			case length_mod_t::ll:
 			case length_mod_t::I64:
 			case length_mod_t::z:
-				swprintf_s(buffer, spec_str.c_str(), static_cast<std::uint64_t>(raw_arg));
+				swprintf(buffer, std::size(buffer), spec_str.c_str(), static_cast<std::uint64_t>(raw_arg));
 				break;
 			default:
-				swprintf_s(buffer, spec_str.c_str(), static_cast<std::uint32_t>(raw_arg));
+				swprintf(buffer, std::size(buffer), spec_str.c_str(), static_cast<std::uint32_t>(raw_arg));
 				break;
 			}
 
@@ -205,7 +205,7 @@ std::wstring guest_vswprintf(const emulator_t& emulator, const std::wstring_view
 		{
 			const auto raw_arg = read_guest_vararg(emulator, va_list_address, arg_index);
 
-			swprintf_s(buffer, spec_str.c_str(), reinterpret_cast<void*>(raw_arg));
+			swprintf(buffer, std::size(buffer), spec_str.c_str(), reinterpret_cast<void*>(raw_arg));
 
 			result += buffer;
 
@@ -433,10 +433,10 @@ std::string guest_vsprintf(const emulator_t& emulator, const std::string_view fo
 			case length_mod_t::ll:
 			case length_mod_t::I64:
 			case length_mod_t::z:
-				sprintf_s(buffer, spec_str.c_str(), static_cast<std::uint64_t>(raw_arg));
+				snprintf(buffer, std::size(buffer), spec_str.c_str(), static_cast<std::uint64_t>(raw_arg));
 				break;
 			default:
-				sprintf_s(buffer, spec_str.c_str(), static_cast<std::uint32_t>(raw_arg));
+				snprintf(buffer, std::size(buffer), spec_str.c_str(), static_cast<std::uint32_t>(raw_arg));
 				break;
 			}
 
@@ -448,7 +448,7 @@ std::string guest_vsprintf(const emulator_t& emulator, const std::string_view fo
 		{
 			const auto raw_arg = read_guest_vararg(emulator, va_list_address, arg_index);
 
-			sprintf_s(buffer, spec_str.c_str(), reinterpret_cast<void*>(raw_arg));
+			snprintf(buffer, std::size(buffer), spec_str.c_str(), reinterpret_cast<void*>(raw_arg));
 
 			result += buffer;
 

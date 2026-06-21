@@ -28,7 +28,8 @@
 #	define PDB_CPP_17						0
 #endif
 
-// define used standard types
+#if PDB_COMPILER_MSVC
+// define used standard types (no-CRT mode)
 typedef decltype(sizeof(0)) size_t;
 static_assert(sizeof(sizeof(0)) == sizeof(size_t), "Wrong size.");
 
@@ -43,3 +44,12 @@ static_assert(sizeof(uint16_t) == 2u, "Wrong size.");
 
 typedef unsigned int uint32_t;
 static_assert(sizeof(uint32_t) == 4u, "Wrong size.");
+#else
+#include <cstddef>
+#include <cstdint>
+using ::size_t;
+using ::uint8_t;
+using ::uint16_t;
+using ::uint32_t;
+using ::int32_t;
+#endif

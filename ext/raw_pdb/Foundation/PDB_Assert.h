@@ -11,10 +11,13 @@ PDB_PUSH_WARNING_CLANG
 PDB_DISABLE_WARNING_CLANG("-Wgnu-zero-variadic-macro-arguments")
 PDB_DISABLE_WARNING_CLANG("-Wreserved-identifier")
 
-extern "C" void __cdecl __debugbreak(void);
-
 #if PDB_COMPILER_MSVC
+extern "C" void __cdecl __debugbreak(void);
 #	pragma intrinsic(__debugbreak)
+#elif defined(__GNUC__) || defined(__clang__)
+#	define __debugbreak() __builtin_trap()
+#else
+#	define __debugbreak() ((void)0)
 #endif
 
 

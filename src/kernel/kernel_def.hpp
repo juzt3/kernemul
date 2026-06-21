@@ -1,6 +1,5 @@
 #pragma once
-#include <Windows.h>
-#include <winternl.h>
+#include "windows_types.hpp"
 
 //0x10 bytes (sizeof)
 struct _TIME_FIELDS

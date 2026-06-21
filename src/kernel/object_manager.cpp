@@ -1,7 +1,7 @@
 #include "object_manager.hpp"
 #include "../util/logs.hpp"
 
-#include <Windows.h>
+#include "windows_types.hpp"
 
 object_manager_t::object_manager_t(std::shared_ptr<emulator_t> emulator)
 	: emulator_(std::move(emulator))

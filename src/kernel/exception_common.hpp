@@ -3,7 +3,7 @@
 #include "../emulator/emulator.hpp"
 #include "thread.hpp"
 
-#include <Windows.h>
+#include "windows_types.hpp"
 
 #include <cstdint>
 #include <cstring>

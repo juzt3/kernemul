@@ -1,9 +1,10 @@
 /** @file */
 #pragma once
-using uint8_t   = unsigned char     ;
-using uint16_t  = unsigned short    ;
-using uint32_t  = unsigned int      ;
-using uint64_t  = unsigned long long;
+#include <cstdint>
+using uint8_t   = std::uint8_t ;
+using uint16_t  = std::uint16_t;
+using uint32_t  = std::uint32_t;
+using uint64_t  = std::uint64_t;
 
 #if defined(_MSC_EXTENSIONS)
 #pragma warning(push)
