@@ -55,7 +55,6 @@ void kernel::switch_thread(const std::shared_ptr<emulator_t>& emulator, const bo
 
 	error.throw_if("stop thread");
 
-	GLOBAL_LOG("switch_thread succeeded");
 }
 
 void thread_t::update_last_time_ran()
@@ -315,7 +314,6 @@ void kernel::run_all_threads(const std::shared_ptr<emulator_t>& emulator, const 
 					break;
 				}
 
-				GLOBAL_LOG("switching thread {} -> {}", current_thread->id(), pending_threads.front()->id());
 				perform_thread_switch();
 
 				if (current_thread)
@@ -338,8 +336,6 @@ void kernel::run_all_threads(const std::shared_ptr<emulator_t>& emulator, const 
 					}
 				}
 			}
-
-			GLOBAL_LOG("running thread {}", current_thread->id());
 
 			if (last_thread)
 			{

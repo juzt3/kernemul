@@ -160,6 +160,9 @@ static void enable_protected_mode(emulator_t& emulator)
 	cr0 current_cr0 = emulator.read_register<x86::reg::cr0, cr0>();
 
 	current_cr0.protection_enable = 1;
+	current_cr0.monitor_coprocessor = 1;
+	current_cr0.emulate_fpu = 0;
+	current_cr0.task_switched = 0;
 
 	emulator.write_register<x86::reg::cr0>(current_cr0);
 }
@@ -178,6 +181,8 @@ static void enable_physical_address_extension(emulator_t& emulator)
 	cr4 current_cr4 = emulator.read_register<x86::reg::cr4, cr4>();
 
 	current_cr4.physical_address_extension = 1;
+	current_cr4.os_fxsave_fxrstor_support = 1;
+	current_cr4.os_xmm_exception_support = 1;
 
 	emulator.write_register<x86::reg::cr4>(current_cr4);
 }
