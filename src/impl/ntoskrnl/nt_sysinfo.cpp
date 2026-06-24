@@ -460,6 +460,83 @@ static void fixup_module_information(const std::shared_ptr<emulator_t>& emulator
 	}
 }
 
+static bool handle_system_module_information_ex(const std::shared_ptr<emulator_t>& emulator,
+	const emulator_t::address_type buffer_address, const std::uint32_t buffer_length,
+	const emulator_t::address_type return_length_address)
+{
+	const auto& modules = kernel::module_entries;
+	const auto module_count = static_cast<std::uint32_t>(modules.size());
+	const std::uint32_t required_size = module_count * module_entry_size + 2;
+
+	THREAD_LOG("NtQuerySystemInformation(0x4D): {} modules, required_size=0x{:X}, buffer_length=0x{:X}",
+		module_count, required_size, buffer_length);
+
+	if (return_length_address)
+	{
+		emulator_err_t error = emulator->write_virtual_memory(
+			return_length_address, &required_size, sizeof(required_size));
+		error.throw_if("write return length");
+	}
+
+	if (buffer_length < required_size)
+	{
+		write_nt_status(emulator, status_info_length_mismatch);
+		return true;
+	}
+
+	std::vector<std::uint8_t> output(required_size, 0);
+
+	for (std::uint32_t i = 0; i < module_count; ++i)
+	{
+		auto* entry = reinterpret_cast<rtl_process_module_information_ex*>(
+			output.data() + i * module_entry_size);
+
+		entry->next_entry_offset = static_cast<std::uint16_t>(module_entry_size);
+
+		const auto& module = modules[i];
+		auto& base = entry->base_info;
+
+		base.section = 0;
+		base.mapped_base = 0;
+		base.image_base = module->base_address();
+		base.image_size = static_cast<std::uint32_t>(module->size());
+		base.flags = 0;
+		base.load_order_index = static_cast<std::uint16_t>(i);
+		base.init_order_index = 0;
+		base.load_count = 1;
+
+		const auto& name = module->name();
+		const std::string full_path = "\\SystemRoot\\system32\\drivers\\" + name;
+
+		const auto path_len = std::min(full_path.size(), static_cast<std::size_t>(255));
+		std::memcpy(base.full_path_name, full_path.data(), path_len);
+		base.full_path_name[path_len] = 0;
+
+		const auto last_separator = full_path.rfind('\\');
+		base.offset_to_file_name = (last_separator != std::string::npos)
+			? static_cast<std::uint16_t>(last_separator + 1)
+			: 0;
+
+		entry->image_checksum = 0;
+		entry->time_date_stamp = 0;
+		entry->default_base = 0;
+
+		THREAD_LOG("  module[{}]: base=0x{:X}, size=0x{:X}, name='{}'",
+			i, base.image_base, base.image_size,
+			reinterpret_cast<const char*>(base.full_path_name));
+	}
+
+	if (buffer_address)
+	{
+		emulator_err_t error = emulator->write_virtual_memory(
+			buffer_address, output.data(), required_size);
+		error.throw_if("write module information ex to guest");
+	}
+
+	write_nt_status(emulator, status_success);
+	return true;
+}
+
 static bool handle_system_handle_information(const std::shared_ptr<emulator_t>& emulator,
 	const emulator_t::address_type buffer_address, const std::uint32_t buffer_length,
 	const emulator_t::address_type return_length_address)
@@ -832,6 +909,14 @@ static void handle_query_system_information(const std::shared_ptr<emulator_t>& e
 	if (info_class == system_module_information)
 	{
 		if (handle_system_module_information(emulator, buffer_address, buffer_length, return_length_address))
+		{
+			return;
+		}
+	}
+
+	if (info_class == system_module_information_ex)
+	{
+		if (handle_system_module_information_ex(emulator, buffer_address, buffer_length, return_length_address))
 		{
 			return;
 		}
