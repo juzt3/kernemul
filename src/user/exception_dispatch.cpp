@@ -15,6 +15,25 @@ static_assert(ctx_size >= sizeof(CONTEXT));
 
 static thread_local bool dispatching_exception = false;
 
+namespace
+{
+	struct dispatch_guard_t
+	{
+		dispatch_guard_t() noexcept
+		{
+			dispatching_exception = true;
+		}
+
+		~dispatch_guard_t()
+		{
+			dispatching_exception = false;
+		}
+
+		dispatch_guard_t(const dispatch_guard_t&) = delete;
+		dispatch_guard_t& operator=(const dispatch_guard_t&) = delete;
+	};
+}
+
 static void save_context(const std::shared_ptr<emulator_t>& emulator,
 	std::uint8_t* ctx_buffer, const emulator_t::address_type faulting_rip)
 {
@@ -71,7 +90,7 @@ void user::dispatch_exception(const std::shared_ptr<emulator_t>& emulator,
 		return;
 	}
 
-	dispatching_exception = true;
+	const dispatch_guard_t guard;
 
 	const auto current_rsp = emulator->read_register<x86::reg::rsp, std::uint64_t>();
 	const auto faulting_rip = emulator->read_register<x86::reg::rip, std::uint64_t>();
@@ -117,8 +136,6 @@ void user::dispatch_exception(const std::shared_ptr<emulator_t>& emulator,
 
 	THREAD_LOG("dispatching exception 0x{:08X} to KiUserExceptionDispatcher (fault_rip=0x{:X}, rsp=0x{:X}->0x{:X})",
 		exception_code, faulting_rip, current_rsp, new_sp);
-
-	dispatching_exception = false;
 }
 
 void user::dispatch_access_violation(const std::shared_ptr<emulator_t>& emulator,
