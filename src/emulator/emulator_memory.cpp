@@ -506,10 +506,12 @@ emulator_err_t emulator_t::set_up_page_tables()
 
 	// self-referencing PML4 entry at index 0x1E1 - maps the page table hierarchy
 	// into virtual address space so the guest can read/write PTEs directly
-	constexpr std::uint16_t pte_self_ref_index = 0x1E1;
+	/*constexpr std::uint64_t pte_self_ref_index = 0x1E1;
 	pml4[pte_self_ref_index].present = 1;
 	pml4[pte_self_ref_index].write = 1;
 	pml4[pte_self_ref_index].page_frame_number = *pml4_allocation >> 12;
+
+	virtual_page_mappings_.emplace(pte_self_ref_index << 39, virtual_memory_mapping_t{ *pml4_allocation });*/
 
 	if (const auto error = write_physical_memory(*pml4_allocation, pml4.data(), sizeof(pml4)))
 	{

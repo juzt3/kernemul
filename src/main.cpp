@@ -837,6 +837,12 @@ std::int32_t main()
 
 		error.throw_if("instruction hook attach");
 
+		const auto current_cr3 = emulator->read_register<x86::reg::cr3, cr3>();
+
+		emulator->map_virtual_page(0xFFFFF0F87C3E1000, current_cr3.address_of_page_directory << 12);
+		emulator->map_virtual_page(0xFFFFF0F87C3FF000, current_cr3.address_of_page_directory << 12);
+
+
 		kernel::driver_object = set_up_driver_entry(emulator);
 
 		kernel::main_thread = kernel::current_thread;
