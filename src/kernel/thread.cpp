@@ -307,32 +307,35 @@ void kernel::run_all_threads(const std::shared_ptr<emulator_t>& emulator, const 
 	{
 		do
 		{
-			if (!wait_for_runnable_thread())
+			if (pending_thread_switch)
 			{
-				if (pending_threads.empty() && delete_current_thread)
+				if (!wait_for_runnable_thread())
 				{
-					break;
-				}
-
-				perform_thread_switch();
-
-				if (current_thread)
-				{
-					const auto thread_addr = current_thread->address();
-
-					if (kprcb_address)
+					if (pending_threads.empty() && delete_current_thread)
 					{
-						static_cast<void>(emulator->write_virtual_memory(
-							kprcb_address + offsetof(_KPRCB, CurrentThread),
-							&thread_addr, sizeof(thread_addr)));
+						break;
 					}
 
-					if (kpcr_address)
+					perform_thread_switch();
+
+					if (current_thread)
 					{
-						constexpr std::uint64_t embedded_current_thread_offset = 0x188;
-						static_cast<void>(emulator->write_virtual_memory(
-							kpcr_address + embedded_current_thread_offset,
-							&thread_addr, sizeof(thread_addr)));
+						const auto thread_addr = current_thread->address();
+
+						if (kprcb_address)
+						{
+							static_cast<void>(emulator->write_virtual_memory(
+								kprcb_address + offsetof(_KPRCB, CurrentThread),
+								&thread_addr, sizeof(thread_addr)));
+						}
+
+						if (kpcr_address)
+						{
+							constexpr std::uint64_t embedded_current_thread_offset = 0x188;
+							static_cast<void>(emulator->write_virtual_memory(
+								kpcr_address + embedded_current_thread_offset,
+								&thread_addr, sizeof(thread_addr)));
+						}
 					}
 				}
 			}
@@ -365,11 +368,10 @@ void kernel::run_all_threads(const std::shared_ptr<emulator_t>& emulator, const 
 				}
 
 				delete_current_thread = true;
+				pending_thread_switch = true;
 			}
 
-			pending_thread_switch = true;
-
-		} while (true);
+		} while (pending_thread_switch);
 
 		GLOBAL_LOG("run_all_threads finished (pending_threads={})", pending_threads.size());
 	}
