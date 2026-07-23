@@ -62,6 +62,11 @@ public:
 		return address_;
 	}
 
+	[[nodiscard]] const std::shared_ptr<emulator_t>& get_emulator() const
+	{
+		return emulator_;
+	}
+
 	static emulator_object_t allocate_at(const std::shared_ptr<emulator_t>& emulator, const address_type address, const std::string& name = { }, const bool monitor = false)
 	{
 		const auto error = emulator->map_virtual_memory(address, sizeof(T), prot_read_write);

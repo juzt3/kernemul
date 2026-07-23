@@ -5,6 +5,7 @@
 #include "kernel_def.hpp"
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 
@@ -63,10 +64,7 @@ public:
 		return handle_table_;
 	}
 
-	void set_peb_address(const address_type addr)
-	{
-		peb_address_ = addr;
-	}
+	void set_peb_address(address_type addr);
 
 	[[nodiscard]] address_type peb_address() const
 	{
@@ -95,9 +93,16 @@ protected:
 
 namespace kernel
 {
+	// Guest allocator: takes a size and returns a guest virtual address, or 0 on failure.
+	// Used by create_process to place per-process structures (PEB, etc.) in a caller-chosen region.
+	using allocator_t = std::function<emulator_t::address_type(emulator_t::size_type)>;
+
 	void set_up_initial_system_process(const std::shared_ptr<emulator_t>& emulator);
 
+	// Create a process. Per-process structures (currently the PEB) are placed via `allocator`.
+	// If `allocator` is null, they fall back to the emulator's kernel heap.
 	std::shared_ptr<process_t> create_process(const std::shared_ptr<emulator_t>& emulator,
 		process_t::id_type process_id, std::string_view image_name = {},
-		emulator_t::address_type section_base_address = 0);
+		emulator_t::address_type section_base_address = 0,
+		const allocator_t& allocator = {});
 }

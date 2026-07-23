@@ -1,5 +1,6 @@
 #include "process_loader.hpp"
 #include "kernel.hpp"
+#include "peb_layout.hpp"
 #include "../emulator/object.hpp"
 
 #include "../util/logs.hpp"
@@ -37,6 +38,49 @@ static void write_process_links(const std::shared_ptr<emulator_t>& emulator,
 {
 	set_process_flink(emulator, process, flink);
 	set_process_blink(emulator, process, blink);
+}
+
+void kernel::write_process_peb(const std::shared_ptr<emulator_t>& emulator,
+	const emulator_t::address_type peb_address,
+	const peb_setup_options_t& options)
+{
+	peb64_t peb = { };
+
+	peb.NumberOfProcessors = kernel::processor_count;
+
+	peb.HeapSegmentReserve = 0x100000;
+	peb.HeapSegmentCommit = 0x1000;
+	peb.HeapDeCommitTotalFreeThreshold = 0x10000;
+	peb.HeapDeCommitFreeBlockThreshold = 0x1000;
+	peb.MaximumNumberOfHeaps = 0x10;
+
+	peb.OSMajorVersion = 10;
+	peb.OSBuildNumber = 19045;
+	peb.OSPlatformId = 2;
+
+	peb.ImageSubsystem = 3;
+	peb.ImageSubsystemMajorVersion = 6;
+
+	peb.ImageBaseAddress = options.image_base_address;
+	peb.Ldr = options.ldr;
+	peb.ProcessParameters = options.process_parameters;
+	peb.ApiSetMap = options.api_set_map;
+	peb.GdiSharedHandleTable = options.gdi_shared_handle_table;
+
+	const emulator_err_t error = emulator->write_virtual_memory(peb_address, &peb, sizeof(peb));
+	error.throw_if("write_process_peb");
+}
+
+void process_t::set_peb_address(const address_type addr)
+{
+	peb_address_ = addr;
+
+	const auto peb_ptr = reinterpret_cast<_PEB*>(addr);
+	const auto peb_field_address = object_.address() + offsetof(_EPROCESS, Peb);
+
+	const emulator_err_t error = object_.get_emulator()->write_virtual_memory(
+		peb_field_address, &peb_ptr, sizeof(peb_ptr));
+	error.throw_if("process_t::set_peb_address: write _EPROCESS.Peb");
 }
 
 void kernel::set_up_initial_system_process(const std::shared_ptr<emulator_t>& emulator)
@@ -116,7 +160,8 @@ void kernel::set_up_initial_system_process(const std::shared_ptr<emulator_t>& em
 
 std::shared_ptr<process_t> kernel::create_process(const std::shared_ptr<emulator_t>& emulator,
 	const process_t::id_type process_id, const std::string_view image_name,
-	const emulator_t::address_type section_base_address)
+	const emulator_t::address_type section_base_address,
+	const allocator_t& allocator)
 {
 	const auto object_name = std::format("EPROCESS_{}_{}", process_id, image_name);
 
@@ -144,17 +189,20 @@ std::shared_ptr<process_t> kernel::create_process(const std::shared_ptr<emulator
 		contents.Token.Object = reinterpret_cast<void*>(*token_address);
 	}
 
-	const auto peb_address = emulator->heap_allocate(0x800, prot_read_write, true);
-
-	if (peb_address)
-	{
-		contents.Peb = reinterpret_cast<_PEB*>(*peb_address);
-	}
-
 	auto object = emulator_object_t<_EPROCESS>::allocate(emulator, contents, object_name, true);
 
 	auto process = std::make_shared<process_t>(process_id, section_base_address, std::move(object), std::string(image_name));
 	process->set_handle_table(std::make_shared<handle_table_t>(emulator, object_manager));
+
+	const auto peb_address = allocator
+		? allocator(peb64_alloc_size)
+		: emulator->heap_allocate(peb64_alloc_size, prot_read_write, true).value_or(0);
+
+	if (peb_address)
+	{
+		write_process_peb(emulator, peb_address);
+		process->set_peb_address(peb_address);
+	}
 
 	const auto self_links = get_active_process_links_address(*process);
 

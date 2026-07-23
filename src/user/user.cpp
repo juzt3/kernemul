@@ -364,11 +364,12 @@ user::context_t user::set_up_structures(
 
 	const auto stack_base = stack_limit + stack_size;
 
-	const auto peb_address = memory_manager->allocate_pages(peb64_alloc_size);
+	// PEB is allocated by kernel::create_process using the usermode allocator.
+	const auto peb_address = process->peb_address();
 
 	if (!peb_address)
 	{
-		throw std::runtime_error("user: failed to allocate PEB");
+		throw std::runtime_error("user: process has no PEB allocation");
 	}
 
 	const auto teb_address = memory_manager->allocate_pages(teb64_alloc_size);
@@ -460,35 +461,13 @@ user::context_t user::set_up_structures(
 
 	// build PEB
 	{
-		peb64_t peb{};
-
-		peb.ImageBaseAddress = image_base;
-		peb.Ldr = ldr_address;
-		peb.ProcessParameters = params_address;
-		peb.ApiSetMap = api_set_address;
-
-		peb.AnsiCodePageData = 0;
-		peb.OemCodePageData = 0;
-		peb.UnicodeCaseTableData = 0;
-
-		peb.NumberOfProcessors = kernel::processor_count;
-
-		peb.HeapSegmentReserve = 0x100000;
-		peb.HeapSegmentCommit = 0x1000;
-		peb.HeapDeCommitTotalFreeThreshold = 0x10000;
-		peb.HeapDeCommitFreeBlockThreshold = 0x1000;
-		peb.MaximumNumberOfHeaps = 0x10;
-
-		peb.GdiSharedHandleTable = gdi_table;
-
-		peb.OSMajorVersion = 10;
-		peb.OSBuildNumber = 19045;
-		peb.OSPlatformId = 2;
-
-		peb.ImageSubsystem = 3;
-		peb.ImageSubsystemMajorVersion = 6;
-
-		static_cast<void>(emulator->write_virtual_memory(peb_address, &peb, sizeof(peb)));
+		kernel::write_process_peb(emulator, peb_address, {
+			.image_base_address = image_base,
+			.ldr = ldr_address,
+			.process_parameters = params_address,
+			.api_set_map = api_set_address,
+			.gdi_shared_handle_table = gdi_table,
+		});
 
 		GLOBAL_LOG("user: PEB at 0x{:X} (image_base=0x{:X}, params=0x{:X}, apiset=0x{:X})",
 			peb_address, image_base, params_address, api_set_address);
@@ -781,7 +760,11 @@ void user::create_user_process(const std::shared_ptr<emulator_t>& emulator,
 
 	const auto process_id = kernel::object_manager->allocate_id();
 	auto process = kernel::create_process(emulator, process_id,
-		usermode_module_name, usermode_image->base_address());
+		usermode_module_name, usermode_image->base_address(),
+		[](const emulator_t::size_type size)
+		{
+			return user::memory_manager->allocate_pages(size);
+		});
 
 	if (const auto ki_disp = process_ntdll->find_symbol("KiUserExceptionDispatcher"))
 	{
@@ -804,8 +787,6 @@ void user::create_user_process(const std::shared_ptr<emulator_t>& emulator,
 		usermode_image->base_address(), process_ntdll->base_address(),
 		usermode_image->size(), process_ntdll->size(),
 		usermode_module_name, process, extra_modules);
-
-	process->set_peb_address(um_context.peb_address);
 
 	auto um_thread = user::create_initial_thread(emulator,
 		usermode_image->entry_point(),
