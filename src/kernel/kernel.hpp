@@ -47,6 +47,17 @@ namespace kernel
 	inline std::shared_ptr<object_manager_t> object_manager;
 	inline std::unordered_map<emulator_t::address_type, function_implementation_t> redirected_functions;
 
+	inline std::vector<emulator_t::address_type> process_create_notify_routines;
+	inline std::vector<emulator_t::address_type> process_create_notify_routines_ex;
+
+	struct dpc_info_t
+	{
+		emulator_t::address_type routine;
+		emulator_t::address_type context;
+	};
+
+	inline std::unordered_map<emulator_t::address_type, dpc_info_t> registered_dpcs;
+
 	[[nodiscard]] std::shared_ptr<image_t> find_module(std::string_view name);
 	[[nodiscard]] std::shared_ptr<image_t> find_module_from_rip(emulator_t::address_type rip);
 	[[nodiscard]] std::optional<function_implementation_t> find_redirected_function(emulator_t::address_type address);

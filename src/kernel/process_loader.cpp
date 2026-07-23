@@ -137,7 +137,21 @@ std::shared_ptr<process_t> kernel::create_process(const std::shared_ptr<emulator
 		contents.ObjectTable = reinterpret_cast<_HANDLE_TABLE*>(*handle_table_address);
 	}
 
-	auto object = emulator_object_t<_EPROCESS>::allocate(emulator, contents, object_name);
+	const auto token_address = emulator->heap_allocate(0x100, prot_read_write, true);
+
+	if (token_address)
+	{
+		contents.Token.Object = reinterpret_cast<void*>(*token_address);
+	}
+
+	const auto peb_address = emulator->heap_allocate(0x800, prot_read_write, true);
+
+	if (peb_address)
+	{
+		contents.Peb = reinterpret_cast<_PEB*>(*peb_address);
+	}
+
+	auto object = emulator_object_t<_EPROCESS>::allocate(emulator, contents, object_name, true);
 
 	auto process = std::make_shared<process_t>(process_id, section_base_address, std::move(object), std::string(image_name));
 	process->set_handle_table(std::make_shared<handle_table_t>(emulator, object_manager));
@@ -168,6 +182,52 @@ std::shared_ptr<process_t> kernel::create_process(const std::shared_ptr<emulator
 		process_id, section_base_address, process->address());
 
 	process_entries.push_back(process);
+
+	for (const auto callback : kernel::process_create_notify_routines)
+	{
+		GLOBAL_LOG("invoking process notify routine (callback=0x{:X})", callback);
+
+		std::vector<emulator_t::address_type> arguments = {};
+		arguments.push_back(4); /* ParentId */
+		arguments.push_back(process->id()); /* ProcessId */
+		arguments.push_back(TRUE); /* Create */
+
+		auto thread = kernel::create_thread_at(emulator, callback, arguments, 0, 0, process);
+		kernel::pending_threads.push(thread);
+	}
+
+	for (const auto callback : kernel::process_create_notify_routines_ex)
+	{
+		GLOBAL_LOG("invoking process notify routine ex (callback=0x{:X})", callback);
+
+		struct ps_create_notify_info
+		{
+			std::uint64_t size;
+			std::uint32_t flags;
+			std::uint32_t pad;
+			std::uint64_t parent_process_id;
+			std::uint64_t creating_thread_process_id;
+			std::uint64_t creating_thread_thread_id;
+			std::uint64_t file_object;
+			std::uint64_t image_file_name;
+			std::uint64_t command_line;
+			std::uint32_t creation_status;
+		};
+
+		ps_create_notify_info info = {};
+		info.size = sizeof(ps_create_notify_info);
+		info.parent_process_id = 4;
+
+		const auto info_obj = emulator_object_t<ps_create_notify_info>::allocate(emulator, info);
+
+		std::vector<emulator_t::address_type> arguments = {};
+		arguments.push_back(process->address()); /* Process (PEPROCESS) */
+		arguments.push_back(process->id()); /* ProcessId */
+		arguments.push_back(info_obj.address()); /* CreateInfo (PPS_CREATE_NOTIFY_INFO) */
+
+		auto thread = kernel::create_thread_at(emulator, callback, arguments, 0, 0, process);
+		kernel::pending_threads.push(thread);
+	}
 
 	return process;
 }

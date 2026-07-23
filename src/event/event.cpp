@@ -178,6 +178,7 @@ static void apply_buffer_refs(const std::shared_ptr<emulator_t>& emulator,
 	}
 }
 
+constexpr std::uint32_t irp_mj_create = 0;
 constexpr std::uint32_t irp_mj_device_control = 14;
 
 struct ioctl_dispatch_t
@@ -341,14 +342,76 @@ void event_runner_t::on_thread_done(const std::shared_ptr<thread_t>& finished)
 	if (finished == kernel::main_thread)
 	{
 		GLOBAL_LOG("event: DriverEntry thread finished, dispatching queued events");
-		dispatch_next();
+
+		kernel::create_process(emulator_, 8040, "testprocess.exe");
+
+		//if (kernel::driver_object.address() == 0)
+		//{
+		//	throw std::runtime_error("IOCTL dispatch: driver object not set");
+		//}
+
+		//const auto driver_obj = kernel::driver_object.read();
+
+		//const auto device_object = reinterpret_cast<emulator_t::address_type>(driver_obj.DeviceObject);
+		//const auto dispatch_function = reinterpret_cast<emulator_t::address_type>(driver_obj.MajorFunction[irp_mj_create]);
+
+		//if (!dispatch_function)
+		//{
+		//	throw std::runtime_error("IOCTL dispatch: MajorFunction[IRP_MJ_CREATE] is null");
+		//}
+
+		//GLOBAL_LOG("irp mj create: 0x{:X}", dispatch_function);
+
+		//__debugbreak();
+
+		//// allocate IRP + IO_STACK_LOCATION contiguously
+		//const auto alloc = emulator_->heap_allocate(sizeof(_IRP) + sizeof(_IO_STACK_LOCATION), prot_read_write, true);
+		//emulator_err_t alloc_err = alloc.error_or({});
+		//alloc_err.throw_if("IOCTL dispatch: allocate IRP");
+
+		//const auto irp_addr = *alloc;
+		//const auto iostack_addr = irp_addr + sizeof(_IRP);
+
+		//_IRP irp = {};
+		//irp.Type = 6;
+		//irp.Size = sizeof(_IRP);
+		//irp.StackCount = 1;
+		//irp.CurrentLocation = 1;
+		//irp.Tail.Overlay.CurrentStackLocation = reinterpret_cast<_IO_STACK_LOCATION*>(iostack_addr);
+		//irp.AssociatedIrp.SystemBuffer = reinterpret_cast<VOID*>(0);
+		//irp.UserBuffer = reinterpret_cast<VOID*>(0);
+
+		//alloc_err = emulator_->write_virtual_memory(irp_addr, &irp, sizeof(irp));
+		//alloc_err.throw_if("IOCTL dispatch: write IRP");
+
+		//_IO_STACK_LOCATION iostack = {};
+		//iostack.MajorFunction = static_cast<UCHAR>(irp_mj_create);
+		//iostack.DeviceObject = reinterpret_cast<_DEVICE_OBJECT*>(device_object);
+
+		//alloc_err = emulator_->write_virtual_memory(iostack_addr, &iostack, sizeof(iostack));
+		//alloc_err.throw_if("IOCTL dispatch: write IO_STACK_LOCATION");
+
+		//std::vector<emulator_t::address_type> arguments = {};
+		//arguments.push_back(device_object);
+		//arguments.push_back(irp_addr);
+
+		//auto thread = kernel::create_thread_at(emulator_, dispatch_function, arguments);
+		//current_event_tid_ = thread->id();
+
+		//kernel::pending_threads.push(thread);
+
+		//__debugbreak();
+
+		//dispatch_next();
 		return;
 	}
 
 	if (finished->id() == current_event_tid_)
 	{
 		collect_result(finished);
-		dispatch_next();
+		
+		__debugbreak();
+		//dispatch_next();
 	}
 }
 

@@ -415,7 +415,7 @@ std::shared_ptr<image_t> kernel::map_image(const std::shared_ptr<emulator_t>& em
 
 	if (!pe_file.load())
 	{
-		GLOBAL_ERR_LOG("unable to load portable executable file");
+		GLOBAL_ERR_LOG("unable to load portable executable file {}", name.data());
 
 		return { };
 	}

@@ -130,6 +130,54 @@ static void handle_initialize_timer(const std::shared_ptr<emulator_t>& emulator,
 	error.throw_if("KeInitializeTimer: zero Processor");
 }
 
+static void handle_initialize_dpc(const std::shared_ptr<emulator_t>& emulator,
+	emulator_t::address_type dpc_address, emulator_t::address_type deferred_routine,
+	emulator_t::address_type deferred_context)
+{
+	THREAD_LOG("KeInitializeDpc called (dpc=0x{:X}, routine=0x{:X}, context=0x{:X})",
+		dpc_address, deferred_routine, deferred_context);
+
+	kernel::registered_dpcs[dpc_address] = { deferred_routine, deferred_context };
+}
+
+static void handle_flush_queued_dpcs(const std::shared_ptr<emulator_t>& emulator)
+{
+	THREAD_LOG("KeFlushQueuedDpcs called");
+}
+
+static void handle_insert_queue_dpc(const std::shared_ptr<emulator_t>& emulator,
+	emulator_t::address_type dpc_address, emulator_t::address_type system_argument1,
+	emulator_t::address_type system_argument2)
+{
+	THREAD_LOG("KeInsertQueueDpc called (dpc=0x{:X}, arg1=0x{:X}, arg2=0x{:X})",
+		dpc_address, system_argument1, system_argument2);
+
+	const auto it = kernel::registered_dpcs.find(dpc_address);
+
+	if (it == kernel::registered_dpcs.end())
+	{
+		THREAD_WARN_LOG("KeInsertQueueDpc: unknown DPC 0x{:X}", dpc_address);
+		write_return_value(emulator, 0);
+		return;
+	}
+
+	const auto& dpc_info = it->second;
+
+	THREAD_LOG("KeInsertQueueDpc: invoking deferred routine 0x{:X} (context=0x{:X})",
+		dpc_info.routine, dpc_info.context);
+
+	std::vector<emulator_t::address_type> arguments = {};
+	arguments.push_back(dpc_address);
+	arguments.push_back(dpc_info.context);
+	arguments.push_back(system_argument1);
+	arguments.push_back(system_argument2);
+
+	auto thread = kernel::create_thread_at(emulator, dpc_info.routine, arguments);
+	kernel::pending_threads.push(thread);
+
+	write_return_value(emulator, 1);
+}
+
 static void handle_set_timer(const std::shared_ptr<emulator_t>& emulator,
 	emulator_t::address_type timer_address, std::int64_t due_time,
 	emulator_t::address_type dpc)
@@ -436,6 +484,20 @@ static void handle_set_create_process_notify_routine(const std::shared_ptr<emula
 {
 	THREAD_LOG("PsSetCreateProcessNotifyRoutine called (routine=0x{:X}, remove={})", routine, remove);
 
+	if (remove)
+	{
+		auto new_end = std::remove(kernel::process_create_notify_routines.begin(), kernel::process_create_notify_routines.end(), routine);
+
+		if (new_end == kernel::process_create_notify_routines.end())
+			return write_nt_status(emulator, 0xC0000225);
+
+		kernel::process_create_notify_routines.erase(new_end, kernel::process_create_notify_routines.end());
+	}
+	else
+	{
+		kernel::process_create_notify_routines.push_back(routine);
+	}
+
 	write_nt_success(emulator);
 }
 
@@ -443,6 +505,20 @@ static void handle_set_create_process_notify_routine_ex(const std::shared_ptr<em
 	emulator_t::address_type routine, std::uint8_t remove)
 {
 	THREAD_LOG("PsSetCreateProcessNotifyRoutineEx called (routine=0x{:X}, remove={})", routine, remove);
+
+	if (remove)
+	{
+		auto new_end = std::remove(kernel::process_create_notify_routines_ex.begin(), kernel::process_create_notify_routines_ex.end(), routine);
+
+		if (new_end == kernel::process_create_notify_routines_ex.end())
+			return write_nt_status(emulator, 0xC0000225);
+
+		kernel::process_create_notify_routines_ex.erase(new_end, kernel::process_create_notify_routines_ex.end());
+	}
+	else
+	{
+		kernel::process_create_notify_routines_ex.push_back(routine);
+	}
 
 	write_nt_success(emulator);
 }
@@ -673,6 +749,33 @@ static void handle_lookup_process_by_process_id(const std::shared_ptr<emulator_t
 	write_nt_status(emulator, status_invalid_cid);
 }
 
+static void handle_lookup_thread_by_thread_id(const std::shared_ptr<emulator_t>& emulator,
+	std::uint64_t thread_id, emulator_t::address_type thread_out)
+{
+	THREAD_LOG("PsLookupThreadByThreadId called (tid={}, out=0x{:X})", thread_id, thread_out);
+
+	//for (const auto& process : kernel)
+	//{
+	//	if (process->id() == process_id)
+	//	{
+	//		const auto address = process->address();
+
+	//		emulator_err_t error = emulator->write_virtual_memory(process_out, &address, sizeof(address));
+	//		error.throw_if("PsLookupProcessByProcessId: write process");
+
+	//		THREAD_LOG("PsLookupProcessByProcessId: found process at 0x{:X}", address);
+
+	//		write_nt_success(emulator);
+	//		return;
+	//	}
+	//}
+
+	THREAD_WARN_LOG("PsLookupThreadByThreadId: tid {} not found", thread_id);
+
+	constexpr std::uint32_t status_invalid_cid = 0xC000000B;
+	write_nt_status(emulator, status_invalid_cid);
+}
+
 static void handle_reference_process_file_pointer(const std::shared_ptr<emulator_t>& emulator,
 	emulator_t::address_type process_address, emulator_t::address_type file_object_out)
 {
@@ -690,6 +793,106 @@ static void handle_reference_process_file_pointer(const std::shared_ptr<emulator
 	}
 
 	write_nt_success(emulator);
+}
+
+static void handle_reference_primary_token(const std::shared_ptr<emulator_t>& emulator,
+	emulator_t::address_type process_address)
+{
+	_EX_FAST_REF token_ref{};
+	const emulator_err_t error = emulator->read_virtual_memory(
+		process_address + offsetof(_EPROCESS, Token), &token_ref, sizeof(token_ref));
+	error.throw_if("read EPROCESS.Token");
+
+	const auto token_address = token_ref.Value & ~0xFULL;
+
+	THREAD_LOG("PsReferencePrimaryToken called (process=0x{:X}) -> 0x{:X}",
+		process_address, token_address);
+
+	write_return_value(emulator, token_address);
+}
+
+static void handle_dereference_primary_token(const std::shared_ptr<emulator_t>& emulator,
+	emulator_t::address_type token_address)
+{
+	THREAD_LOG("PsDereferencePrimaryToken called (token=0x{:X})", token_address);
+}
+
+static void handle_query_information_token(const std::shared_ptr<emulator_t>& emulator,
+	emulator_t::address_type token_address, std::uint32_t info_class,
+	emulator_t::address_type token_information_out)
+{
+	THREAD_LOG("SeQueryInformationToken called (token=0x{:X}, class={}, out=0x{:X})",
+		token_address, info_class, token_information_out);
+
+	constexpr std::uint32_t token_privileges = 3;
+	constexpr std::uint32_t token_integrity_level = 25;
+
+	if (info_class == token_integrity_level)
+	{
+		// SID_AND_ATTRIBUTES { PSID Sid; ULONG Attributes; }
+		// integrity SID: S-1-16-12288 (high integrity)
+		// revision=1, sub_authority_count=1, authority={0,0,0,0,0,16}, sub_authority={12288}
+		const std::uint8_t sid_bytes[] = {
+			0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10,
+			0x00, 0x30, 0x00, 0x00,
+		};
+		constexpr std::uint32_t sid_size = sizeof(sid_bytes);
+
+		// allocate buffer: SID_AND_ATTRIBUTES (0x10) + SID data
+		constexpr std::uint32_t buffer_size = 0x10 + sid_size;
+
+		const auto allocation = emulator->heap_allocate(buffer_size, prot_read_write, true);
+		allocation.error_or({}).throw_if("allocate TokenIntegrityLevel buffer");
+
+		const auto buffer_address = *allocation;
+		const auto sid_address = buffer_address + 0x10;
+
+		emulator->write_virtual_memory(sid_address, sid_bytes, sid_size)
+			.throw_if("write integrity SID");
+
+		// SID_AND_ATTRIBUTES.Sid
+		emulator->write_virtual_memory(buffer_address, &sid_address, sizeof(sid_address))
+			.throw_if("write SID_AND_ATTRIBUTES.Sid");
+
+		// SID_AND_ATTRIBUTES.Attributes = SE_GROUP_INTEGRITY (0x20)
+		constexpr std::uint32_t se_group_integrity = 0x20;
+		emulator->write_virtual_memory(buffer_address + 0x08, &se_group_integrity, sizeof(se_group_integrity))
+			.throw_if("write SID_AND_ATTRIBUTES.Attributes");
+
+		emulator->write_virtual_memory(token_information_out, &buffer_address, sizeof(buffer_address))
+			.throw_if("write TokenInformation pointer");
+
+		THREAD_LOG("SeQueryInformationToken: TokenIntegrityLevel -> 0x{:X} (S-1-16-12288)", buffer_address);
+		write_nt_success(emulator);
+	}
+	else if (info_class == token_privileges)
+	{
+		// TOKEN_PRIVILEGES { ULONG PrivilegeCount; LUID_AND_ATTRIBUTES Privileges[]; }
+		// LUID_AND_ATTRIBUTES = { LUID (8 bytes), ULONG Attributes (4 bytes + 4 pad) }
+		constexpr std::uint32_t privilege_count = 0;
+		constexpr std::uint32_t buffer_size = sizeof(std::uint32_t);
+
+		const auto allocation = emulator->heap_allocate(buffer_size, prot_read_write, true);
+		allocation.error_or({}).throw_if("allocate TokenPrivileges buffer");
+
+		const auto buffer_address = *allocation;
+
+		emulator->write_virtual_memory(buffer_address, &privilege_count, sizeof(privilege_count))
+			.throw_if("write TOKEN_PRIVILEGES.PrivilegeCount");
+
+		emulator->write_virtual_memory(token_information_out, &buffer_address, sizeof(buffer_address))
+			.throw_if("write TokenInformation pointer");
+
+		THREAD_LOG("SeQueryInformationToken: TokenPrivileges -> 0x{:X} (count=0)", buffer_address);
+		write_nt_success(emulator);
+	}
+	else
+	{
+		THREAD_WARN_LOG("SeQueryInformationToken: unhandled class {}", info_class);
+
+		constexpr std::uint32_t status_invalid_info_class = 0xC0000003;
+		write_nt_status(emulator, status_invalid_info_class);
+	}
 }
 
 static void handle_get_process_image_file_name(const std::shared_ptr<emulator_t>& emulator,
@@ -733,6 +936,19 @@ static void handle_get_process_wow64_process(const std::shared_ptr<emulator_t>& 
 
 	// all emulated processes are native 64-bit
 	write_return_value(emulator, static_cast<emulator_t::address_type>(0));
+}
+
+static void handle_get_process_peb(const std::shared_ptr<emulator_t>& emulator,
+	emulator_t::address_type process_address)
+{
+	emulator_t::address_type peb = 0;
+	const auto error = emulator->read_virtual_memory(
+		process_address + offsetof(_EPROCESS, Peb), &peb, sizeof(peb));
+	error.throw_if("PsGetProcessPeb: read Peb");
+
+	THREAD_LOG("PsGetProcessPeb called (process=0x{:X}) -> 0x{:X}", process_address, peb);
+
+	write_return_value(emulator, peb);
 }
 
 static void handle_get_process_exit_process_called(const std::shared_ptr<emulator_t>& emulator,
@@ -4494,6 +4710,9 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 	redirect_handler<handle_get_current_irql>(emulator, mapped_image, "KeGetCurrentIrql");
 	redirect_handler<handle_initialize_event>(emulator, mapped_image, "KeInitializeEvent");
 	redirect_handler<handle_initialize_timer>(emulator, mapped_image, "KeInitializeTimer");
+	redirect_handler<handle_initialize_dpc>(emulator, mapped_image, "KeInitializeDpc");
+	redirect_handler<handle_insert_queue_dpc>(emulator, mapped_image, "KeInsertQueueDpc");
+	redirect_handler<handle_flush_queued_dpcs>(emulator, mapped_image, "KeFlushQueuedDpcs");
 	redirect_handler<handle_set_timer>(emulator, mapped_image, "KeSetTimer");
 	redirect_handler<handle_read_state_timer>(emulator, mapped_image, "KeReadStateTimer");
 	redirect_handler<handle_read_state_mutant>(emulator, mapped_image, "KeReadStateMutant");
@@ -4540,11 +4759,16 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 	redirect_handler<handle_initialize_push_lock>(emulator, mapped_image, "ExInitializePushLock");
 	redirect_handler<handle_set_load_image_notify_routine>(emulator, mapped_image, "PsSetLoadImageNotifyRoutine");
 	redirect_handler<handle_lookup_process_by_process_id>(emulator, mapped_image, "PsLookupProcessByProcessId");
+	redirect_handler<handle_lookup_thread_by_thread_id>(emulator, mapped_image, "PsLookupThreadByThreadId");
 	redirect_handler<handle_reference_process_file_pointer>(emulator, mapped_image, "PsReferenceProcessFilePointer");
+	redirect_handler<handle_reference_primary_token>(emulator, mapped_image, "PsReferencePrimaryToken");
+	redirect_handler<handle_dereference_primary_token>(emulator, mapped_image, "PsDereferencePrimaryToken");
+	redirect_handler<handle_query_information_token>(emulator, mapped_image, "SeQueryInformationToken");
 	redirect_handler<handle_get_process_image_file_name>(emulator, mapped_image, "PsGetProcessImageFileName");
 	redirect_handler<handle_get_process_section_base_address>(emulator, mapped_image, "PsGetProcessSectionBaseAddress");
 	redirect_handler<handle_get_process_session_id>(emulator, mapped_image, "PsGetProcessSessionId");
 	redirect_handler<handle_get_process_wow64_process>(emulator, mapped_image, "PsGetProcessWow64Process");
+	redirect_handler<handle_get_process_peb>(emulator, mapped_image, "PsGetProcessPeb");
 	redirect_handler<handle_get_process_exit_process_called>(emulator, mapped_image, "PsGetProcessExitProcessCalled");
 	redirect_handler<handle_acquire_process_exit_synchronization>(emulator, mapped_image, "PsAcquireProcessExitSynchronization");
 	redirect_handler<handle_release_process_exit_synchronization>(emulator, mapped_image, "PsReleaseProcessExitSynchronization");

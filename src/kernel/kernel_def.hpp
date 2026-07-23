@@ -889,6 +889,106 @@ struct _PSP_SYSCALL_PROVIDER_DISPATCH_CONTEXT
     ULONG Slot;                                                             //0x4
 };
 
+#ifndef _WIN32
+//0x7c8 bytes (sizeof)
+struct _PEB
+{
+    UCHAR InheritedAddressSpace;                                            //0x0
+    UCHAR ReadImageFileExecOptions;                                         //0x1
+    UCHAR BeingDebugged;                                                    //0x2
+    union
+    {
+        UCHAR BitField;                                                     //0x3
+        struct
+        {
+            UCHAR ImageUsesLargePages : 1;                                  //0x3
+            UCHAR IsProtectedProcess : 1;                                   //0x3
+            UCHAR IsImageDynamicallyRelocated : 1;                          //0x3
+            UCHAR SkipPatchingUser32Forwarders : 1;                         //0x3
+            UCHAR IsPackagedProcess : 1;                                    //0x3
+            UCHAR IsAppContainer : 1;                                       //0x3
+            UCHAR IsProtectedProcessLight : 1;                              //0x3
+            UCHAR IsLongPathAwareProcess : 1;                               //0x3
+        };
+    };
+    UCHAR Padding0[4];                                                      //0x4
+    VOID* Mutant;                                                           //0x8
+    VOID* ImageBaseAddress;                                                  //0x10
+    struct _PEB_LDR_DATA* Ldr;                                              //0x18
+    VOID* ProcessParameters;                                                //0x20
+    VOID* SubSystemData;                                                    //0x28
+    VOID* ProcessHeap;                                                      //0x30
+    VOID* FastPebLock;                                                      //0x38
+    VOID* AtlThunkSListPtr;                                                 //0x40
+    VOID* IFEOKey;                                                          //0x48
+    union
+    {
+        ULONG CrossProcessFlags;                                            //0x50
+        struct
+        {
+            ULONG ProcessInJob : 1;                                         //0x50
+            ULONG ProcessInitializing : 1;                                  //0x50
+            ULONG ProcessUsingVEH : 1;                                      //0x50
+            ULONG ProcessUsingVCH : 1;                                      //0x50
+            ULONG ProcessUsingFTH : 1;                                      //0x50
+            ULONG ProcessPreviouslyThrottled : 1;                           //0x50
+            ULONG ProcessCurrentlyThrottled : 1;                            //0x50
+            ULONG ProcessImagesHotPatched : 1;                              //0x50
+            ULONG ReservedBits0 : 24;                                       //0x50
+        };
+    };
+    UCHAR Padding1[4];                                                      //0x54
+    union
+    {
+        VOID* KernelCallbackTable;                                          //0x58
+        VOID* UserSharedInfoPtr;                                            //0x58
+    };
+    ULONG SystemReserved;                                                   //0x60
+    ULONG AtlThunkSListPtr32;                                               //0x64
+    VOID* ApiSetMap;                                                        //0x68
+    ULONG TlsExpansionCounter;                                              //0x70
+    UCHAR Padding2[4];                                                      //0x74
+    VOID* TlsBitmap;                                                        //0x78
+    ULONG TlsBitmapBits[2];                                                 //0x80
+    VOID* ReadOnlySharedMemoryBase;                                         //0x88
+    VOID* SharedData;                                                       //0x90
+    VOID** ReadOnlyStaticServerData;                                        //0x98
+    VOID* AnsiCodePageData;                                                 //0xa0
+    VOID* OemCodePageData;                                                  //0xa8
+    VOID* UnicodeCaseTableData;                                             //0xb0
+    ULONG NumberOfProcessors;                                               //0xb8
+    ULONG NtGlobalFlag;                                                     //0xbc
+    union _LARGE_INTEGER CriticalSectionTimeout;                            //0xc0
+    ULONGLONG HeapSegmentReserve;                                           //0xc8
+    ULONGLONG HeapSegmentCommit;                                            //0xd0
+    ULONGLONG HeapDeCommitTotalFreeThreshold;                               //0xd8
+    ULONGLONG HeapDeCommitFreeBlockThreshold;                                //0xe0
+    ULONG NumberOfHeaps;                                                    //0xe8
+    ULONG MaximumNumberOfHeaps;                                             //0xec
+    VOID** ProcessHeaps;                                                    //0xf0
+    VOID* GdiSharedHandleTable;                                             //0xf8
+    VOID* ProcessStarterHelper;                                             //0x100
+    ULONG GdiDCAttributeList;                                               //0x108
+    UCHAR Padding3[4];                                                      //0x10c
+    VOID* LoaderLock;                                                       //0x110
+    ULONG OSMajorVersion;                                                   //0x118
+    ULONG OSMinorVersion;                                                   //0x11c
+    USHORT OSBuildNumber;                                                    //0x120
+    USHORT OSCSDVersion;                                                     //0x122
+    ULONG OSPlatformId;                                                     //0x124
+    ULONG ImageSubsystem;                                                   //0x128
+    ULONG ImageSubsystemMajorVersion;                                       //0x12c
+    ULONG ImageSubsystemMinorVersion;                                       //0x130
+    UCHAR Padding4[4];                                                      //0x134
+    ULONGLONG ActiveProcessAffinityMask;                                    //0x138
+    ULONG GdiHandleBuffer[60];                                              //0x140
+    VOID* PostProcessInitRoutine;                                           //0x230
+    VOID* TlsExpansionBitmap;                                               //0x238
+    ULONG TlsExpansionBitmapBits[32];                                       //0x240
+    ULONG SessionId;                                                        //0x2c0
+};
+#endif
+
 //0xb80 bytes (sizeof)
 struct _EPROCESS
 {

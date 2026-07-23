@@ -146,7 +146,7 @@ void hm::emulator_t::configure_msr_properties()
 		partition_->set_msr_action_list(msr_exit_entries_);
 	}
 
-	partition_->set_unimplemented_msr_action(WHvMsrActionExit);
+	//partition_->set_unimplemented_msr_action(WHvMsrActionExit);
 }
 
 void hm::emulator_t::reset_guest_exit_state()

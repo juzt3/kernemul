@@ -369,6 +369,14 @@ std::int32_t main()
 		static_cast<void>(kernel::registry->create_key("system/currentcontrolset/enum/pci"));
 		static_cast<void>(kernel::registry->create_key("system/currentcontrolset/enum/display"));
 
+		// EAC driver instance keys
+		kernel::registry->create_key("system/currentcontrolset/services/easyanticheat_eossys/instances")
+			->set_string("DefaultInstance", L"EasyAntiCheat_EOSSys");
+
+		auto eac_instances_key = kernel::registry->create_key("system/currentcontrolset/services/easyanticheat_eossys/instances/easyanticheat_eossys");
+		eac_instances_key->set_string("Altitude", L"327530");
+		eac_instances_key->set_dword("Flags", 0);
+
 		kernel::filesystem->load_at("ntoskrnl.exe", "system32/ntoskrnl.exe");
 		kernel::filesystem->load_at("ntoskrnl.exe", "system32/drivers/ntoskrnl.exe");
 		kernel::filesystem->load_at("HAL.dll", "system32/hal.dll");
@@ -842,6 +850,9 @@ std::int32_t main()
 		emulator->map_virtual_page(0xFFFFF0F87C3E1000, current_cr3.address_of_page_directory << 12);
 		emulator->map_virtual_page(0xFFFFF0F87C3FF000, current_cr3.address_of_page_directory << 12);
 
+		//user::initialize_system(emulator, nt_image);
+
+		//user::create_user_process(emulator, "Rust.exe");
 
 		kernel::driver_object = set_up_driver_entry(emulator);
 
