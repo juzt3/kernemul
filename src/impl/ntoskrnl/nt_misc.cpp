@@ -266,6 +266,16 @@ static void handle_leave_critical_region(const std::shared_ptr<emulator_t>& emul
 	THREAD_LOG("KeLeaveCriticalRegion called");
 }
 
+static void handle_raise_access_violation(bool& skip_return, const std::shared_ptr<emulator_t>& emulator)
+{
+	THREAD_LOG("ExRaiseAccessViolation called");
+
+	const auto rip = emulator->read_register<x86::reg::rip, emulator_t::address_type>();
+	kernel::handle_exception(emulator, rip, exception_common::status_access_violation, 0);
+	skip_return = true;
+}
+
+
 // todo: actually track callback registrations and fire them on relevant events
 static void handle_create_callback(const std::shared_ptr<emulator_t>& emulator,
 	emulator_t::address_type callback_object_out, emulator_t::address_type object_attributes_address,
@@ -4721,6 +4731,7 @@ void redirect_ntoskrnl_misc_functions(const std::shared_ptr<emulator_t>& emulato
 	redirect_handler<handle_enter_critical_region>(emulator, mapped_image, "KeEnterCriticalRegion");
 	redirect_handler<handle_leave_critical_region>(emulator, mapped_image, "KeLeaveCriticalRegion");
 
+	redirect_handler<handle_raise_access_violation>(emulator, mapped_image, "ExRaiseAccessViolation");
 	redirect_handler<handle_create_callback>(emulator, mapped_image, "ExCreateCallback");
 	redirect_handler<handle_register_callback>(emulator, mapped_image, "ExRegisterCallback");
 	redirect_handler<handle_set_event>(emulator, mapped_image, "KeSetEvent");
