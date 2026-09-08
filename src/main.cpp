@@ -3,7 +3,7 @@
 
 int main()
 {
-	auto arch = std::make_shared<x86_arch>();
+	auto arch = std::make_shared<x86::arch>();
 	unicorn_emu emu(arch);
 
 	auto cpu = emu.add_vcpu();

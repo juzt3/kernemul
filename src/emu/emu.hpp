@@ -19,6 +19,37 @@ public:
 
 	virtual void run() = 0;
 
+	virtual void reg_read(reg_t reg, void* value, std::size_t size) = 0;
+	virtual void reg_write(reg_t reg, const void* value, std::size_t size) = 0;
+
+	template <reg_t R, typename T = std::uint64_t>
+	T reg()
+	{
+		T v{};
+		reg_read(R, &v, sizeof(v));
+		return v;
+	}
+
+	template <reg_t R, typename T = std::uint64_t>
+	void reg(const T& v)
+	{
+		reg_write(R, &v, sizeof(v));
+	}
+
+	template <typename T = std::uint64_t>
+	T reg(reg_t r)
+	{
+		T v{};
+		reg_read(r, &v, sizeof(v));
+		return v;
+	}
+
+	template <typename T = std::uint64_t>
+	void reg(reg_t r, const T& v)
+	{
+		reg_write(r, &v, sizeof(v));
+	}
+
 	[[nodiscard]] std::shared_ptr<const arch> arch() const noexcept
 	{
 		return arch_;
