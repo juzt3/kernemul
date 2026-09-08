@@ -7,7 +7,6 @@
 #include <span>
 #include <vector>
 
-class status;
 class emu;
 struct emu_hook;
 
@@ -19,7 +18,7 @@ public:
 
 	virtual ~vcpu() = default;
 
-	virtual status run() = 0;
+	virtual void run() = 0;
 
 	[[nodiscard]] std::shared_ptr<const arch> arch() const noexcept
 	{
