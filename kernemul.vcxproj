@@ -24,6 +24,8 @@
     <ProjectGuid>{2317b32c-1969-4217-82ee-1fad3bf8aaa9}</ProjectGuid>
     <RootNamespace>kernemul</RootNamespace>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+    <VcpkgEnabled>true</VcpkgEnabled>
+    <VcpkgManifestInstall>true</VcpkgManifestInstall>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
@@ -52,6 +54,7 @@
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
+  <Import Condition="Exists('C:\Users\noah\vcpkg\scripts\buildsystems\msbuild\vcpkg.props')" Project="C:\Users\noah\vcpkg\scripts\buildsystems\msbuild\vcpkg.props" />
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <ImportGroup Label="ExtensionSettings">
   </ImportGroup>
@@ -148,6 +151,7 @@
     <ClInclude Include="src\emu\unicorn.hpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <Import Condition="Exists('C:\Users\noah\vcpkg\scripts\buildsystems\msbuild\vcpkg.targets')" Project="C:\Users\noah\vcpkg\scripts\buildsystems\msbuild\vcpkg.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
 </Project>
