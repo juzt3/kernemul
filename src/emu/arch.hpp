@@ -12,11 +12,6 @@ struct arch
 
 namespace x86
 {
-	struct arch : ::arch
-	{
-		reg_t pc() const override { return rip; }
-	};
-
 	enum regs : reg_t
 	{
 		rax, rcx, rdx, rbx,
@@ -24,5 +19,10 @@ namespace x86
 		r8, r9, r10, r11,
 		r12, r13, r14, r15,
 		rip, rflags,
+	};
+
+	struct arch : ::arch
+	{
+		reg_t pc() const override { return rip; }
 	};
 }
