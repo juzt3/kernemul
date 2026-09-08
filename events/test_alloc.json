@@ -1,8 +1,0 @@
-{
-  "description": "test - call ExAllocatePoolWithTag(NonPagedPool=0, Size=256, Tag=0x54534554)",
-  "target_type": "CallTarget",
-  "target": {
-    "function": "ExAllocatePoolWithTag"
-  },
-  "arguments": [0, 256, 1414743380]
-}
