@@ -142,7 +142,10 @@
     <ClCompile Include="src\main.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="src\emu\arch.hpp" />
+    <ClInclude Include="src\emu\defs.hpp" />
     <ClInclude Include="src\emu\emu.hpp" />
+    <ClInclude Include="src\emu\unicorn.hpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
