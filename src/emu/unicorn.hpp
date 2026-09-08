@@ -2,6 +2,7 @@
 #include "emu.hpp"
 
 #include <unicorn/unicorn.h>
+#include <limits>
 #include <stdexcept>
 #include <unordered_map>
 #include <list>
@@ -26,6 +27,8 @@ public:
 
 	void run() override
 	{
+		auto pc = reg<addr_t>(arch_->pc());
+		uc_emu_start(uc_, pc, std::numeric_limits<addr_t>::max(), 0, 0);
 	}
 
 	void reg_read(reg_t reg, void* value, std::size_t size) override
