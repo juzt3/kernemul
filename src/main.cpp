@@ -12,4 +12,6 @@ int main()
 	emu.map_mem(0x2000, 0x1000, prot_rw);
 
 	LOG("created unicorn x86 backend with {} vcpu", emu.cpus().size());
+
+	return 0;
 }

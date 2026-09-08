@@ -8,7 +8,6 @@
 #include <vector>
 
 class emu;
-struct emu_hook;
 
 class vcpu
 {
@@ -30,6 +29,16 @@ protected:
 	std::shared_ptr<const struct arch> arch_;
 };
 
+using mem_hk_cb = std::function<void(vcpu&, addr_t, std::size_t, mem_prot)>;
+
+struct emu_hook
+{
+	virtual ~emu_hook() = default;
+
+	mem_hk_cb cb;
+	emu* owner;
+};
+
 class emu
 {
 public:
@@ -39,7 +48,6 @@ public:
 	virtual ~emu() = default;
 
 	using hook_handle = emu_hook*;
-	using mem_hk_cb = std::function<void(vcpu&, addr_t, std::size_t, mem_prot)>;
 
 	[[nodiscard]] std::shared_ptr<const arch> arch() const noexcept
 	{
