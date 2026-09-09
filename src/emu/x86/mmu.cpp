@@ -148,7 +148,7 @@ void mmu::map_virt(::addr_space& space, addr_t va, std::size_t size, mem_prot pr
 	std::lock_guard lk(mtx_);
 
 	bool user = !(prot & prot_supervisor);
-	auto phys_prot = static_cast<mem_prot>(prot & ~prot_supervisor);
+	auto phys_prot = prot & ~prot_supervisor;
 
 	const addr_t start = page_align(va);
 	const std::size_t aligned = size_align(size);

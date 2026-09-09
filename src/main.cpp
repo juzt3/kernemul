@@ -12,7 +12,7 @@ int main()
 	auto cpu = emu.add_vcpu();
 	auto space = cpu->curr_addr_space();
 
-	mem->map_virt(*space, 0xFFFF800000001000, 0x1000, prot_all);
+	mem->map_virt(*space, 0xFFFF800000001000, 0x1000, prot_rwx);
 
 	// dec rcx; jnz -5; hlt
 	const std::uint8_t code[] = {

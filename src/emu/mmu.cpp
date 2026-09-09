@@ -1,6 +1,16 @@
 #include "mmu.hpp"
 #include "emu.hpp"
 
+void addr_space::read_mem(addr_t va, void* buf, std::size_t size)
+{
+	mmu_->read_virt(*this, va, buf, size);
+}
+
+void addr_space::write_mem(addr_t va, const void* buf, std::size_t size)
+{
+	mmu_->write_virt(*this, va, buf, size);
+}
+
 void mmu::read_phys(addr_t pa, void* buf, std::size_t size)
 {
 	emu_->read_phys_mem(pa, buf, size);

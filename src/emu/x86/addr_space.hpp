@@ -2,8 +2,6 @@
 #include "../addr_space.hpp"
 #include <unordered_map>
 
-class mmu;
-
 namespace x86
 {
 	union virt_addr
@@ -26,7 +24,6 @@ namespace x86
 
 		addr_t pml4_pa = 0;
 		std::unordered_map<addr_t, addr_t> shadow;
-		::mmu* mmu_ = nullptr;
 		addr_t user_next_ = 0x10000;
 		addr_t kernel_next_ = 0xFFFFF80000000000;
 	};

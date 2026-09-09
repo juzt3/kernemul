@@ -321,7 +321,7 @@ protected:
 			throw std::runtime_error("unsupported architecture for unicorn backend");
 
 		for (auto& [addr, buf] : mem_)
-			uc_mem_map_ptr(uc, addr, buf.size(), prot_all, buf.data());
+			uc_mem_map_ptr(uc, addr, buf.size(), prot_rwx, buf.data());
 
 		for (auto& hk : hooks_)
 			add_uc_hook(hk, uc);
