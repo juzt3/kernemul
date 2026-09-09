@@ -1,6 +1,7 @@
 #pragma once
 #include "../mmu.hpp"
 #include "addr_space.hpp"
+#include <unordered_map>
 
 namespace x86
 {
@@ -19,11 +20,15 @@ namespace x86
 		std::optional<addr_t> phys_to_virt(const ::addr_space& space, addr_t pa) override;
 
 		std::shared_ptr<::addr_space> create_addr_space() override;
+		void destroy_addr_space(std::shared_ptr<::addr_space> space) override;
+		std::shared_ptr<::addr_space> curr_addr_space(vcpu& cpu) override;
 		void init_vcpu(vcpu& cpu) override;
 		void switch_to(vcpu& cpu, std::shared_ptr<::addr_space> space) override;
 
 	private:
 		static constexpr std::size_t page_shift = 12;
+
+		std::unordered_map<addr_t, std::shared_ptr<::addr_space>> spaces_;
 
 		static addr_t pfn_to_pa(std::uint64_t pfn) { return static_cast<addr_t>(pfn) << page_shift; }
 

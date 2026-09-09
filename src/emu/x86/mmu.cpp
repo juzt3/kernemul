@@ -28,7 +28,23 @@ std::shared_ptr<::addr_space> mmu::create_addr_space()
 {
 	auto space = std::make_shared<addr_space>();
 	space->pml4_pa = alloc_phys(page_size(), prot_rw);
+	spaces_[space->pml4_pa] = space;
 	return space;
+}
+
+void mmu::destroy_addr_space(std::shared_ptr<::addr_space> space)
+{
+	auto& s = as_x86(*space);
+	spaces_.erase(s.pml4_pa);
+}
+
+std::shared_ptr<::addr_space> mmu::curr_addr_space(vcpu& cpu)
+{
+	addr_t cr3 = cpu.reg<addr_t>(x86::cr3);
+	auto it = spaces_.find(cr3);
+	if (it == spaces_.end())
+		return nullptr;
+	return it->second;
 }
 
 void mmu::init_vcpu(vcpu& cpu)

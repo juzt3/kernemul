@@ -45,6 +45,8 @@ public:
 	virtual std::optional<addr_t> phys_to_virt(const addr_space& space, addr_t pa) = 0;
 
 	virtual std::shared_ptr<addr_space> create_addr_space() = 0;
+	virtual void destroy_addr_space(std::shared_ptr<addr_space> space) = 0;
+	virtual std::shared_ptr<addr_space> curr_addr_space(vcpu& cpu) = 0;
 	virtual void init_vcpu(vcpu& cpu) = 0;
 	virtual void switch_to(vcpu& cpu, std::shared_ptr<addr_space> space) = 0;
 

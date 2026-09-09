@@ -59,6 +59,8 @@ public:
 		return arch_;
 	}
 
+	std::shared_ptr<addr_space> curr_addr_space();
+
 protected:
 	emu* emu_;
 	std::shared_ptr<const struct arch> arch_;
@@ -106,6 +108,15 @@ public:
 	{
 		auto cpu = create_vcpu();
 
+		if (mem_)
+		{
+			if (!default_space_)
+				default_space_ = mem_->create_addr_space();
+
+			mem_->init_vcpu(*cpu);
+			mem_->switch_to(*cpu, default_space_);
+		}
+
 		cpus_.push_back(cpu);
 
 		return cpu;
@@ -137,4 +148,10 @@ protected:
 	std::shared_ptr<const struct arch> arch_;
 	std::vector<std::shared_ptr<vcpu>> cpus_;
 	std::shared_ptr<mmu> mem_;
+	std::shared_ptr<addr_space> default_space_;
 };
+
+inline std::shared_ptr<addr_space> vcpu::curr_addr_space()
+{
+	return emu_->mem()->curr_addr_space(*this);
+}
