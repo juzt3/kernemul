@@ -2,7 +2,10 @@
 #include "emu.hpp"
 
 #include <unicorn/unicorn.h>
+#include <atomic>
+#include <cstring>
 #include <limits>
+#include <mutex>
 #include <stdexcept>
 #include <unordered_map>
 #include <list>
@@ -27,8 +30,18 @@ public:
 
 	void run() override
 	{
-		auto pc = reg<addr_t>(arch_->pc());
-		uc_emu_start(uc_, pc, std::numeric_limits<addr_t>::max(), 0, 0);
+		for (;;)
+		{
+			running_ = true;
+			auto pc = reg<addr_t>(arch_->pc());
+			uc_emu_start(uc_, pc, std::numeric_limits<addr_t>::max(), 0, 0);
+			running_ = false;
+
+			if (!pending_pause_.load())
+				break;
+
+			while (pending_pause_.load()) {}
+		}
 	}
 
 	void stop() override
@@ -75,6 +88,8 @@ public:
 	}
 
 	uc_engine* uc_;
+	std::atomic<bool> running_{false};
+	std::atomic<bool> pending_pause_{false};
 };
 
 class unicorn_emu : public emu
@@ -85,29 +100,44 @@ public:
 
 	void map_mem(addr_t addr, std::size_t size, mem_prot prot) override
 	{
+		auto it = mem_.find(addr);
+		std::size_t old_size = (it != mem_.end()) ? it->second.size() : 0;
+
 		auto& buf = mem_[addr];
 		buf.resize(size);
 
-		for (auto& cpu : cpus_)
-			uc_mem_map_ptr(engine(cpu), addr, size, prot, buf.data());
+		run_on_all([&] {
+			for (auto& cpu : cpus_)
+			{
+				if (old_size)
+					uc_mem_unmap(engine(cpu), addr, old_size);
+				uc_mem_map_ptr(engine(cpu), addr, size, prot, buf.data());
+			}
+		});
 	}
 
 	void unmap_mem(addr_t addr, std::size_t size, mem_prot) override
 	{
-		for (auto& cpu : cpus_)
-			uc_mem_unmap(engine(cpu), addr, size);
+		run_on_all([&] {
+			for (auto& cpu : cpus_)
+				uc_mem_unmap(engine(cpu), addr, size);
+		});
 
 		mem_.erase(addr);
 	}
 
 	void read_mem(addr_t addr, void* buf, std::size_t size) override
 	{
-		uc_mem_read(engine(cpus_[0]), addr, buf, size);
+		auto [src, avail] = find_backing(addr);
+		if (src)
+			std::memcpy(buf, src, std::min(size, avail));
 	}
 
 	void write_mem(addr_t addr, const void* buf, std::size_t size) override
 	{
-		uc_mem_write(engine(cpus_[0]), addr, buf, size);
+		auto [dst, avail] = find_backing(addr);
+		if (dst)
+			std::memcpy(dst, buf, std::min(size, avail));
 	}
 
 	hook_handle hook_mem(addr_t start_addr, addr_t end_addr, mem_prot prot, mem_hk_cb cb) override
@@ -206,6 +236,38 @@ private:
 		return static_cast<unicorn_vcpu*>(cpu.get())->native();
 	}
 
+	std::pair<std::uint8_t*, std::size_t> find_backing(addr_t addr)
+	{
+		for (auto& [base, buf] : mem_)
+		{
+			if (addr >= base && addr < base + buf.size())
+			{
+				auto off = addr - base;
+				return { buf.data() + off, buf.size() - off };
+			}
+		}
+		return { nullptr, 0 };
+	}
+
+	void run_on_all(std::function<void()> fn)
+	{
+		std::lock_guard lk(op_mtx_);
+		for (auto& cpu : cpus_)
+		{
+			auto* uc = static_cast<unicorn_vcpu*>(cpu.get());
+			uc->pending_pause_ = true;
+			uc->stop();
+		}
+		for (auto& cpu : cpus_)
+			while (static_cast<unicorn_vcpu*>(cpu.get())->running_.load()) {}
+
+		fn();
+
+		for (auto& cpu : cpus_)
+			static_cast<unicorn_vcpu*>(cpu.get())->pending_pause_ = false;
+	}
+
 	std::unordered_map<addr_t, std::vector<std::uint8_t>> mem_;
 	std::list<unicorn_hook> hooks_;
+	std::mutex op_mtx_;
 };
