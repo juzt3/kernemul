@@ -12,7 +12,6 @@
 
 struct unicorn_hook : emu_hook
 {
-	addr_t start, end;
 	int uc_type;
 	int uc_insn;
 	std::vector<uc_hook> handles;
@@ -158,14 +157,14 @@ public:
 		return &hk;
 	}
 
-	hook_handle hook_insn(hook_insn_t insn, insn_hk_cb cb) override
+	hook_handle hook_insn(addr_t start_addr, addr_t end_addr, hook_insn_t insn, insn_hk_cb cb) override
 	{
 		hooks_.push_back({});
 		auto& hk = hooks_.back();
 		hk.cb = std::move(cb);
 		hk.owner = this;
-		hk.start = 1;
-		hk.end = 0;
+		hk.start = start_addr;
+		hk.end = end_addr;
 		hk.uc_type = UC_HOOK_INSN;
 		hk.uc_insn = to_uc_insn(insn);
 

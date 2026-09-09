@@ -77,6 +77,7 @@ struct emu_hook
 
 	std::variant<mem_hk_cb, insn_hk_cb> cb;
 	emu* owner;
+	addr_t start, end;
 };
 
 class emu
@@ -104,7 +105,7 @@ public:
 	}
 
 	virtual hook_handle hook_mem(addr_t start_addr, addr_t end_addr, mem_prot prot, mem_hk_cb) = 0;
-	virtual hook_handle hook_insn(hook_insn_t insn, insn_hk_cb) = 0;
+	virtual hook_handle hook_insn(addr_t start_addr, addr_t end_addr, hook_insn_t insn, insn_hk_cb) = 0;
 	virtual void remove_hook(hook_handle handle) = 0;
 
 	virtual void map_mem(addr_t addr, std::size_t size, mem_prot prot) = 0;
