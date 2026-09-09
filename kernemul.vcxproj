@@ -170,6 +170,7 @@
     <ClInclude Include="src\emu\x86\arch.hpp" />
     <ClInclude Include="src\emu\x86\mmu.hpp" />
     <ClInclude Include="src\emu\x86\addr_space.hpp" />
+    <ClInclude Include="src\img\map.hpp" />
     <ClInclude Include="src\util\logs.hpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

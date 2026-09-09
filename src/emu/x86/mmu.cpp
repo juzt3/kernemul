@@ -28,6 +28,7 @@ std::shared_ptr<::addr_space> mmu::create_addr_space()
 {
 	auto space = std::make_shared<addr_space>();
 	space->pml4_pa = alloc_phys(page_size(), prot_rw);
+	space->mmu_ = this;
 	spaces_[space->pml4_pa] = space;
 	return space;
 }
@@ -146,13 +147,16 @@ void mmu::map_virt(::addr_space& space, addr_t va, std::size_t size, mem_prot pr
 	auto& s = as_x86(space);
 	std::lock_guard lk(mtx_);
 
+	bool user = !(prot & prot_supervisor);
+	auto phys_prot = static_cast<mem_prot>(prot & ~prot_supervisor);
+
 	const addr_t start = page_align(va);
 	const std::size_t aligned = size_align(size);
 
 	for (std::size_t off = 0; off < aligned; off += page_size())
 	{
-		addr_t pa = alloc_phys(page_size(), prot);
-		map_page(s, start + off, pa);
+		addr_t pa = alloc_phys(page_size(), phys_prot);
+		map_page(s, start + off, pa, user);
 	}
 
 	flush_all_tlb();
@@ -280,6 +284,19 @@ std::optional<addr_t> mmu::phys_to_virt(const ::addr_space& space, addr_t pa)
 	}
 
 	return std::nullopt;
+}
+
+addr_t addr_space::alloc(std::size_t size, mem_prot prot)
+{
+	constexpr std::size_t page = 0x1000;
+	auto aligned = (size + page - 1) & ~(page - 1);
+
+	addr_t& cursor = (prot & prot_supervisor) ? kernel_next_ : user_next_;
+	addr_t va = cursor;
+	cursor += aligned;
+
+	mmu_->map_virt(*this, va, aligned, prot);
+	return va;
 }
 
 }

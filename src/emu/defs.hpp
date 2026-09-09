@@ -9,6 +9,7 @@ enum mem_prot : std::uint8_t
 	prot_read = 1,
 	prot_write = 2,
 	prot_exec = 4,
+	prot_supervisor = 8,
 	prot_rw = prot_read | prot_write,
 	prot_rx = prot_read | prot_exec,
 	prot_wx = prot_write | prot_exec,
