@@ -5,6 +5,7 @@
 #include <expected>
 #include <memory>
 #include <span>
+#include <variant>
 #include <vector>
 
 class emu;
@@ -61,13 +62,20 @@ protected:
 	std::shared_ptr<const struct arch> arch_;
 };
 
+enum class hook_insn_t : std::uint8_t
+{
+	cpuid,
+	rdtsc,
+};
+
 using mem_hk_cb = std::function<void(vcpu&, addr_t, std::size_t, mem_prot)>;
+using insn_hk_cb = std::function<bool(vcpu&)>;
 
 struct emu_hook
 {
 	virtual ~emu_hook() = default;
 
-	mem_hk_cb cb;
+	std::variant<mem_hk_cb, insn_hk_cb> cb;
 	emu* owner;
 };
 
@@ -96,6 +104,7 @@ public:
 	}
 
 	virtual hook_handle hook_mem(addr_t start_addr, addr_t end_addr, mem_prot prot, mem_hk_cb) = 0;
+	virtual hook_handle hook_insn(hook_insn_t insn, insn_hk_cb) = 0;
 	virtual void remove_hook(hook_handle handle) = 0;
 
 	virtual void map_mem(addr_t addr, std::size_t size, mem_prot prot) = 0;

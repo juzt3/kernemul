@@ -14,6 +14,7 @@ struct unicorn_hook : emu_hook
 {
 	addr_t start, end;
 	int uc_type;
+	int uc_insn;
 	std::vector<uc_hook> handles;
 };
 
@@ -149,6 +150,24 @@ public:
 		hk.start = start_addr;
 		hk.end = end_addr;
 		hk.uc_type = prot_to_uc_hook(prot);
+		hk.uc_insn = 0;
+
+		for (auto& cpu : cpus_)
+			add_uc_hook(hk, engine(cpu));
+
+		return &hk;
+	}
+
+	hook_handle hook_insn(hook_insn_t insn, insn_hk_cb cb) override
+	{
+		hooks_.push_back({});
+		auto& hk = hooks_.back();
+		hk.cb = std::move(cb);
+		hk.owner = this;
+		hk.start = 1;
+		hk.end = 0;
+		hk.uc_type = UC_HOOK_INSN;
+		hk.uc_insn = to_uc_insn(insn);
 
 		for (auto& cpu : cpus_)
 			add_uc_hook(hk, engine(cpu));
@@ -191,12 +210,29 @@ private:
 	{
 		auto* hk = static_cast<unicorn_hook*>(user_data);
 		auto* self = static_cast<unicorn_emu*>(hk->owner);
+		auto& cb = std::get<mem_hk_cb>(hk->cb);
 
 		for (auto& cpu : self->cpus_)
 		{
 			if (engine(cpu) == uc)
 			{
-				hk->cb(*cpu, addr, static_cast<std::size_t>(size), uc_type_to_prot(type));
+				cb(*cpu, addr, static_cast<std::size_t>(size), uc_type_to_prot(type));
+				return;
+			}
+		}
+	}
+
+	static void insn_hook_trampoline(uc_engine* uc, void* user_data)
+	{
+		auto* hk = static_cast<unicorn_hook*>(user_data);
+		auto* self = static_cast<unicorn_emu*>(hk->owner);
+		auto& cb = std::get<insn_hk_cb>(hk->cb);
+
+		for (auto& cpu : self->cpus_)
+		{
+			if (engine(cpu) == uc)
+			{
+				cb(*cpu);
 				return;
 			}
 		}
@@ -205,9 +241,23 @@ private:
 	static void add_uc_hook(unicorn_hook& hk, uc_engine* uc)
 	{
 		uc_hook h{};
-		uc_hook_add(uc, &h, hk.uc_type, reinterpret_cast<void*>(mem_hook_trampoline),
-			&hk, hk.start, hk.end);
+		if (hk.uc_type == UC_HOOK_INSN)
+			uc_hook_add(uc, &h, hk.uc_type, reinterpret_cast<void*>(insn_hook_trampoline),
+				&hk, hk.start, hk.end, hk.uc_insn);
+		else
+			uc_hook_add(uc, &h, hk.uc_type, reinterpret_cast<void*>(mem_hook_trampoline),
+				&hk, hk.start, hk.end);
 		hk.handles.push_back(h);
+	}
+
+	static constexpr int to_uc_insn(hook_insn_t insn)
+	{
+		switch (insn)
+		{
+		case hook_insn_t::cpuid: return UC_X86_INS_CPUID;
+		case hook_insn_t::rdtsc: return UC_X86_INS_RDTSC;
+		default: return -1;
+		}
 	}
 
 	static int prot_to_uc_hook(mem_prot p)
