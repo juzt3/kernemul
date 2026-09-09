@@ -24,7 +24,7 @@ struct kernel_state
 
 	virtual std::shared_ptr<process> create_process(std::string_view name) = 0;
 
-	std::shared_ptr<process> find_process(process::id_type id)
+	std::shared_ptr<process> find_process(const process::id_type id)
 	{
 		std::scoped_lock lock(proc_mtx_);
 		const auto it = processes.find(id);

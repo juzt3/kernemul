@@ -15,7 +15,7 @@ struct win_kernel_state : kernel_state
 		processes[sys_proc_id] = sys_proc;
 	}
 
-	std::shared_ptr<process> create_process(std::string_view name) override
+	std::shared_ptr<process> create_process(const std::string_view name) override
 	{
 		std::scoped_lock lock(proc_mtx_);
 		const auto id = next_id_;
