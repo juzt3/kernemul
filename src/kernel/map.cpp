@@ -57,6 +57,13 @@ bool krnl::map_img(process& proc, const std::string_view name, const pe::image* 
 
 	const addr_t delta = addr - img->base_addr();
 
+	if (const auto* lc = img->load_config(); lc && lc->security_cookie)
+	{
+		const auto cookie_rva = lc->security_cookie - img->base_addr();
+		const auto cookie_val = space->read_mem<std::uint64_t>(addr + cookie_rva);
+		space->write_mem(addr + cookie_rva, cookie_val + delta);
+	}
+
 	for (const auto reloc : img->relocs())
 	{
 		if (reloc.type != pe::reloc_type::dir64)
