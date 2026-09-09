@@ -1,3 +1,6 @@
 [submodule "vendor/ia32-doc"]
 	path = vendor/ia32-doc
 	url = https://github.com/ia32-doc/ia32-doc.git
+[submodule "vendor/pe"]
+	path = vendor/pe
+	url = https://github.com/noahware/pe
