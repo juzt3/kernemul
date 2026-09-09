@@ -89,9 +89,10 @@ struct emu_hook
 class emu
 {
 public:
-	emu(std::shared_ptr<const arch> arch, std::shared_ptr<mmu> mem)
+	emu(std::shared_ptr<struct arch> arch, std::shared_ptr<mmu> mem)
 		:	arch_(std::move(arch)), mem_(std::move(mem))
 	{
+		if (arch_) arch_->set_emu(this);
 		if (mem_) mem_->set_emu(this);
 	}
 
@@ -107,6 +108,10 @@ public:
 	[[nodiscard]] std::shared_ptr<vcpu> add_vcpu()
 	{
 		auto cpu = create_vcpu();
+		cpus_.push_back(cpu);
+
+		if (arch_)
+			arch_->init_vcpu(*cpu);
 
 		if (mem_)
 		{
@@ -116,8 +121,6 @@ public:
 			mem_->init_vcpu(*cpu);
 			mem_->switch_to(*cpu, default_space_);
 		}
-
-		cpus_.push_back(cpu);
 
 		return cpu;
 	}
@@ -145,7 +148,7 @@ public:
 protected:
 	virtual std::shared_ptr<vcpu> create_vcpu() = 0;
 
-	std::shared_ptr<const struct arch> arch_;
+	std::shared_ptr<struct arch> arch_;
 	std::vector<std::shared_ptr<vcpu>> cpus_;
 	std::shared_ptr<mmu> mem_;
 	std::shared_ptr<addr_space> default_space_;

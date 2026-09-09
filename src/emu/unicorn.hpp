@@ -67,6 +67,14 @@ public:
 			std::memcpy(value, &msr.value, std::min(size, sizeof(msr.value)));
 			return;
 		}
+		if (is_seg_reg(reg))
+		{
+			uc_x86_mmr mmr{};
+			uc_reg_read(uc_, to_uc_reg(reg), &mmr);
+			x86::seg_reg sr{ mmr.selector, mmr.base, mmr.limit, mmr.flags };
+			std::memcpy(value, &sr, std::min(size, sizeof(sr)));
+			return;
+		}
 		uc_reg_read(uc_, to_uc_reg(reg), value);
 	}
 
@@ -80,10 +88,23 @@ public:
 			uc_reg_write(uc_, UC_X86_REG_MSR, &msr);
 			return;
 		}
+		if (is_seg_reg(reg))
+		{
+			x86::seg_reg sr{};
+			std::memcpy(&sr, value, std::min(size, sizeof(sr)));
+			uc_x86_mmr mmr{ sr.selector, sr.base, sr.limit, sr.flags };
+			uc_reg_write(uc_, to_uc_reg(reg), &mmr);
+			return;
+		}
 		uc_reg_write(uc_, to_uc_reg(reg), value);
 	}
 
 	uc_engine* native() const { return uc_; }
+
+	static constexpr bool is_seg_reg(reg_t reg)
+	{
+		return reg >= x86::cs && reg <= x86::idtr;
+	}
 
 	static constexpr int to_uc_reg(reg_t reg)
 	{
@@ -110,6 +131,16 @@ public:
 		case x86::cr0:    return UC_X86_REG_CR0;
 		case x86::cr3:    return UC_X86_REG_CR3;
 		case x86::cr4:    return UC_X86_REG_CR4;
+		case x86::cs:     return UC_X86_REG_CS;
+		case x86::ds:     return UC_X86_REG_DS;
+		case x86::es:     return UC_X86_REG_ES;
+		case x86::ss:     return UC_X86_REG_SS;
+		case x86::fs:     return UC_X86_REG_FS;
+		case x86::gs:     return UC_X86_REG_GS;
+		case x86::tr:     return UC_X86_REG_TR;
+		case x86::ldtr:   return UC_X86_REG_LDTR;
+		case x86::gdtr:   return UC_X86_REG_GDTR;
+		case x86::idtr:   return UC_X86_REG_IDTR;
 		default: return -1;
 		}
 	}
@@ -122,7 +153,7 @@ public:
 class unicorn_emu : public emu
 {
 public:
-	unicorn_emu(std::shared_ptr<const struct arch> arch, std::shared_ptr<mmu> mem)
+	unicorn_emu(std::shared_ptr<struct arch> arch, std::shared_ptr<mmu> mem)
 		:	emu(std::move(arch), std::move(mem)) { }
 
 	void map_phys_mem(addr_t addr, std::size_t size, mem_prot prot) override

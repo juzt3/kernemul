@@ -153,6 +153,9 @@
   <ItemGroup>
     <ClCompile Include="src\main.cpp" />
     <ClCompile Include="src\emu\mmu.cpp" />
+    <ClCompile Include="src\emu\x86\arch.cpp">
+      <ObjectFileName>$(IntDir)x86_arch.obj</ObjectFileName>
+    </ClCompile>
     <ClCompile Include="src\emu\x86\mmu.cpp">
       <ObjectFileName>$(IntDir)x86_mmu.obj</ObjectFileName>
     </ClCompile>
