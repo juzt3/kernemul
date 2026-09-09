@@ -18,6 +18,7 @@ public:
 	virtual ~vcpu() = default;
 
 	virtual void run() = 0;
+	virtual void stop() = 0;
 
 	virtual void reg_read(reg_t reg, void* value, std::size_t size) = 0;
 	virtual void reg_write(reg_t reg, const void* value, std::size_t size) = 0;

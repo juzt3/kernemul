@@ -31,6 +31,11 @@ public:
 		uc_emu_start(uc_, pc, std::numeric_limits<addr_t>::max(), 0, 0);
 	}
 
+	void stop() override
+	{
+		uc_emu_stop(uc_);
+	}
+
 	void reg_read(reg_t reg, void* value, std::size_t size) override
 	{
 		uc_reg_read(uc_, to_uc_reg(reg), value);
