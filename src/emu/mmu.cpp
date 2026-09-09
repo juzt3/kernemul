@@ -11,6 +11,11 @@ void addr_space::write_mem(addr_t va, const void* buf, std::size_t size)
 	mmu_->write_virt(*this, va, buf, size);
 }
 
+void addr_space::prot_mem(addr_t va, std::size_t size, mem_prot prot)
+{
+	mmu_->prot_virt(*this, va, size, prot);
+}
+
 void mmu::read_phys(addr_t pa, void* buf, std::size_t size)
 {
 	emu_->read_phys_mem(pa, buf, size);

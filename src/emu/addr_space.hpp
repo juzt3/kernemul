@@ -11,6 +11,7 @@ struct addr_space
 
 	void read_mem(addr_t va, void* buf, std::size_t size);
 	void write_mem(addr_t va, const void* buf, std::size_t size);
+	void prot_mem(addr_t va, std::size_t size, mem_prot prot);
 
 	template <typename T>
 	T read_mem(addr_t va)
