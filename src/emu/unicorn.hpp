@@ -10,6 +10,10 @@
 #include <unordered_map>
 #include <list>
 
+namespace ia32 {
+#include <ia32.hpp>
+}
+
 struct unicorn_hook : emu_hook
 {
 	int uc_type;
@@ -49,13 +53,33 @@ public:
 		uc_emu_stop(uc_);
 	}
 
+	void flush_tlb() override
+	{
+		uc_ctl_flush_tlb(uc_);
+	}
+
 	void reg_read(reg_t reg, void* value, std::size_t size) override
 	{
+		if (reg == x86::efer)
+		{
+			uc_x86_msr msr{ IA32_EFER, 0 };
+			uc_reg_read(uc_, UC_X86_REG_MSR, &msr);
+			std::memcpy(value, &msr.value, std::min(size, sizeof(msr.value)));
+			return;
+		}
 		uc_reg_read(uc_, to_uc_reg(reg), value);
 	}
 
 	void reg_write(reg_t reg, const void* value, std::size_t size) override
 	{
+		if (reg == x86::efer)
+		{
+			std::uint64_t val{};
+			std::memcpy(&val, value, std::min(size, sizeof(val)));
+			uc_x86_msr msr{ IA32_EFER, val };
+			uc_reg_write(uc_, UC_X86_REG_MSR, &msr);
+			return;
+		}
 		uc_reg_write(uc_, to_uc_reg(reg), value);
 	}
 
@@ -83,6 +107,9 @@ public:
 		case x86::r15:    return UC_X86_REG_R15;
 		case x86::rip:    return UC_X86_REG_RIP;
 		case x86::rflags: return UC_X86_REG_RFLAGS;
+		case x86::cr0:    return UC_X86_REG_CR0;
+		case x86::cr3:    return UC_X86_REG_CR3;
+		case x86::cr4:    return UC_X86_REG_CR4;
 		default: return -1;
 		}
 	}
@@ -95,10 +122,10 @@ public:
 class unicorn_emu : public emu
 {
 public:
-	explicit unicorn_emu(std::shared_ptr<const struct arch> arch)
-		:	emu(std::move(arch)) { }
+	unicorn_emu(std::shared_ptr<const struct arch> arch, std::shared_ptr<mmu> mem)
+		:	emu(std::move(arch), std::move(mem)) { }
 
-	void map_mem(addr_t addr, std::size_t size, mem_prot prot) override
+	void map_phys_mem(addr_t addr, std::size_t size, mem_prot prot) override
 	{
 		auto it = mem_.find(addr);
 		std::size_t old_size = (it != mem_.end()) ? it->second.size() : 0;
@@ -116,7 +143,7 @@ public:
 		});
 	}
 
-	void unmap_mem(addr_t addr, std::size_t size, mem_prot) override
+	void unmap_phys_mem(addr_t addr, std::size_t size, mem_prot) override
 	{
 		run_on_all([&] {
 			for (auto& cpu : cpus_)
@@ -126,14 +153,14 @@ public:
 		mem_.erase(addr);
 	}
 
-	void read_mem(addr_t addr, void* buf, std::size_t size) override
+	void read_phys_mem(addr_t addr, void* buf, std::size_t size) override
 	{
 		auto [src, avail] = find_backing(addr);
 		if (src)
 			std::memcpy(buf, src, std::min(size, avail));
 	}
 
-	void write_mem(addr_t addr, const void* buf, std::size_t size) override
+	void write_phys_mem(addr_t addr, const void* buf, std::size_t size) override
 	{
 		auto [dst, avail] = find_backing(addr);
 		if (dst)
@@ -250,6 +277,8 @@ protected:
 
 		for (auto& hk : hooks_)
 			add_uc_hook(hk, uc);
+
+		uc_ctl_tlb_mode(uc, UC_TLB_CPU);
 
 		return std::make_shared<unicorn_vcpu>(this, arch_, uc);
 	}

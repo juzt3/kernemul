@@ -1,6 +1,7 @@
 #pragma once
 #include "arch.hpp"
 #include "defs.hpp"
+#include "mmu.hpp"
 #include <functional>
 #include <expected>
 #include <memory>
@@ -20,6 +21,7 @@ public:
 
 	virtual void run() = 0;
 	virtual void stop() = 0;
+	virtual void flush_tlb() = 0;
 
 	virtual void reg_read(reg_t reg, void* value, std::size_t size) = 0;
 	virtual void reg_write(reg_t reg, const void* value, std::size_t size) = 0;
@@ -85,8 +87,11 @@ struct emu_hook
 class emu
 {
 public:
-	explicit emu(std::shared_ptr<const arch> arch)
-		:	arch_(std::move(arch)) { }
+	emu(std::shared_ptr<const arch> arch, std::shared_ptr<mmu> mem)
+		:	arch_(std::move(arch)), mem_(std::move(mem))
+	{
+		if (mem_) mem_->set_emu(this);
+	}
 
 	virtual ~emu() = default;
 
@@ -113,19 +118,23 @@ public:
 	virtual hook_handle hook_invalid_mem(mem_prot access, invalid_mem_hk_cb) = 0;
 	virtual void remove_hook(hook_handle handle) = 0;
 
-	virtual void map_mem(addr_t addr, std::size_t size, mem_prot prot) = 0;
-	virtual void unmap_mem(addr_t addr, std::size_t size, mem_prot prot) = 0;
-	virtual void read_mem(addr_t addr, void* buf, std::size_t size) = 0;
-	virtual void write_mem(addr_t addr, const void* buf, std::size_t size) = 0;
+	virtual void map_phys_mem(addr_t addr, std::size_t size, mem_prot prot) = 0;
+	virtual void unmap_phys_mem(addr_t addr, std::size_t size, mem_prot prot) = 0;
+	virtual void read_phys_mem(addr_t addr, void* buf, std::size_t size) = 0;
+	virtual void write_phys_mem(addr_t addr, const void* buf, std::size_t size) = 0;
 
 	[[nodiscard]] std::span<const std::shared_ptr<vcpu>> cpus() const noexcept
 	{
 		return cpus_;
 	}
 
+	std::shared_ptr<mmu> mem() { return mem_; }
+	std::shared_ptr<const mmu> mem() const { return mem_; }
+
 protected:
 	virtual std::shared_ptr<vcpu> create_vcpu() = 0;
 
 	std::shared_ptr<const struct arch> arch_;
 	std::vector<std::shared_ptr<vcpu>> cpus_;
+	std::shared_ptr<mmu> mem_;
 };

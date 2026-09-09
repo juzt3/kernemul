@@ -120,6 +120,7 @@
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpplatest</LanguageStandard>
       <AdditionalOptions>/Zc:preprocessor /utf-8 %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalIncludeDirectories>$(ProjectDir)vendor\ia32-doc\out;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -139,6 +140,7 @@
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <AdditionalOptions>/Zc:preprocessor /utf-8 %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalIncludeDirectories>$(ProjectDir)vendor\ia32-doc\out;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -150,12 +152,21 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="src\main.cpp" />
+    <ClCompile Include="src\emu\mmu.cpp" />
+    <ClCompile Include="src\emu\x86\mmu.cpp">
+      <ObjectFileName>$(IntDir)x86_mmu.obj</ObjectFileName>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\emu\arch.hpp" />
     <ClInclude Include="src\emu\defs.hpp" />
     <ClInclude Include="src\emu\emu.hpp" />
+    <ClInclude Include="src\emu\mmu.hpp" />
+    <ClInclude Include="src\emu\addr_space.hpp" />
     <ClInclude Include="src\emu\unicorn.hpp" />
+    <ClInclude Include="src\emu\x86\arch.hpp" />
+    <ClInclude Include="src\emu\x86\mmu.hpp" />
+    <ClInclude Include="src\emu\x86\addr_space.hpp" />
     <ClInclude Include="src\util\logs.hpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
