@@ -174,7 +174,8 @@
     <ClInclude Include="src\emu\x86\addr_space.hpp" />
     <ClInclude Include="src\kernel\map.hpp" />
     <ClInclude Include="src\process\process.hpp" />
-    <ClInclude Include="src\util\logs.hpp" />
+    <ClInclude Include="src\util\log.hpp" />
+    <ClInclude Include="src\util\string.hpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <Import Condition="Exists('C:\Users\noah\vcpkg\scripts\buildsystems\msbuild\vcpkg.targets')" Project="C:\Users\noah\vcpkg\scripts\buildsystems\msbuild\vcpkg.targets" />

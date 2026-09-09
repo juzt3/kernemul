@@ -1,12 +1,21 @@
 #include "process.hpp"
 
-std::shared_ptr<proc_module> process::add_module(const std::string_view name)
+std::shared_ptr<proc_module> process::add_module(const std::string_view name, const addr_t addr, const pe::image* const pe)
 {
-	const auto mod = std::make_shared<proc_module>(std::string(name));
+	auto mod = std::make_shared<proc_module>(std::string(name), addr);
 
 	module_add_cb(*mod);
 
 	modules_[name] = mod;
+
+	for (const auto exp : pe->exports())
+	{
+		// todo: add ordinal support
+		if (exp.is_ordinal)
+			continue;
+
+		mod->exports[std::string(exp.name)] = addr + exp.loc.rva();
+	}
 
 	return mod;
 }
