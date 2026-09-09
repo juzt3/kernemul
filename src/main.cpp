@@ -1,4 +1,4 @@
-#include "kernel/kernel.hpp"
+#include "kernel/win/win_kernel.hpp"
 #include "emu/unicorn.hpp"
 #include "emu/x86/mmu.hpp"
 #include "util/log.hpp"

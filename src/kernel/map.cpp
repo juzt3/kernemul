@@ -1,6 +1,6 @@
 #include "map.hpp"
 #include "../emu/addr_space.hpp"
-#include "../process/process.hpp"
+#include "process.hpp"
 #include "../util/log.hpp"
 
 bool krnl::map_img(process& proc, const std::string_view name, const pe::image* const img, const bool supervisor)

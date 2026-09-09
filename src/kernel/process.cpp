@@ -10,7 +10,6 @@ std::shared_ptr<proc_module> process::add_module(const std::string_view name, co
 
 	for (const auto exp : pe->exports())
 	{
-		// todo: add ordinal support
 		if (exp.is_ordinal)
 			continue;
 
@@ -30,9 +29,4 @@ std::shared_ptr<proc_module> process::find_module(const std::string_view name) c
 std::shared_ptr<addr_space> process::addr_space() const
 {
 	return addr_space_;
-}
-
-void kernel_process::module_add_cb(proc_module& mod)
-{
-			
 }

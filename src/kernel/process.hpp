@@ -48,16 +48,3 @@ protected:
 	std::unordered_map<std::string_view, std::shared_ptr<proc_module>> modules_;
 	std::shared_ptr<struct addr_space> addr_space_;
 };
-
-class user_process : public process
-{
-public:
-	using process::process;
-};
-
-class kernel_process : public process
-{
-public:
-	using process::process;
-	void module_add_cb(proc_module& mod) override;
-};
