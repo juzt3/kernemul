@@ -70,12 +70,14 @@ enum class hook_insn_t : std::uint8_t
 
 using mem_hk_cb = std::function<void(vcpu&, addr_t, std::size_t, mem_prot)>;
 using insn_hk_cb = std::function<bool(vcpu&)>;
+using code_hk_cb = std::function<void(vcpu&, addr_t, std::size_t)>;
+using invalid_mem_hk_cb = std::function<bool(vcpu&, addr_t, std::size_t, mem_prot)>;
 
 struct emu_hook
 {
 	virtual ~emu_hook() = default;
 
-	std::variant<mem_hk_cb, insn_hk_cb> cb;
+	std::variant<mem_hk_cb, insn_hk_cb, code_hk_cb, invalid_mem_hk_cb> cb;
 	emu* owner;
 	addr_t start, end;
 };
@@ -106,6 +108,9 @@ public:
 
 	virtual hook_handle hook_mem(addr_t start_addr, addr_t end_addr, mem_prot prot, mem_hk_cb) = 0;
 	virtual hook_handle hook_insn(addr_t start_addr, addr_t end_addr, hook_insn_t insn, insn_hk_cb) = 0;
+	virtual hook_handle hook_code(addr_t start_addr, addr_t end_addr, code_hk_cb) = 0;
+	virtual hook_handle hook_basic_block(addr_t start_addr, addr_t end_addr, code_hk_cb) = 0;
+	virtual hook_handle hook_invalid_mem(mem_prot access, invalid_mem_hk_cb) = 0;
 	virtual void remove_hook(hook_handle handle) = 0;
 
 	virtual void map_mem(addr_t addr, std::size_t size, mem_prot prot) = 0;

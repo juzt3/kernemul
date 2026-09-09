@@ -174,6 +174,57 @@ public:
 		return &hk;
 	}
 
+	hook_handle hook_code(addr_t start_addr, addr_t end_addr, code_hk_cb cb) override
+	{
+		hooks_.push_back({});
+		auto& hk = hooks_.back();
+		hk.cb = std::move(cb);
+		hk.owner = this;
+		hk.start = start_addr;
+		hk.end = end_addr;
+		hk.uc_type = UC_HOOK_CODE;
+		hk.uc_insn = 0;
+
+		for (auto& cpu : cpus_)
+			add_uc_hook(hk, engine(cpu));
+
+		return &hk;
+	}
+
+	hook_handle hook_basic_block(addr_t start_addr, addr_t end_addr, code_hk_cb cb) override
+	{
+		hooks_.push_back({});
+		auto& hk = hooks_.back();
+		hk.cb = std::move(cb);
+		hk.owner = this;
+		hk.start = start_addr;
+		hk.end = end_addr;
+		hk.uc_type = UC_HOOK_BLOCK;
+		hk.uc_insn = 0;
+
+		for (auto& cpu : cpus_)
+			add_uc_hook(hk, engine(cpu));
+
+		return &hk;
+	}
+
+	hook_handle hook_invalid_mem(mem_prot access, invalid_mem_hk_cb cb) override
+	{
+		hooks_.push_back({});
+		auto& hk = hooks_.back();
+		hk.cb = std::move(cb);
+		hk.owner = this;
+		hk.start = 1;
+		hk.end = 0;
+		hk.uc_type = prot_to_uc_hook_unmapped(access);
+		hk.uc_insn = 0;
+
+		for (auto& cpu : cpus_)
+			add_uc_hook(hk, engine(cpu));
+
+		return &hk;
+	}
+
 	void remove_hook(hook_handle handle) override
 	{
 		auto* hk = static_cast<unicorn_hook*>(handle);
@@ -237,12 +288,51 @@ private:
 		}
 	}
 
+	static void code_hook_trampoline(uc_engine* uc, std::uint64_t addr,
+		std::uint32_t size, void* user_data)
+	{
+		auto* hk = static_cast<unicorn_hook*>(user_data);
+		auto* self = static_cast<unicorn_emu*>(hk->owner);
+		auto& cb = std::get<code_hk_cb>(hk->cb);
+
+		for (auto& cpu : self->cpus_)
+		{
+			if (engine(cpu) == uc)
+			{
+				cb(*cpu, addr, static_cast<std::size_t>(size));
+				return;
+			}
+		}
+	}
+
+	static bool invalid_mem_hook_trampoline(uc_engine* uc, uc_mem_type type,
+		std::uint64_t addr, int size, std::int64_t, void* user_data)
+	{
+		auto* hk = static_cast<unicorn_hook*>(user_data);
+		auto* self = static_cast<unicorn_emu*>(hk->owner);
+		auto& cb = std::get<invalid_mem_hk_cb>(hk->cb);
+
+		for (auto& cpu : self->cpus_)
+		{
+			if (engine(cpu) == uc)
+				return cb(*cpu, addr, static_cast<std::size_t>(size), uc_type_to_prot(type));
+		}
+
+		return false;
+	}
+
 	static void add_uc_hook(unicorn_hook& hk, uc_engine* uc)
 	{
 		uc_hook h{};
 		if (hk.uc_type == UC_HOOK_INSN)
 			uc_hook_add(uc, &h, hk.uc_type, reinterpret_cast<void*>(insn_hook_trampoline),
 				&hk, hk.start, hk.end, hk.uc_insn);
+		else if (hk.uc_type == UC_HOOK_CODE || hk.uc_type == UC_HOOK_BLOCK)
+			uc_hook_add(uc, &h, hk.uc_type, reinterpret_cast<void*>(code_hook_trampoline),
+				&hk, hk.start, hk.end);
+		else if (hk.uc_type & (UC_HOOK_MEM_READ_UNMAPPED | UC_HOOK_MEM_WRITE_UNMAPPED | UC_HOOK_MEM_FETCH_UNMAPPED))
+			uc_hook_add(uc, &h, hk.uc_type, reinterpret_cast<void*>(invalid_mem_hook_trampoline),
+				&hk, hk.start, hk.end);
 		else
 			uc_hook_add(uc, &h, hk.uc_type, reinterpret_cast<void*>(mem_hook_trampoline),
 				&hk, hk.start, hk.end);
@@ -265,6 +355,15 @@ private:
 		if (p & prot_read)  type |= UC_HOOK_MEM_READ;
 		if (p & prot_write) type |= UC_HOOK_MEM_WRITE;
 		if (p & prot_exec)  type |= UC_HOOK_MEM_FETCH;
+		return type;
+	}
+
+	static int prot_to_uc_hook_unmapped(mem_prot p)
+	{
+		int type = 0;
+		if (p & prot_read)  type |= UC_HOOK_MEM_READ_UNMAPPED;
+		if (p & prot_write) type |= UC_HOOK_MEM_WRITE_UNMAPPED;
+		if (p & prot_exec)  type |= UC_HOOK_MEM_FETCH_UNMAPPED;
 		return type;
 	}
 
