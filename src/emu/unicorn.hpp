@@ -41,6 +41,9 @@ public:
 			uc_emu_start(uc_, pc, std::numeric_limits<addr_t>::max(), 0, 0);
 			running_ = false;
 
+			if (redirect_.exchange(false))
+				continue;
+
 			if (!pending_pause_.load())
 				break;
 
@@ -60,9 +63,9 @@ public:
 
 	void reg_read(reg_t reg, void* value, std::size_t size) override
 	{
-		if (reg == x86::efer)
+		if (auto msr_id = to_msr(reg))
 		{
-			uc_x86_msr msr{ IA32_EFER, 0 };
+			uc_x86_msr msr{ msr_id, 0 };
 			uc_reg_read(uc_, UC_X86_REG_MSR, &msr);
 			std::memcpy(value, &msr.value, std::min(size, sizeof(msr.value)));
 			return;
@@ -80,11 +83,11 @@ public:
 
 	void reg_write(reg_t reg, const void* value, std::size_t size) override
 	{
-		if (reg == x86::efer)
+		if (auto msr_id = to_msr(reg))
 		{
 			std::uint64_t val{};
 			std::memcpy(&val, value, std::min(size, sizeof(val)));
-			uc_x86_msr msr{ IA32_EFER, val };
+			uc_x86_msr msr{ msr_id, val };
 			uc_reg_write(uc_, UC_X86_REG_MSR, &msr);
 			return;
 		}
@@ -100,6 +103,19 @@ public:
 	}
 
 	uc_engine* native() const { return uc_; }
+
+	static constexpr std::uint32_t to_msr(reg_t reg)
+	{
+		switch (reg)
+		{
+		case x86::efer:  return IA32_EFER;
+		case x86::star:  return IA32_STAR;
+		case x86::lstar: return IA32_LSTAR;
+		case x86::cstar: return IA32_CSTAR;
+		case x86::fmask: return IA32_FMASK;
+		default: return 0;
+		}
+	}
 
 	static constexpr bool is_seg_reg(reg_t reg)
 	{
@@ -148,6 +164,7 @@ public:
 	uc_engine* uc_;
 	std::atomic<bool> running_{false};
 	std::atomic<bool> pending_pause_{false};
+	std::atomic<bool> redirect_{false};
 };
 
 class unicorn_emu : public emu
@@ -342,7 +359,12 @@ private:
 		{
 			if (engine(cpu) == uc)
 			{
-				cb(*cpu);
+				if (cb(*cpu))
+				{
+					auto* ucpu = static_cast<unicorn_vcpu*>(cpu.get());
+					ucpu->redirect_ = true;
+					uc_emu_stop(uc);
+				}
 				return;
 			}
 		}
@@ -403,8 +425,9 @@ private:
 	{
 		switch (insn)
 		{
-		case hook_insn_t::cpuid: return UC_X86_INS_CPUID;
-		case hook_insn_t::rdtsc: return UC_X86_INS_RDTSC;
+		case hook_insn_t::cpuid:   return UC_X86_INS_CPUID;
+		case hook_insn_t::rdtsc:   return UC_X86_INS_RDTSC;
+		case hook_insn_t::syscall: return UC_X86_INS_SYSCALL;
 		default: return -1;
 		}
 	}
@@ -470,7 +493,7 @@ private:
 			while (static_cast<unicorn_vcpu*>(cpu.get())->running_.load()) {}
 
 		fn();
-
+		
 		for (auto& cpu : cpus_)
 			static_cast<unicorn_vcpu*>(cpu.get())->pending_pause_ = false;
 	}

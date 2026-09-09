@@ -70,6 +70,7 @@ enum class hook_insn_t : std::uint8_t
 {
 	cpuid,
 	rdtsc,
+	syscall,
 };
 
 using mem_hk_cb = std::function<void(vcpu&, addr_t, std::size_t, mem_prot)>;

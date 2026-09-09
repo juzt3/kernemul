@@ -20,6 +20,7 @@ namespace x86
 		r12, r13, r14, r15,
 		rip, rflags,
 		cr0, cr3, cr4, efer,
+		star, lstar, cstar, fmask,
 		cs, ds, es, ss, fs, gs,
 		tr, ldtr, gdtr, idtr,
 	};
