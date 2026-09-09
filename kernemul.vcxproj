@@ -160,6 +160,7 @@
     <ClCompile Include="src\emu\x86\mmu.cpp">
       <ObjectFileName>$(IntDir)x86_mmu.obj</ObjectFileName>
     </ClCompile>
+    <ClCompile Include="src\process\process.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\emu\arch.hpp" />
@@ -172,6 +173,7 @@
     <ClInclude Include="src\emu\x86\mmu.hpp" />
     <ClInclude Include="src\emu\x86\addr_space.hpp" />
     <ClInclude Include="src\kernel\map.hpp" />
+    <ClInclude Include="src\process\process.hpp" />
     <ClInclude Include="src\util\logs.hpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
