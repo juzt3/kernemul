@@ -6,5 +6,5 @@ class process;
 
 namespace krnl
 {
-	bool map_img(process& proc, const pe::image* img, bool supervisor);
+	bool map_img(process& proc, std::string_view name, const pe::image* img, bool supervisor);
 }

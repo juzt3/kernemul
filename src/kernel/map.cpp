@@ -3,7 +3,7 @@
 #include "../process/process.hpp"
 #include "../util/log.hpp"
 
-bool krnl::map_img(process& proc, const pe::image* const img, const bool supervisor)
+bool krnl::map_img(process& proc, const std::string_view name, const pe::image* const img, const bool supervisor)
 {
 	auto flags = prot_read;
 
@@ -55,7 +55,7 @@ bool krnl::map_img(process& proc, const pe::image* const img, const bool supervi
 		space->write_mem(patch_loc, import_addr.value());
 	}
 
-	const std::uintptr_t delta = reinterpret_cast<std::uintptr_t>(addr) - img->base_addr();
+	const addr_t delta = addr - img->base_addr();
 
 	for (const auto reloc : img->relocs())
 	{
@@ -67,6 +67,8 @@ bool krnl::map_img(process& proc, const pe::image* const img, const bool supervi
 
 		space->write_mem(reloc_addr, val + delta);
 	}
+
+	proc.add_module(name, addr, img);
 
 	return true;
 }
