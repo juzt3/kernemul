@@ -171,6 +171,7 @@
     <ClInclude Include="src\emu\emu.hpp" />
     <ClInclude Include="src\emu\mmu.hpp" />
     <ClInclude Include="src\emu\addr_space.hpp" />
+    <ClInclude Include="src\emu\object.hpp" />
     <ClInclude Include="src\emu\unicorn.hpp" />
     <ClInclude Include="src\emu\x86\arch.hpp" />
     <ClInclude Include="src\emu\x86\mmu.hpp" />

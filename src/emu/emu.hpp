@@ -61,6 +61,28 @@ public:
 
 	std::shared_ptr<addr_space> curr_addr_space();
 
+	void read_virt_mem(addr_t va, void* buf, std::size_t size)
+	{
+		curr_addr_space()->read_mem(va, buf, size);
+	}
+
+	void write_virt_mem(addr_t va, const void* buf, std::size_t size)
+	{
+		curr_addr_space()->write_mem(va, buf, size);
+	}
+
+	template <typename T>
+	T read_virt_mem(addr_t va)
+	{
+		return curr_addr_space()->read_mem<T>(va);
+	}
+
+	template <typename T>
+	void write_virt_mem(addr_t va, const T& val)
+	{
+		curr_addr_space()->write_mem<T>(va, val);
+	}
+
 protected:
 	emu* emu_;
 	std::shared_ptr<const struct arch> arch_;
