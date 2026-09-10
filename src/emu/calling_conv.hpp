@@ -59,36 +59,16 @@ struct function_traits<R(*)(Args...)>
 };
 
 template <typename C, typename R, typename... Args>
-struct function_traits<R(C::*)(Args...) const>
-{
-	using return_type = R;
-	using args = std::tuple<Args...>;
-	static constexpr std::size_t arity = sizeof...(Args);
-};
+struct function_traits<R(C::*)(Args...) const> : function_traits<R(*)(Args...)> {};
 
 template <typename C, typename R, typename... Args>
-struct function_traits<R(C::*)(Args...)>
-{
-	using return_type = R;
-	using args = std::tuple<Args...>;
-	static constexpr std::size_t arity = sizeof...(Args);
-};
+struct function_traits<R(C::*)(Args...)> : function_traits<R(*)(Args...)> {};
 
 template <typename C, typename R, typename... Args>
-struct function_traits<R(C::*)(Args...) const noexcept>
-{
-	using return_type = R;
-	using args = std::tuple<Args...>;
-	static constexpr std::size_t arity = sizeof...(Args);
-};
+struct function_traits<R(C::*)(Args...) const noexcept> : function_traits<R(*)(Args...)> {};
 
 template <typename C, typename R, typename... Args>
-struct function_traits<R(C::*)(Args...) noexcept>
-{
-	using return_type = R;
-	using args = std::tuple<Args...>;
-	static constexpr std::size_t arity = sizeof...(Args);
-};
+struct function_traits<R(C::*)(Args...) noexcept> : function_traits<R(*)(Args...)> {};
 
 template <typename T>
 struct function_traits : function_traits<decltype(&T::operator())> {};
@@ -109,25 +89,19 @@ constexpr bool first_is_vcpu()
 template <typename ArgsTuple, bool HasVcpu, typename F, std::size_t... I>
 void call_with_conv(vcpu& cpu, const calling_conv& conv, F& fn, std::index_sequence<I...>)
 {
-	using traits = function_traits<std::decay_t<F>>;
-	using R = typename traits::return_type;
+	using R = typename function_traits<std::decay_t<F>>::return_type;
+	constexpr std::size_t off = HasVcpu ? 1 : 0;
 
-	constexpr std::size_t offset = HasVcpu ? 1 : 0;
+	auto conv_args = std::make_tuple(conv.arg<std::tuple_element_t<I + off, ArgsTuple>>(cpu, I)...);
+	auto all_args = [&]() {
+		if constexpr (HasVcpu) return std::tuple_cat(std::tie(cpu), std::move(conv_args));
+		else                   return std::move(conv_args);
+	}();
 
-	if constexpr (HasVcpu)
-	{
-		if constexpr (std::is_void_v<R>)
-			fn(cpu, conv.arg<std::tuple_element_t<I + offset, ArgsTuple>>(cpu, I)...);
-		else
-			conv.ret(cpu, fn(cpu, conv.arg<std::tuple_element_t<I + offset, ArgsTuple>>(cpu, I)...));
-	}
+	if constexpr (std::is_void_v<R>)
+		std::apply(fn, all_args);
 	else
-	{
-		if constexpr (std::is_void_v<R>)
-			fn(conv.arg<std::tuple_element_t<I, ArgsTuple>>(cpu, I)...);
-		else
-			conv.ret(cpu, fn(conv.arg<std::tuple_element_t<I, ArgsTuple>>(cpu, I)...));
-	}
+		conv.ret(cpu, std::apply(fn, all_args));
 }
 
 }
