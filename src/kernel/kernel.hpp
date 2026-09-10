@@ -64,7 +64,10 @@ struct kernel_state
 				if (it != redirections->end())
 				{
 					it->second(cpu);
-					cpu.reg(a->pc(), a->ret_addr(cpu));
+
+					if (cpu.reg(a->pc()) == addr)
+						cpu.reg(a->pc(), a->ret_addr(cpu));
+
 					return;
 				}
 
