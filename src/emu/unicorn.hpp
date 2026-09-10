@@ -170,8 +170,8 @@ public:
 class unicorn_emu : public emu
 {
 public:
-	unicorn_emu(std::shared_ptr<struct arch> arch, std::shared_ptr<mmu> mem)
-		:	emu(std::move(arch), std::move(mem)) { }
+	unicorn_emu(std::shared_ptr<struct arch> arch, std::shared_ptr<mmu> mem, std::shared_ptr<calling_conv> call_conv = {})
+		:	emu(std::move(arch), std::move(mem), std::move(call_conv)) { }
 
 	void map_phys_mem(addr_t addr, std::size_t size, mem_prot prot) override
 	{

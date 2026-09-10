@@ -10,6 +10,7 @@
 #include <vector>
 
 class emu;
+struct calling_conv;
 
 class vcpu
 {
@@ -112,8 +113,8 @@ struct emu_hook
 class emu
 {
 public:
-	emu(std::shared_ptr<struct arch> arch, std::shared_ptr<mmu> mem)
-		:	arch_(std::move(arch)), mem_(std::move(mem))
+	emu(std::shared_ptr<struct arch> arch, std::shared_ptr<mmu> mem, std::shared_ptr<calling_conv> call_conv = {})
+		:	arch_(std::move(arch)), mem_(std::move(mem)), call_conv_(std::move(call_conv))
 	{
 		if (arch_) arch_->set_emu(this);
 		if (mem_) mem_->set_emu(this);
@@ -126,6 +127,11 @@ public:
 	[[nodiscard]] std::shared_ptr<const arch> arch() const noexcept
 	{
 		return arch_;
+	}
+
+	[[nodiscard]] std::shared_ptr<const calling_conv> call_conv() const noexcept
+	{
+		return call_conv_;
 	}
 
 	[[nodiscard]] std::shared_ptr<vcpu> add_vcpu()
@@ -182,6 +188,7 @@ protected:
 	std::shared_ptr<struct arch> arch_;
 	std::vector<std::shared_ptr<vcpu>> cpus_;
 	std::shared_ptr<mmu> mem_;
+	std::shared_ptr<calling_conv> call_conv_;
 	std::shared_ptr<addr_space> default_space_;
 };
 

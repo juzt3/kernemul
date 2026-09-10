@@ -167,6 +167,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\emu\arch.hpp" />
+    <ClInclude Include="src\emu\calling_conv.hpp" />
     <ClInclude Include="src\emu\defs.hpp" />
     <ClInclude Include="src\emu\emu.hpp" />
     <ClInclude Include="src\emu\mmu.hpp" />

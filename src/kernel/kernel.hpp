@@ -2,6 +2,7 @@
 #include "process.hpp"
 #include "map.hpp"
 #include "../emu/emu.hpp"
+#include "../emu/calling_conv.hpp"
 #include "../util/log.hpp"
 #include <functional>
 #include <filesystem>
@@ -83,6 +84,12 @@ struct kernel_state
 		}
 
 		redirections_[*exp] = std::move(fn);
+	}
+
+	template <typename F>
+	void redirect(proc_module& mod, const std::string_view name, F&& fn)
+	{
+		redirect(mod, name, make_redirect(emu_->call_conv(), std::forward<F>(fn)));
 	}
 
 protected:
