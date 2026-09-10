@@ -13,6 +13,8 @@ struct proc_module
 {
 	std::string name;
 	addr_t addr;
+	std::uint32_t size;
+	addr_t entry_point;
 	std::unordered_map<std::string, addr_t, string_view_hash, std::equal_to<>> exports;
 
 	[[nodiscard]] std::optional<addr_t> find_export(const std::string_view exp_name)

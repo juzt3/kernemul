@@ -1,6 +1,7 @@
 #pragma once
 #include "../kernel.hpp"
 #include "process.hpp"
+#include "defs.hpp"
 
 struct win_kernel_state : kernel_state
 {
@@ -8,11 +9,19 @@ struct win_kernel_state : kernel_state
 	static constexpr process::id_type proc_id_step = 4;
 
 	std::shared_ptr<win_kernel_proc> sys_proc;
+	loaded_module_list_t loaded_module_list;
 
 	win_kernel_state()
-		:	sys_proc(std::make_shared<win_kernel_proc>(sys_proc_id))
+		:	sys_proc(std::make_shared<win_kernel_proc>(sys_proc_id, *this))
 	{
 		processes[sys_proc_id] = sys_proc;
+	}
+
+	void init(addr_space& space_)
+	{
+		const auto head_addr = space_.alloc(sizeof(list_entry), prot_rw);
+		loaded_module_list = loaded_module_list_t(space_, head_addr);
+		loaded_module_list.init();
 	}
 
 	std::shared_ptr<process> create_process(const std::string_view name) override
