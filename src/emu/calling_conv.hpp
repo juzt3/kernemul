@@ -40,7 +40,7 @@ protected:
 		if (index < 4)
 			cpu.reg_read(regs[index], buf, size);
 		else
-			cpu.read_virt_mem(cpu.reg(x86::rsp) + 0x08 * (index + 1), buf, size);
+			cpu.read_virt_mem(cpu.sp() + 0x08 * (index + 1), buf, size);
 	}
 
 	void ret_write(vcpu& cpu, const void* buf, std::size_t size) const override

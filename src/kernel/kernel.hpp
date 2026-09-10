@@ -65,8 +65,8 @@ struct kernel_state
 				{
 					it->second(cpu);
 
-					if (cpu.reg(a->pc()) == addr)
-						cpu.reg(a->pc(), a->ret_addr(cpu));
+					if (cpu.pc() == addr)
+						cpu.set_pc(a->ret_addr(cpu));
 
 					return;
 				}

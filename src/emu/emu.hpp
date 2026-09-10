@@ -60,6 +60,12 @@ public:
 		return arch_;
 	}
 
+	addr_t pc() { return reg(arch_->pc()); }
+	void set_pc(addr_t v) { reg(arch_->pc(), v); }
+
+	addr_t sp() { return reg(arch_->sp()); }
+	void set_sp(addr_t v) { reg(arch_->sp(), v); }
+
 	std::shared_ptr<addr_space> curr_addr_space();
 
 	void read_virt_mem(addr_t va, void* buf, std::size_t size)

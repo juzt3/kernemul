@@ -28,6 +28,7 @@ namespace x86
 	struct arch : ::arch
 	{
 		reg_t pc() const override { return rip; }
+		reg_t sp() const override { return rsp; }
 		addr_t ret_addr(vcpu& cpu) const override;
 		void init_vcpu(vcpu& cpu) override;
 	};

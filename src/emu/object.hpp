@@ -45,7 +45,7 @@ public:
 		hook_ = space_->mmu_->emu()->hook_mem(addr_, addr_ + sizeof(T) - 1, prot_rw,
 			[base, name](vcpu& cpu, addr_t accessed, std::size_t, mem_prot access)
 			{
-				const auto rip = cpu.reg(cpu.arch()->pc());
+				const auto rip = cpu.pc();
 				const auto offset = accessed - base;
 
 				LOG_INFO("0x{:X} accessed ({} '{}')+0x{:X} (type={})",
