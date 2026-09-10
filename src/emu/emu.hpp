@@ -60,6 +60,8 @@ public:
 		return arch_;
 	}
 
+	[[nodiscard]] class emu* emu() const noexcept { return emu_; }
+
 	addr_t pc() { return reg(arch_->pc()); }
 	void set_pc(addr_t v) { reg(arch_->pc(), v); }
 
@@ -91,7 +93,7 @@ public:
 	}
 
 protected:
-	emu* emu_;
+	class emu* emu_;
 	std::shared_ptr<const struct arch> arch_;
 };
 

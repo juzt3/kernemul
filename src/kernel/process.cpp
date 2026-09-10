@@ -6,7 +6,7 @@ std::shared_ptr<proc_module> process::add_module(const std::string_view name, co
 
 	module_add_cb(*mod);
 
-	modules_[name] = mod;
+	modules_[mod->name] = mod;
 
 	for (const auto exp : pe->exports())
 	{

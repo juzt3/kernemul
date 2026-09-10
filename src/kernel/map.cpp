@@ -20,7 +20,7 @@ std::shared_ptr<proc_module> krnl::map_img(process& proc, const std::string_view
 		return nullptr;
 	}
 
-	space->write_mem(addr, img->as(), img->size());
+	space->write_mem(addr, img->as(), size);
 
 	for (const auto sec : img->sections())
 	{
@@ -79,17 +79,46 @@ std::shared_ptr<proc_module> krnl::map_img(process& proc, const std::string_view
 	return proc.add_module(name, addr, img);
 }
 
+static std::vector<std::uint8_t> map_pe_virtual(const std::vector<std::uint8_t>& raw)
+{
+	const auto* img = reinterpret_cast<const pe::image*>(raw.data());
+	const auto* nt = img->nt_hdrs();
+	const auto virt_size = nt->optional_hdr.size_of_image;
+	const auto hdr_size = nt->optional_hdr.size_of_headers;
+
+	std::vector<std::uint8_t> mapped(virt_size, 0);
+
+	const auto copy_size = std::min<std::size_t>(hdr_size, raw.size());
+	std::memcpy(mapped.data(), raw.data(), copy_size);
+
+	for (const auto& sec : img->sections())
+	{
+		if (!sec.pointer_to_raw_data || !sec.size_of_raw_data)
+			continue;
+
+		const auto src_off = sec.pointer_to_raw_data;
+		const auto dst_off = sec.virtual_address;
+		const auto sz = std::min<std::size_t>(sec.size_of_raw_data, raw.size() - src_off);
+
+		if (src_off < raw.size() && dst_off + sz <= virt_size)
+			std::memcpy(mapped.data() + dst_off, raw.data() + src_off, sz);
+	}
+
+	return mapped;
+}
+
 std::shared_ptr<proc_module> krnl::map_img(process& proc, const std::filesystem::path& path, const bool supervisor)
 {
-	auto data = util::read_file(path);
+	auto raw = util::read_file(path);
 
-	if (data.empty())
+	if (raw.empty())
 	{
 		LOG_ERR("failed to read file {}", path.string());
 		return nullptr;
 	}
 
-	const auto* img = reinterpret_cast<const pe::image*>(data.data());
+	auto mapped = map_pe_virtual(raw);
+	const auto* img = reinterpret_cast<const pe::image*>(mapped.data());
 	const auto name = path.filename().string();
 
 	return map_img(proc, name, img, supervisor);

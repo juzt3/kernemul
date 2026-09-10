@@ -1,6 +1,7 @@
 #pragma once
 #include "../../emu/object.hpp"
 #include <cstddef>
+#include <cstring>
 #include <functional>
 
 struct list_entry
@@ -45,7 +46,8 @@ public:
 		auto head = head_.read();
 		const auto tail_links = head.blink;
 
-		auto contents = entry;
+		T contents{};
+		std::memcpy(&contents, &entry, sizeof(T));
 		auto& links = links_of(contents);
 		links.flink = head_addr;
 		links.blink = tail_links;

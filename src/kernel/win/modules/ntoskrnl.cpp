@@ -9,7 +9,7 @@ void modules::register_ntoskrnl(kernel_state& state, proc_module& mod)
 		{
 			std::size_t arg_idx = 3;
 			auto& space = *cpu.curr_addr_space();
-			const auto& conv = *cpu.emu_->call_conv();
+			const auto& conv = *cpu.emu()->call_conv();
 			const auto msg = guest::vsprintf(space, format, [&]() -> std::uint64_t
 			{
 				return conv.arg<std::uint64_t>(cpu, arg_idx++);

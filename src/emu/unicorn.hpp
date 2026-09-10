@@ -24,8 +24,8 @@ struct unicorn_hook : emu_hook
 class unicorn_vcpu : public vcpu
 {
 public:
-	unicorn_vcpu(emu* emu, std::shared_ptr<const struct arch> arch, uc_engine* uc)
-		:	vcpu(emu, std::move(arch)), uc_(uc) { }
+	unicorn_vcpu(class emu* e, std::shared_ptr<const struct arch> arch, uc_engine* uc)
+		:	vcpu(e, std::move(arch)), uc_(uc) { }
 
 	~unicorn_vcpu() override
 	{

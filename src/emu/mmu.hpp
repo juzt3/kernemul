@@ -57,7 +57,7 @@ protected:
 	addr_t page_align(addr_t addr) const { return addr & ~(page_size() - 1); }
 	std::size_t size_align(std::size_t size) const { return (size + page_size() - 1) & ~(page_size() - 1); }
 
-	emu* emu_ = nullptr;
+	class emu* emu_ = nullptr;
 	addr_t phys_next_ = 0x10000;
 	mutable std::recursive_mutex mtx_;
 };
