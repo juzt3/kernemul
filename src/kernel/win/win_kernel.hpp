@@ -11,16 +11,13 @@ struct win_kernel_state : kernel_state
 	std::shared_ptr<win_kernel_proc> sys_proc;
 	loaded_module_list_t loaded_module_list;
 
-	win_kernel_state()
+	explicit win_kernel_state(const std::shared_ptr<class emu>& emu)
 		:	sys_proc(std::make_shared<win_kernel_proc>(sys_proc_id, *this))
 	{
 		processes[sys_proc_id] = sys_proc;
-	}
-
-	void init(addr_space& space_)
-	{
-		const auto head_addr = space_.alloc(sizeof(list_entry), prot_rw);
-		loaded_module_list = loaded_module_list_t(space_, head_addr);
+		auto& space = *emu->default_addr_space();
+		const auto head_addr = space.alloc(sizeof(list_entry), prot_rw);
+		loaded_module_list = loaded_module_list_t(space, head_addr);
 		loaded_module_list.init();
 	}
 
@@ -42,10 +39,8 @@ class windows_emulator : public os_emulator
 {
 public:
 	explicit windows_emulator(std::shared_ptr<class emu> emu)
-		: os_emulator(std::move(emu))
-	{
-		kernel_.init(*emu_->default_addr_space());
-	}
+		: os_emulator(std::move(emu)), kernel_(emu_)
+	{ }
 
 	win_kernel_state& kernel() { return kernel_; }
 
