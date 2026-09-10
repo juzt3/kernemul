@@ -2,6 +2,7 @@
 #include "../emu/addr_space.hpp"
 #include "process.hpp"
 #include "../util/log.hpp"
+#include "../util/file.hpp"
 
 bool krnl::map_img(process& proc, const std::string_view name, const pe::image* const img, const bool supervisor)
 {
@@ -78,4 +79,20 @@ bool krnl::map_img(process& proc, const std::string_view name, const pe::image* 
 	proc.add_module(name, addr, img);
 
 	return true;
+}
+
+bool krnl::map_img(process& proc, const std::filesystem::path& path, const bool supervisor)
+{
+	auto data = util::read_file(path);
+
+	if (data.empty())
+	{
+		LOG_ERR("failed to read file {}", path.string());
+		return false;
+	}
+
+	const auto* img = reinterpret_cast<const pe::image*>(data.data());
+	const auto name = path.filename().string();
+
+	return map_img(proc, name, img, supervisor);
 }
