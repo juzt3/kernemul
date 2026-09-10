@@ -64,6 +64,18 @@ public:
 		}
 	}
 
+	static emu_object allocate(addr_space& space, std::string name = {}, bool monitored = false)
+	{
+		const auto addr = space.alloc(sizeof(T), prot_rw);
+		return emu_object(space, addr, std::move(name), monitored);
+	}
+
+	static emu_object allocate_at(addr_space& space, addr_t addr, std::string name = {}, bool monitored = false)
+	{
+		space.mmu_->map_virt(space, addr, sizeof(T), prot_rw);
+		return emu_object(space, addr, std::move(name), monitored);
+	}
+
 	void set_name(std::string name) { name_ = std::move(name); }
 
 	[[nodiscard]] bool monitored() const noexcept { return hook_ != nullptr; }

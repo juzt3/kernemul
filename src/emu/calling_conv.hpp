@@ -54,7 +54,10 @@ struct arg_reader
 {
 	static T read(vcpu& cpu, const calling_conv& conv, std::size_t index)
 	{
-		return conv.arg<T>(cpu, index);
+		if constexpr (std::is_enum_v<T>)
+			return static_cast<T>(conv.arg<std::uint64_t>(cpu, index));
+		else
+			return conv.arg<T>(cpu, index);
 	}
 };
 
