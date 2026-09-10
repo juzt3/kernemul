@@ -4,7 +4,7 @@
 #include "../util/log.hpp"
 #include "../util/file.hpp"
 
-bool krnl::map_img(process& proc, const std::string_view name, const pe::image* const img, const bool supervisor)
+std::shared_ptr<proc_module> krnl::map_img(process& proc, const std::string_view name, const pe::image* const img, const bool supervisor)
 {
 	auto flags = prot_read;
 
@@ -17,7 +17,7 @@ bool krnl::map_img(process& proc, const std::string_view name, const pe::image* 
 
 	if (!addr)
 	{
-		return false;
+		return nullptr;
 	}
 
 	space->write_mem(addr, img->as(), img->size());
@@ -41,7 +41,7 @@ bool krnl::map_img(process& proc, const std::string_view name, const pe::image* 
 		if (!mod)
 		{
 			LOG_ERR("unable to find import module {}", imp.module_name);
-			return false;
+			return nullptr;
 		}
 
 		const auto patch_loc = addr + imp.iat_slot.rva();
@@ -50,7 +50,7 @@ bool krnl::map_img(process& proc, const std::string_view name, const pe::image* 
 		if (!import_addr)
 		{
 			LOG_ERR("unable to find import {}!{}", imp.module_name, imp.import_name);
-			return false;
+			return nullptr;
 		}
 
 		space->write_mem(patch_loc, import_addr.value());
@@ -76,19 +76,17 @@ bool krnl::map_img(process& proc, const std::string_view name, const pe::image* 
 		space->write_mem(reloc_addr, val + delta);
 	}
 
-	proc.add_module(name, addr, img);
-
-	return true;
+	return proc.add_module(name, addr, img);
 }
 
-bool krnl::map_img(process& proc, const std::filesystem::path& path, const bool supervisor)
+std::shared_ptr<proc_module> krnl::map_img(process& proc, const std::filesystem::path& path, const bool supervisor)
 {
 	auto data = util::read_file(path);
 
 	if (data.empty())
 	{
 		LOG_ERR("failed to read file {}", path.string());
-		return false;
+		return nullptr;
 	}
 
 	const auto* img = reinterpret_cast<const pe::image*>(data.data());

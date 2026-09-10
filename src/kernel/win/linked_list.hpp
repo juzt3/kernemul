@@ -51,7 +51,10 @@ public:
 		emu_object<T> obj(*space_, entry_addr);
 		obj.write(contents);
 
-		write_flink(*space_, tail_links, links_addr(entry_addr));
+		if (tail_links == head_addr)
+			head.flink = links_addr(entry_addr);
+		else
+			write_flink(*space_, tail_links, links_addr(entry_addr));
 		head.blink = links_addr(entry_addr);
 		head_.write(head);
 

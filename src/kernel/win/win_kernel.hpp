@@ -18,11 +18,16 @@ struct win_kernel_state : kernel_state
 		emu_ = emu;
 		processes[sys_proc_id] = sys_proc;
 		auto& space = *emu->default_addr_space();
-		const auto head_addr = space.alloc(sizeof(list_entry), prot_rw);
-		loaded_module_list = loaded_module_list_t(space, head_addr);
-		loaded_module_list.init();
 
-		krnl::map_img(*sys_proc, "fs/ntoskrnl.exe", true);
+		if (const auto ntoskrnl = krnl::map_img(*sys_proc, "fs/ntoskrnl.exe", true))
+		{
+			if (const auto ps_list = ntoskrnl->find_export("PsLoadedModuleList"))
+			{
+				loaded_module_list = loaded_module_list_t(space, *ps_list);
+				loaded_module_list.init();
+				sys_proc->module_add_cb(*ntoskrnl);
+			}
+		}
 	}
 
 	std::shared_ptr<process> create_process(const std::string_view name) override
