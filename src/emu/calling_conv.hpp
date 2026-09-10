@@ -1,6 +1,8 @@
 #pragma once
 #include "emu.hpp"
+#include "object.hpp"
 #include <functional>
+#include <string>
 #include <tuple>
 #include <type_traits>
 #include <utility>
@@ -44,6 +46,77 @@ protected:
 	void ret_write(vcpu& cpu, const void* buf, std::size_t size) const override
 	{
 		cpu.reg_write(x86::rax, buf, size);
+	}
+};
+
+template <typename T>
+struct arg_reader
+{
+	static T read(vcpu& cpu, const calling_conv& conv, std::size_t index)
+	{
+		return conv.arg<T>(cpu, index);
+	}
+};
+
+template <typename T>
+struct arg_reader<emu_object<T>>
+{
+	static emu_object<T> read(vcpu& cpu, const calling_conv& conv, std::size_t index)
+	{
+		const auto addr = conv.arg<addr_t>(cpu, index);
+		return emu_object<T>(*cpu.curr_addr_space(), addr);
+	}
+};
+
+template <>
+struct arg_reader<std::string>
+{
+	static std::string read(vcpu& cpu, const calling_conv& conv, std::size_t index)
+	{
+		const auto addr = conv.arg<addr_t>(cpu, index);
+		std::string result;
+		for (std::size_t i = 0; i < 512; ++i)
+		{
+			const char c = cpu.read_virt_mem<char>(addr + i);
+			if (c == '\0') break;
+			result += c;
+		}
+		return result;
+	}
+};
+
+template <>
+struct arg_reader<std::wstring>
+{
+	static std::wstring read(vcpu& cpu, const calling_conv& conv, std::size_t index)
+	{
+		const auto addr = conv.arg<addr_t>(cpu, index);
+		std::wstring result;
+		for (std::size_t i = 0; i < 512; ++i)
+		{
+			const wchar_t c = cpu.read_virt_mem<wchar_t>(addr + i * sizeof(wchar_t));
+			if (c == L'\0') break;
+			result += c;
+		}
+		return result;
+	}
+};
+
+template <typename T>
+struct ret_writer
+{
+	static void write(vcpu& cpu, const calling_conv& conv, const T& val)
+	{
+		conv.ret(cpu, val);
+	}
+};
+
+template <typename T>
+struct ret_writer<emu_object<T>>
+{
+	static void write(vcpu& cpu, const calling_conv& conv, const emu_object<T>& val)
+	{
+		conv.ret(cpu, val.address());
 	}
 };
 
@@ -92,7 +165,7 @@ void call_with_conv(vcpu& cpu, const calling_conv& conv, F& fn, std::index_seque
 	using R = typename function_traits<std::decay_t<F>>::return_type;
 	constexpr std::size_t off = HasVcpu ? 1 : 0;
 
-	auto conv_args = std::make_tuple(conv.arg<std::tuple_element_t<I + off, ArgsTuple>>(cpu, I)...);
+	auto conv_args = std::make_tuple(arg_reader<std::tuple_element_t<I + off, ArgsTuple>>::read(cpu, conv, I)...);
 	auto all_args = [&]() {
 		if constexpr (HasVcpu) return std::tuple_cat(std::tie(cpu), std::move(conv_args));
 		else                   return std::move(conv_args);
@@ -101,7 +174,7 @@ void call_with_conv(vcpu& cpu, const calling_conv& conv, F& fn, std::index_seque
 	if constexpr (std::is_void_v<R>)
 		std::apply(fn, all_args);
 	else
-		conv.ret(cpu, std::apply(fn, all_args));
+		ret_writer<R>::write(cpu, conv, std::apply(fn, all_args));
 }
 
 }
