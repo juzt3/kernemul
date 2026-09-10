@@ -1,5 +1,5 @@
 #include "ntoskrnl.hpp"
-#include "../win_kernel.hpp"
+#include "../../kernel.hpp"
 
 static std::string read_guest_string(vcpu& cpu, addr_t addr)
 {
@@ -19,7 +19,7 @@ static std::string read_guest_string(vcpu& cpu, addr_t addr)
 	return result;
 }
 
-void modules::register_ntoskrnl(win_kernel_state& state, proc_module& mod)
+void modules::register_ntoskrnl(kernel_state& state, proc_module& mod)
 {
 	state.redirect(mod, "DbgPrintEx", [](vcpu& cpu)
 	{

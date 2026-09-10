@@ -36,6 +36,13 @@ static ia32::segment_descriptor_32 make_data_desc(std::uint32_t dpl)
 	return desc;
 }
 
+addr_t arch::ret_addr(vcpu& cpu) const
+{
+	const auto ret = cpu.read_virt_mem<addr_t>(cpu.reg(rsp));
+	cpu.reg(rsp, cpu.reg(rsp) + sizeof(addr_t));
+	return ret;
+}
+
 void arch::init_vcpu(vcpu& cpu)
 {
 	auto* mem = emu_->mem().get();

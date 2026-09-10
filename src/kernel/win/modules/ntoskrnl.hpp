@@ -1,9 +1,9 @@
 #pragma once
 
-struct win_kernel_state;
+struct kernel_state;
 struct proc_module;
 
 namespace modules
 {
-	void register_ntoskrnl(win_kernel_state& state, proc_module& mod);
+	void register_ntoskrnl(kernel_state& state, proc_module& mod);
 }
