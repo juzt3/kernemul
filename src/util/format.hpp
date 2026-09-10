@@ -5,7 +5,7 @@
 #include <string_view>
 #include <cstdint>
 #include <cstdio>
-#include <algorithm>
+#include <type_traits>
 
 namespace guest
 {
@@ -51,121 +51,127 @@ inline bool is_64bit(length_mod lm)
 
 }
 
-template <typename NextArg>
-std::string vsprintf(addr_space& space, std::string_view fmt, NextArg next_arg)
+template <typename CharT, typename NextArg>
+std::basic_string<CharT> vformat(addr_space& space, std::basic_string_view<CharT> fmt, NextArg next_arg)
 {
-	std::string result;
+	std::basic_string<CharT> result;
 	using lm = detail::length_mod;
+
+	constexpr auto pct = CharT('%');
+	constexpr auto foreign_mod = std::is_same_v<CharT, char> ? lm::l : lm::h;
+
+	auto append_null = [&]() {
+		if constexpr (std::is_same_v<CharT, char>) result += "(null)";
+		else result += L"(null)";
+	};
+
+	auto format_spec = [&](const std::basic_string<CharT>& spec_str, auto val) {
+		CharT buf[256]{};
+		if constexpr (std::is_same_v<CharT, char>)
+			std::snprintf(buf, std::size(buf), spec_str.c_str(), val);
+		else
+			std::swprintf(buf, std::size(buf), spec_str.c_str(), val);
+		result += buf;
+	};
+
+	auto read_unicode_string = [&](addr_t ptr) {
+		const auto ws = read_wstring(space,
+			space.read_mem<std::uint64_t>(ptr + 8),
+			space.read_mem<std::uint16_t>(ptr) / sizeof(wchar_t));
+		if constexpr (std::is_same_v<CharT, char>) result += narrow_wstring(ws);
+		else result += ws;
+	};
+
+	auto read_native = [&](addr_t addr) {
+		result += read_basic_string<CharT>(space, addr);
+	};
+
+	auto read_foreign = [&](addr_t addr) {
+		if constexpr (std::is_same_v<CharT, char>)
+			result += narrow_wstring(read_wstring(space, addr));
+		else
+			result += widen_string(read_string(space, addr));
+	};
 
 	for (std::size_t i = 0; i < fmt.size(); ++i)
 	{
-		if (fmt[i] != '%') { result += fmt[i]; continue; }
+		if (fmt[i] != pct) { result += fmt[i]; continue; }
 
 		const std::size_t spec_start = i;
 		if (++i >= fmt.size()) break;
-		if (fmt[i] == '%') { result += '%'; continue; }
+		if (fmt[i] == pct) { result += pct; continue; }
 
-		while (i < fmt.size() && (fmt[i] == '-' || fmt[i] == '+' ||
-			fmt[i] == ' ' || fmt[i] == '0' || fmt[i] == '#'))
+		while (i < fmt.size() && (fmt[i] == CharT('-') || fmt[i] == CharT('+') ||
+			fmt[i] == CharT(' ') || fmt[i] == CharT('0') || fmt[i] == CharT('#')))
 			++i;
 
-		if (i < fmt.size() && fmt[i] == '*') { next_arg(); ++i; }
-		else while (i < fmt.size() && fmt[i] >= '0' && fmt[i] <= '9') ++i;
+		if (i < fmt.size() && fmt[i] == CharT('*')) { next_arg(); ++i; }
+		else while (i < fmt.size() && fmt[i] >= CharT('0') && fmt[i] <= CharT('9')) ++i;
 
-		if (i < fmt.size() && fmt[i] == '.')
+		if (i < fmt.size() && fmt[i] == CharT('.'))
 		{
 			++i;
-			if (i < fmt.size() && fmt[i] == '*') { next_arg(); ++i; }
-			else while (i < fmt.size() && fmt[i] >= '0' && fmt[i] <= '9') ++i;
+			if (i < fmt.size() && fmt[i] == CharT('*')) { next_arg(); ++i; }
+			else while (i < fmt.size() && fmt[i] >= CharT('0') && fmt[i] <= CharT('9')) ++i;
 		}
 
-		const auto length = detail::parse_length_mod<char>(fmt, i);
+		const auto length = detail::parse_length_mod<CharT>(fmt, i);
 		if (i >= fmt.size()) break;
 
-		if (fmt[i] == 'w' && i + 1 < fmt.size() && fmt[i + 1] == 'Z')
+		if (fmt[i] == CharT('w') && i + 1 < fmt.size() && fmt[i + 1] == CharT('Z'))
 		{
 			++i;
 			const auto ptr = static_cast<addr_t>(next_arg());
-			if (ptr)
-			{
-				const auto us_length = space.read_mem<std::uint16_t>(ptr);
-				const auto buffer = space.read_mem<std::uint64_t>(ptr + 8);
-				if (buffer && us_length)
-					result += narrow_wstring(read_wstring(space, buffer, us_length / sizeof(wchar_t)));
-			}
-			else
-				result += "(null)";
+			if (ptr) read_unicode_string(ptr); else append_null();
 			continue;
 		}
-		if (fmt[i] == 'Z')
+		if (fmt[i] == CharT('Z'))
 		{
 			const auto ptr = static_cast<addr_t>(next_arg());
-			if (ptr)
-			{
-				const auto us_length = space.read_mem<std::uint16_t>(ptr);
-				const auto buffer = space.read_mem<std::uint64_t>(ptr + 8);
-				if (buffer && us_length)
-					result += narrow_wstring(read_wstring(space, buffer, us_length / sizeof(wchar_t)));
-			}
-			else
-				result += "(null)";
+			if (ptr) read_unicode_string(ptr); else append_null();
 			continue;
 		}
 
-		const char spec = fmt[i];
-		const std::string spec_str(fmt.substr(spec_start, i - spec_start + 1));
-		char buf[256]{};
+		const CharT spec = fmt[i];
+		const std::basic_string<CharT> spec_str(fmt.substr(spec_start, i - spec_start + 1));
 
 		switch (spec)
 		{
-		case 'd': case 'i': case 'u': case 'x': case 'X': case 'o':
+		case CharT('d'): case CharT('i'): case CharT('u'):
+		case CharT('x'): case CharT('X'): case CharT('o'):
 		{
 			const auto raw = next_arg();
 			if (detail::is_64bit(length))
-				std::snprintf(buf, sizeof(buf), spec_str.c_str(), static_cast<std::uint64_t>(raw));
+				format_spec(spec_str, static_cast<std::uint64_t>(raw));
 			else
-				std::snprintf(buf, sizeof(buf), spec_str.c_str(), static_cast<std::uint32_t>(raw));
-			result += buf;
+				format_spec(spec_str, static_cast<std::uint32_t>(raw));
 			break;
 		}
-		case 'p':
-		{
-			const auto raw = next_arg();
-			std::snprintf(buf, sizeof(buf), spec_str.c_str(), reinterpret_cast<void*>(raw));
-			result += buf;
+		case CharT('p'):
+			format_spec(spec_str, reinterpret_cast<void*>(next_arg()));
 			break;
-		}
-		case 's':
+		case CharT('s'):
 		{
 			const auto raw = static_cast<addr_t>(next_arg());
-			if (raw)
-			{
-				if (length == lm::l)
-					result += narrow_wstring(read_wstring(space, raw));
-				else
-					result += read_string(space, raw);
-			}
-			else
-				result += "(null)";
+			if (raw) { if (length == foreign_mod) read_foreign(raw); else read_native(raw); }
+			else append_null();
 			break;
 		}
-		case 'S':
+		case CharT('S'):
 		{
 			const auto raw = static_cast<addr_t>(next_arg());
-			if (raw)
-				result += narrow_wstring(read_wstring(space, raw));
+			if (raw) read_foreign(raw); else append_null();
+			break;
+		}
+		case CharT('c'):
+			result += static_cast<CharT>(next_arg());
+			break;
+		case CharT('C'):
+		{
+			if constexpr (std::is_same_v<CharT, char>)
+				result += static_cast<char>(static_cast<wchar_t>(next_arg()));
 			else
-				result += "(null)";
-			break;
-		}
-		case 'c':
-		{
-			result += static_cast<char>(next_arg());
-			break;
-		}
-		case 'C':
-		{
-			result += static_cast<char>(static_cast<wchar_t>(next_arg()));
+				result += static_cast<wchar_t>(static_cast<char>(next_arg()));
 			break;
 		}
 		default:
@@ -178,131 +184,15 @@ std::string vsprintf(addr_space& space, std::string_view fmt, NextArg next_arg)
 }
 
 template <typename NextArg>
+std::string vsprintf(addr_space& space, std::string_view fmt, NextArg next_arg)
+{
+	return vformat<char>(space, fmt, std::move(next_arg));
+}
+
+template <typename NextArg>
 std::wstring vswprintf(addr_space& space, std::wstring_view fmt, NextArg next_arg)
 {
-	std::wstring result;
-	using lm = detail::length_mod;
-
-	for (std::size_t i = 0; i < fmt.size(); ++i)
-	{
-		if (fmt[i] != L'%') { result += fmt[i]; continue; }
-
-		const std::size_t spec_start = i;
-		if (++i >= fmt.size()) break;
-		if (fmt[i] == L'%') { result += L'%'; continue; }
-
-		while (i < fmt.size() && (fmt[i] == L'-' || fmt[i] == L'+' ||
-			fmt[i] == L' ' || fmt[i] == L'0' || fmt[i] == L'#'))
-			++i;
-
-		int width = 0;
-		if (i < fmt.size() && fmt[i] == L'*') { width = static_cast<int>(next_arg()); ++i; }
-		else while (i < fmt.size() && fmt[i] >= L'0' && fmt[i] <= L'9') ++i;
-
-		int precision = -1;
-		if (i < fmt.size() && fmt[i] == L'.')
-		{
-			++i;
-			if (i < fmt.size() && fmt[i] == L'*') { precision = static_cast<int>(next_arg()); ++i; }
-			else while (i < fmt.size() && fmt[i] >= L'0' && fmt[i] <= L'9') ++i;
-		}
-
-		const auto length = detail::parse_length_mod<wchar_t>(fmt, i);
-		if (i >= fmt.size()) break;
-
-		if (fmt[i] == L'w' && i + 1 < fmt.size() && fmt[i + 1] == L'Z')
-		{
-			++i;
-			const auto ptr = static_cast<addr_t>(next_arg());
-			if (ptr)
-			{
-				const auto us_length = space.read_mem<std::uint16_t>(ptr);
-				const auto buffer = space.read_mem<std::uint64_t>(ptr + 8);
-				if (buffer && us_length)
-					result += read_wstring(space, buffer, us_length / sizeof(wchar_t));
-			}
-			else
-				result += L"(null)";
-			continue;
-		}
-		if (fmt[i] == L'Z')
-		{
-			const auto ptr = static_cast<addr_t>(next_arg());
-			if (ptr)
-			{
-				const auto us_length = space.read_mem<std::uint16_t>(ptr);
-				const auto buffer = space.read_mem<std::uint64_t>(ptr + 8);
-				if (buffer && us_length)
-					result += read_wstring(space, buffer, us_length / sizeof(wchar_t));
-			}
-			else
-				result += L"(null)";
-			continue;
-		}
-
-		const wchar_t spec = fmt[i];
-		const std::wstring spec_str(fmt.substr(spec_start, i - spec_start + 1));
-		wchar_t buf[256]{};
-
-		switch (spec)
-		{
-		case L'd': case L'i': case L'u': case L'x': case L'X': case L'o':
-		{
-			const auto raw = next_arg();
-			if (detail::is_64bit(length))
-				std::swprintf(buf, std::size(buf), spec_str.c_str(), static_cast<std::uint64_t>(raw));
-			else
-				std::swprintf(buf, std::size(buf), spec_str.c_str(), static_cast<std::uint32_t>(raw));
-			result += buf;
-			break;
-		}
-		case L'p':
-		{
-			const auto raw = next_arg();
-			std::swprintf(buf, std::size(buf), spec_str.c_str(), reinterpret_cast<void*>(raw));
-			result += buf;
-			break;
-		}
-		case L's':
-		{
-			const auto raw = static_cast<addr_t>(next_arg());
-			if (raw)
-			{
-				if (length == lm::h)
-					result += widen_string(read_string(space, raw));
-				else
-					result += read_wstring(space, raw);
-			}
-			else
-				result += L"(null)";
-			break;
-		}
-		case L'S':
-		{
-			const auto raw = static_cast<addr_t>(next_arg());
-			if (raw)
-				result += widen_string(read_string(space, raw));
-			else
-				result += L"(null)";
-			break;
-		}
-		case L'c':
-		{
-			result += static_cast<wchar_t>(next_arg());
-			break;
-		}
-		case L'C':
-		{
-			result += static_cast<wchar_t>(static_cast<char>(next_arg()));
-			break;
-		}
-		default:
-			result += spec_str;
-			break;
-		}
-	}
-
-	return result;
+	return vformat<wchar_t>(space, fmt, std::move(next_arg));
 }
 
 }
