@@ -86,6 +86,9 @@
     <ClInclude Include="src\kernel\win\win_kernel.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="src\util\format.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="src\util\log.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>

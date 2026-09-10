@@ -9,6 +9,24 @@ struct string_view_hash
 	size_t operator()(std::string_view s) const { return std::hash<std::string_view>{}(s); }
 };
 
+inline std::string narrow_wstring(std::wstring_view wide)
+{
+	std::string result;
+	result.reserve(wide.size());
+	for (const auto wc : wide)
+		result += static_cast<char>(wc & 0xFF);
+	return result;
+}
+
+inline std::wstring widen_string(std::string_view narrow)
+{
+	std::wstring result;
+	result.reserve(narrow.size());
+	for (const auto c : narrow)
+		result += static_cast<wchar_t>(static_cast<unsigned char>(c));
+	return result;
+}
+
 namespace guest
 {
 
