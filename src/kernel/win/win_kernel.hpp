@@ -3,7 +3,12 @@
 #include "../map.hpp"
 #include "process.hpp"
 #include "defs.hpp"
+#include "../../util/log.hpp"
 #include <cstring>
+#include <unordered_map>
+#include <filesystem>
+
+using redirect_fn = std::function<void(vcpu&)>;
 
 struct win_kernel_state : kernel_state
 {
@@ -44,6 +49,50 @@ struct win_kernel_state : kernel_state
 		}
 	}
 
+	std::shared_ptr<proc_module> map_redirect_module(const std::filesystem::path& path, bool supervisor)
+	{
+		auto mod = krnl::map_img(*sys_proc, path, supervisor);
+
+		if (!mod)
+			return nullptr;
+
+		auto* redirections = &redirections_;
+
+		emu_->hook_code(mod->addr, mod->addr + mod->size - 1,
+			[redirections](vcpu& cpu, addr_t addr, std::size_t)
+			{
+				const auto it = redirections->find(addr);
+
+				if (it != redirections->end())
+				{
+					it->second(cpu);
+
+					const auto ret = cpu.read_virt_mem<addr_t>(cpu.reg(x86::rsp));
+					cpu.reg(x86::rsp, cpu.reg(x86::rsp) + sizeof(addr_t));
+					cpu.reg(x86::rip, ret);
+					return;
+				}
+
+				LOG_ERR("unimplemented function at 0x{:X}", addr);
+				cpu.stop();
+			});
+
+		return mod;
+	}
+
+	void redirect(proc_module& mod, const std::string_view name, redirect_fn fn)
+	{
+		const auto exp = mod.find_export(name);
+
+		if (!exp)
+		{
+			LOG_ERR("export '{}' not found in {}", name, mod.name);
+			return;
+		}
+
+		redirections_[*exp] = std::move(fn);
+	}
+
 	std::shared_ptr<process> create_process(const std::string_view name) override
 	{
 		std::scoped_lock lock(proc_mtx_);
@@ -68,6 +117,7 @@ private:
 	}
 
 	std::shared_ptr<class emu> emu_;
+	std::unordered_map<addr_t, redirect_fn> redirections_;
 	process::id_type next_id_ = 8;
 };
 
