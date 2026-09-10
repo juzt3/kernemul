@@ -3,6 +3,7 @@
 #include "../map.hpp"
 #include "process.hpp"
 #include "defs.hpp"
+#include <cstring>
 
 struct win_kernel_state : kernel_state
 {
@@ -58,11 +59,11 @@ struct win_kernel_state : kernel_state
 	}
 
 private:
-	emu_object<eprocess> insert_process(addr_space& space, process::id_type id, std::string_view name)
+	emu_object<_EPROCESS> insert_process(addr_space& space, process::id_type id, std::string_view name)
 	{
-		eprocess ep{};
-		ep.unique_process_id = id;
-		std::memcpy(ep.image_file_name, name.data(), std::min(name.size(), sizeof(ep.image_file_name)));
+		_EPROCESS ep{};
+		ep.UniqueProcessId = reinterpret_cast<void*>(static_cast<std::uintptr_t>(id));
+		std::memcpy(ep.ImageFileName, name.data(), std::min(name.size(), sizeof(ep.ImageFileName)));
 		return active_process_list.push_back(ep);
 	}
 
