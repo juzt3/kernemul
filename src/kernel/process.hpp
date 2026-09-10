@@ -33,8 +33,8 @@ class process
 public:
 	using id_type = std::uint32_t;
 
-	explicit process(const id_type id)
-		:	id_(id) { }
+	process(const id_type id, std::shared_ptr<struct addr_space> space)
+		:	id_(id), addr_space_(std::move(space)) { }
 
 	virtual ~process() = default;
 	virtual void module_add_cb([[maybe_unused]] proc_module& mod) { }

@@ -18,8 +18,8 @@ public:
 class win_kernel_proc : public windows_process
 {
 public:
-	win_kernel_proc(id_type id, win_kernel_state& kernel)
-		:	windows_process(id), kernel_(kernel) { }
+	win_kernel_proc(id_type id, win_kernel_state& kernel, std::shared_ptr<struct addr_space> space)
+		:	windows_process(id, std::move(space)), kernel_(kernel) { }
 
 	void module_add_cb(proc_module& mod) override;
 
