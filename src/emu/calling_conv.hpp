@@ -1,8 +1,8 @@
 #pragma once
 #include "emu.hpp"
 #include "object.hpp"
+#include "../util/string.hpp"
 #include <functional>
-#include <string>
 #include <tuple>
 #include <type_traits>
 #include <utility>
@@ -77,14 +77,7 @@ struct arg_reader<std::string>
 	static std::string read(vcpu& cpu, const calling_conv& conv, std::size_t index)
 	{
 		const auto addr = conv.arg<addr_t>(cpu, index);
-		std::string result;
-		for (std::size_t i = 0; i < 512; ++i)
-		{
-			const char c = cpu.read_virt_mem<char>(addr + i);
-			if (c == '\0') break;
-			result += c;
-		}
-		return result;
+		return guest::read_string(*cpu.curr_addr_space(), addr);
 	}
 };
 
@@ -94,14 +87,7 @@ struct arg_reader<std::wstring>
 	static std::wstring read(vcpu& cpu, const calling_conv& conv, std::size_t index)
 	{
 		const auto addr = conv.arg<addr_t>(cpu, index);
-		std::wstring result;
-		for (std::size_t i = 0; i < 512; ++i)
-		{
-			const wchar_t c = cpu.read_virt_mem<wchar_t>(addr + i * sizeof(wchar_t));
-			if (c == L'\0') break;
-			result += c;
-		}
-		return result;
+		return guest::read_wstring(*cpu.curr_addr_space(), addr);
 	}
 };
 

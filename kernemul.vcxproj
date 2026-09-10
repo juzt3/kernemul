@@ -181,6 +181,7 @@
     <ClInclude Include="src\kernel\map.hpp" />
     <ClInclude Include="src\kernel\process.hpp" />
     <ClInclude Include="src\kernel\win\process.hpp" />
+    <ClInclude Include="src\kernel\win\string.hpp" />
     <ClInclude Include="src\kernel\win\win_kernel.hpp" />
     <ClInclude Include="src\util\log.hpp" />
     <ClInclude Include="src\util\string.hpp" />
