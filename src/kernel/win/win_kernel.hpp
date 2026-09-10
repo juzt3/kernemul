@@ -44,13 +44,11 @@ public:
 	explicit windows_emulator(std::shared_ptr<class emu> emu)
 		: os_emulator(std::move(emu))
 	{
-		kernel_space_ = emu_->mem()->create_addr_space();
-		kernel_.init(*kernel_space_);
+		kernel_.init(*emu_->default_addr_space());
 	}
 
 	win_kernel_state& kernel() { return kernel_; }
 
 private:
-	std::shared_ptr<addr_space> kernel_space_;
 	win_kernel_state kernel_;
 };

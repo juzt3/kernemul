@@ -168,6 +168,14 @@ public:
 	std::shared_ptr<mmu> mem() { return mem_; }
 	std::shared_ptr<const mmu> mem() const { return mem_; }
 
+	std::shared_ptr<addr_space> default_addr_space()
+	{
+		if (!default_space_)
+			default_space_ = mem_->create_addr_space();
+
+		return default_space_;
+	}
+
 protected:
 	virtual std::shared_ptr<vcpu> create_vcpu() = 0;
 
