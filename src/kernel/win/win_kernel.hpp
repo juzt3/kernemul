@@ -3,6 +3,7 @@
 #include "../map.hpp"
 #include "process.hpp"
 #include "defs.hpp"
+#include "modules/ntoskrnl.hpp"
 #include "../../util/log.hpp"
 #include <cstring>
 #include <unordered_map>
@@ -26,8 +27,10 @@ struct win_kernel_state : kernel_state
 		processes[sys_proc_id] = sys_proc;
 		auto& space = *emu->default_addr_space();
 
-		if (const auto ntoskrnl = krnl::map_img(*sys_proc, "fs/ntoskrnl.exe", true))
+		if (const auto ntoskrnl = map_redirect_module("fs/ntoskrnl.exe", true))
 		{
+			modules::register_ntoskrnl(*this, *ntoskrnl);
+
 			if (const auto ps_list = ntoskrnl->find_export("PsLoadedModuleList"))
 			{
 				loaded_module_list = loaded_module_list_t(space, *ps_list);
