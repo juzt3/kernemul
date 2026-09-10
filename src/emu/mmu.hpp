@@ -51,6 +51,7 @@ public:
 	virtual void switch_to(vcpu& cpu, std::shared_ptr<addr_space> space) = 0;
 
 	void set_emu(emu* backend) { emu_ = backend; }
+	[[nodiscard]] class emu* emu() const noexcept { return emu_; }
 
 protected:
 	addr_t page_align(addr_t addr) const { return addr & ~(page_size() - 1); }

@@ -24,6 +24,8 @@ public:
 		head_.write(self);
 	}
 
+	void set_monitor(bool enabled) { monitor_ = enabled; }
+
 	emu_object<T> push_back(const T& entry)
 	{
 		auto* const space_ = head_.space();
@@ -57,6 +59,9 @@ public:
 			write_flink(*space_, tail_links, links_addr(entry_addr));
 		head.blink = links_addr(entry_addr);
 		head_.write(head);
+
+		if (monitor_)
+			obj.monitor();
 
 		return obj;
 	}
@@ -127,4 +132,5 @@ private:
 	}
 
 	emu_object<list_entry> head_;
+	bool monitor_ = false;
 };
