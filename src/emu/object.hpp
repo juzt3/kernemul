@@ -8,24 +8,24 @@ class emu_object
 public:
 	emu_object() noexcept = default;
 
-	emu_object(addr_space& mem, const addr_t addr) noexcept
-		:	mem_(&mem), addr_(addr) { }
+	emu_object(addr_space& space_, const addr_t addr) noexcept
+		:	space_(&space_), addr_(addr) { }
 
 	[[nodiscard]] T read(const std::size_t index = 0) const
 	{
-		return mem_->read_mem<T>(addr_ + index * sizeof(T));
+		return space_->read_mem<T>(addr_ + index * sizeof(T));
 	}
 
 	void write(const T& val, const std::size_t index = 0)
 	{
-		mem_->write_mem<T>(addr_ + index * sizeof(T), val);
+		space_->write_mem<T>(addr_ + index * sizeof(T), val);
 	}
 
 	[[nodiscard]] addr_t address() const noexcept { return addr_; }
-	[[nodiscard]] addr_space* mem() const noexcept { return mem_; }
+	[[nodiscard]] addr_space* space() const noexcept { return space_; }
 	explicit operator bool() const noexcept { return addr_ != 0; }
 
 protected:
-	addr_space* mem_ = nullptr;
+	addr_space* space_ = nullptr;
 	addr_t addr_ = 0;
 };
