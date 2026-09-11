@@ -97,7 +97,7 @@ struct kernel_state
 					return;
 				}
 
-				const auto sym = symbols::resolve(m->symbols_, addr);
+				const auto sym = m->symbols.resolve(addr);
 				if (sym)
 					LOG_ERR("unimplemented function {}!{}", m->name, sym->format());
 				else

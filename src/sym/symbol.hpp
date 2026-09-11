@@ -5,6 +5,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 struct proc_module;
@@ -16,8 +17,6 @@ struct symbol_info
 	addr_t addr;
 	std::uint32_t size = 0;
 };
-
-using module_symbols = std::vector<symbol_info>;
 
 struct resolved_symbol
 {
@@ -33,14 +32,26 @@ struct resolved_symbol
 	}
 };
 
+struct module_symbols
+{
+	std::vector<symbol_info> entries;
+	std::unordered_map<std::string, std::size_t> name_index;
+
+	void insert(std::string name, addr_t addr, std::uint32_t size = 0);
+	void sort();
+
+	[[nodiscard]] std::optional<resolved_symbol> resolve(addr_t addr) const;
+	[[nodiscard]] std::optional<addr_t> lookup(std::string_view name) const;
+
+	[[nodiscard]] std::size_t size() const { return entries.size(); }
+	[[nodiscard]] bool empty() const { return entries.empty(); }
+};
+
 struct symbols
 {
 	virtual ~symbols() = default;
 	virtual void load(proc_module& mod) = 0;
 
-	static std::optional<resolved_symbol> resolve(const module_symbols& syms, addr_t addr);
-	static std::optional<addr_t> lookup(const module_symbols& syms, std::string_view name);
-	static void sort(module_symbols& syms);
 	static std::string format_addr(const process& proc, addr_t addr);
 };
 

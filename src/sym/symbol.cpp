@@ -4,14 +4,28 @@
 #include <algorithm>
 #include <format>
 
-std::optional<resolved_symbol> symbols::resolve(const module_symbols& syms, const addr_t addr)
+void module_symbols::insert(std::string name, const addr_t addr, const std::uint32_t size)
 {
-	if (syms.empty())
+	if (name_index.contains(name))
+		return;
+
+	name_index[name] = entries.size();
+	entries.push_back({ std::move(name), addr, size });
+}
+
+void module_symbols::sort()
+{
+	std::ranges::sort(entries, {}, &symbol_info::addr);
+}
+
+std::optional<resolved_symbol> module_symbols::resolve(const addr_t addr) const
+{
+	if (entries.empty())
 		return std::nullopt;
 
-	auto it = std::ranges::upper_bound(syms, addr, {}, &symbol_info::addr);
+	auto it = std::ranges::upper_bound(entries, addr, {}, &symbol_info::addr);
 
-	if (it == syms.begin())
+	if (it == entries.begin())
 		return std::nullopt;
 
 	--it;
@@ -24,27 +38,22 @@ std::optional<resolved_symbol> symbols::resolve(const module_symbols& syms, cons
 	return resolved_symbol{ &*it, offset };
 }
 
-std::optional<addr_t> symbols::lookup(const module_symbols& syms, const std::string_view name)
+std::optional<addr_t> module_symbols::lookup(const std::string_view name) const
 {
-	auto it = std::ranges::find(syms, name, &symbol_info::name);
+	const auto it = name_index.find(std::string(name));
 
-	if (it == syms.end())
+	if (it == name_index.end())
 		return std::nullopt;
 
-	return it->addr;
-}
-
-void symbols::sort(module_symbols& syms)
-{
-	std::ranges::sort(syms, {}, &symbol_info::addr);
+	return entries[it->second].addr;
 }
 
 void export_symbols::load(proc_module& mod)
 {
 	for (const auto& [name, addr] : mod.exports)
-		mod.symbols_.push_back({ name, addr, 0 });
+		mod.symbols.insert(name, addr);
 
-	symbols::sort(mod.symbols_);
+	mod.symbols.sort();
 }
 
 std::string symbols::format_addr(const process& proc, const addr_t addr)
@@ -54,7 +63,7 @@ std::string symbols::format_addr(const process& proc, const addr_t addr)
 	if (!mod)
 		return std::format("0x{:X}", addr);
 
-	const auto sym = resolve(mod->symbols_, addr);
+	const auto sym = mod->symbols.resolve(addr);
 
 	if (!sym)
 		return std::format("{}+0x{:X}", mod->name, addr - mod->addr);
