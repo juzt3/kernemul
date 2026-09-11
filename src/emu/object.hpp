@@ -90,3 +90,21 @@ protected:
 	emu_hook* hook_ = nullptr;
 	std::string name_;
 };
+
+template <>
+class emu_object<void>
+{
+public:
+	emu_object() noexcept = default;
+
+	emu_object(addr_space& space, const addr_t addr, bool = false) noexcept
+		:	space_(&space), addr_(addr) {}
+
+	[[nodiscard]] addr_t address() const noexcept { return addr_; }
+	[[nodiscard]] addr_space* space() const noexcept { return space_; }
+	explicit operator bool() const noexcept { return addr_ != 0; }
+
+private:
+	addr_space* space_ = nullptr;
+	addr_t addr_ = 0;
+};

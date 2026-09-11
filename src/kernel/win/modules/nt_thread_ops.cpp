@@ -1,6 +1,7 @@
 #include "nt_thread_ops.hpp"
 #include "../win_kernel.hpp"
 #include "../status.hpp"
+#include "../types.hpp"
 #include "../../../util/log.hpp"
 
 void modules::register_ntoskrnl_thread_ops(win_kernel_state& state, proc_module& mod)
@@ -8,12 +9,12 @@ void modules::register_ntoskrnl_thread_ops(win_kernel_state& state, proc_module&
 	auto* sys_proc = state.sys_proc.get();
 
 	state.redirect(mod, "PsCreateSystemThread",
-		[sys_proc](vcpu& cpu, addr_t thread_handle_out, std::uint32_t /*desired_access*/,
-			addr_t /*object_attributes*/, std::uint64_t /*process_handle*/,
-			addr_t client_id_out, addr_t start_routine, addr_t start_context) -> NTSTATUS
+		[sys_proc](vcpu& cpu, emu_object<std::uint64_t> thread_handle_out, [[maybe_unused]] std::uint32_t desired_access,
+			[[maybe_unused]] emu_object<void> object_attributes, [[maybe_unused]] std::uint64_t process_handle,
+			emu_object<CLIENT_ID> client_id_out, addr_t start_routine, addr_t start_context) -> NTSTATUS
 		{
 			LOG_INFO("PsCreateSystemThread(handle_out=0x{:X}, start=0x{:X}, ctx=0x{:X})",
-				thread_handle_out, start_routine, start_context);
+				thread_handle_out.address(), start_routine, start_context);
 
 			auto t = sys_proc->create_thread(cpu, start_routine);
 			cpu.emu()->call_conv()->set_arg(cpu, *t, 0, start_context);
@@ -21,15 +22,14 @@ void modules::register_ntoskrnl_thread_ops(win_kernel_state& state, proc_module&
 			const auto tid = static_cast<std::uint64_t>(t->id());
 
 			if (thread_handle_out)
-				cpu.write_virt_mem(thread_handle_out, tid);
+				thread_handle_out.write(tid);
 
 			if (client_id_out)
 			{
-				const std::uint64_t cid[2] = {
-					static_cast<std::uint64_t>(sys_proc->id()),
-					tid
-				};
-				cpu.write_virt_mem(client_id_out, cid, sizeof(cid));
+				CLIENT_ID cid{};
+				cid.UniqueProcess = reinterpret_cast<PVOID>(sys_proc->id());
+				cid.UniqueThread = reinterpret_cast<PVOID>(tid);
+				client_id_out.write(cid);
 			}
 
 			LOG_INFO("PsCreateSystemThread: created tid={}", tid);
