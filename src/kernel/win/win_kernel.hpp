@@ -3,6 +3,7 @@
 #include "process.hpp"
 #include "defs.hpp"
 #include "modules/ntoskrnl.hpp"
+#include "modules/nt_thread_ops.hpp"
 #include <cstring>
 
 struct win_kernel_state : kernel_state
@@ -24,6 +25,7 @@ struct win_kernel_state : kernel_state
 		if (const auto ntoskrnl = map_redirect_module(*sys_proc, "fs/ntoskrnl.exe", true))
 		{
 			modules::register_ntoskrnl(*this, *ntoskrnl);
+			modules::register_ntoskrnl_thread_ops(*this, *ntoskrnl);
 
 			if (const auto ps_list = ntoskrnl->find_export("PsLoadedModuleList"))
 			{
