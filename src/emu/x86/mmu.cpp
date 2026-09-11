@@ -153,11 +153,10 @@ void mmu::map_virt(::addr_space& space, addr_t va, std::size_t size, mem_prot pr
 	const addr_t start = page_align(va);
 	const std::size_t aligned = size_align(size);
 
+	const addr_t pa_block = alloc_phys(aligned, phys_prot);
+
 	for (std::size_t off = 0; off < aligned; off += page_size())
-	{
-		addr_t pa = alloc_phys(page_size(), phys_prot);
-		map_page(s, start + off, pa, user);
-	}
+		map_page(s, start + off, pa_block + off, user);
 
 	flush_all_tlb();
 }

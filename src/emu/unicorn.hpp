@@ -33,17 +33,18 @@ public:
 
 	void run() override
 	{
+		const bool nested = running_.load();
 		for (;;)
 		{
-			running_ = true;
+			if (!nested) running_ = true;
 			auto pc = reg<addr_t>(arch_->pc());
 			uc_emu_start(uc_, pc, 0, 0, 0);
-			running_ = false;
+			if (!nested) running_ = false;
 
 			if (redirect_.exchange(false))
 				continue;
 
-			if (!pending_pause_.load())
+			if (nested || !pending_pause_.load())
 				break;
 
 			while (pending_pause_.load()) {}

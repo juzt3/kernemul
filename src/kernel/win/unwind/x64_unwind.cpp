@@ -1,7 +1,9 @@
 #include "x64_unwind.hpp"
+#include "../exception.hpp"
 #include "../../process.hpp"
 #include "../../../emu/emu.hpp"
 #include "../../../emu/x86/arch.hpp"
+#include "../../../util/log.hpp"
 
 namespace win {
 
@@ -203,6 +205,148 @@ bool x64_unwinder::unwind_frame(
 
 	result = apply_unwind_info(mem, mod, *func, ctx);
 	return ctx.pc != 0;
+}
+
+addr_t x64_unwinder::ensure_trampoline(vcpu& cpu)
+{
+	if (trampoline_)
+		return trampoline_;
+
+	auto& space = *cpu.curr_addr_space();
+	trampoline_ = space.alloc(0x1000, prot_rwx);
+
+	cpu.emu()->hook_code(trampoline_, trampoline_,
+		[](vcpu& c, addr_t, std::size_t) { c.stop(); });
+
+	return trampoline_;
+}
+
+std::int32_t x64_unwinder::call_filter(
+	vcpu& cpu, addr_t filter_addr, addr_t establisher_frame,
+	const exception_info& info)
+{
+	auto& space = *cpu.curr_addr_space();
+	const auto trampoline = ensure_trampoline(cpu);
+
+	const auto saved_rcx = cpu.reg(x86::rcx);
+	const auto saved_rdx = cpu.reg(x86::rdx);
+	const auto saved_rsp = cpu.sp();
+	const auto saved_rip = cpu.pc();
+
+	exception_record64 record{};
+	record.exception_code = info.code;
+	record.exception_address = info.exception_address;
+	if (info.code == status_access_violation)
+	{
+		record.number_parameters = 2;
+		record.exception_information[0] = 0;
+		record.exception_information[1] = info.fault_address;
+	}
+
+	context64 ctx{};
+	ctx.context_flags = 0x10000F;
+	ctx.rax = cpu.reg(x86::rax);
+	ctx.rcx = cpu.reg(x86::rcx);
+	ctx.rdx = cpu.reg(x86::rdx);
+	ctx.rbx = cpu.reg(x86::rbx);
+	ctx.rsp = cpu.sp();
+	ctx.rbp = cpu.reg(x86::rbp);
+	ctx.rsi = cpu.reg(x86::rsi);
+	ctx.rdi = cpu.reg(x86::rdi);
+	ctx.r8  = cpu.reg(x86::r8);
+	ctx.r9  = cpu.reg(x86::r9);
+	ctx.r10 = cpu.reg(x86::r10);
+	ctx.r11 = cpu.reg(x86::r11);
+	ctx.r12 = cpu.reg(x86::r12);
+	ctx.r13 = cpu.reg(x86::r13);
+	ctx.r14 = cpu.reg(x86::r14);
+	ctx.r15 = cpu.reg(x86::r15);
+	ctx.rip = info.exception_address;
+
+	constexpr std::size_t filter_stack_size = 0x4000;
+	const auto alloc_base = space.alloc(filter_stack_size, prot_rw);
+
+	constexpr std::size_t data_offset = 0x100;
+	const auto record_addr = alloc_base + data_offset;
+	const auto ctx_addr = (record_addr + sizeof(exception_record64) + 0xF) & ~addr_t(0xF);
+	const auto ptrs_addr = ctx_addr + sizeof(context64);
+
+	space.write_mem(record_addr, record);
+	space.write_mem(ctx_addr, ctx);
+
+	const std::uint64_t ptrs[2] = { record_addr, ctx_addr };
+	space.write_mem(ptrs_addr, &ptrs, sizeof(ptrs));
+
+	auto filter_rsp = ((alloc_base + filter_stack_size) & ~addr_t(0xF)) - 0x28;
+	filter_rsp -= 8;
+	space.write_mem(filter_rsp, trampoline);
+
+	cpu.reg(x86::rcx, ptrs_addr);
+	cpu.reg(x86::rdx, establisher_frame);
+	cpu.set_sp(filter_rsp);
+	cpu.set_pc(filter_addr);
+
+	cpu.run();
+
+	const auto result = static_cast<std::int32_t>(cpu.reg(x86::rax));
+
+	cpu.reg(x86::rcx, saved_rcx);
+	cpu.reg(x86::rdx, saved_rdx);
+	cpu.set_sp(saved_rsp);
+	cpu.set_pc(saved_rip);
+
+	return result;
+}
+
+handler_result x64_unwinder::evaluate_handler(
+	vcpu& cpu, const proc_module& mod, const unwind_result& result,
+	addr_t control_pc, const exception_info& info)
+{
+	const auto* img = mod.pe();
+	if (!img)
+		return { exception_continue_search, 0, 0 };
+
+	const auto* img_base = img->as<const std::uint8_t*>();
+	const auto data_rva = static_cast<std::uint32_t>(result.handler_data - mod.addr);
+	const auto* scope_table = reinterpret_cast<const std::uint32_t*>(img_base + data_rva);
+	const auto scope_count = scope_table[0];
+	const auto* scopes = reinterpret_cast<const scope_entry*>(&scope_table[1]);
+	const auto pc_rva = static_cast<std::uint32_t>(control_pc - mod.addr);
+
+	for (std::uint32_t i = 0; i < scope_count; ++i)
+	{
+		const auto& scope = scopes[i];
+
+		if (pc_rva < scope.begin_address || pc_rva >= scope.end_address)
+			continue;
+
+		if (!scope.jump_target)
+			continue;
+
+		if (scope.handler_address == 1)
+		{
+			const auto target = mod.addr + scope.jump_target;
+			LOG_INFO("  EXCEPTION_EXECUTE_HANDLER -> 0x{:X}", target);
+			return { exception_execute_handler, target, result.establisher_frame };
+		}
+
+		const auto filter_addr = mod.addr + scope.handler_address;
+		LOG_INFO("  calling filter at 0x{:X}", filter_addr);
+
+		const auto filter_result = call_filter(cpu, filter_addr, result.establisher_frame, info);
+		LOG_INFO("  filter returned {}", filter_result);
+
+		if (filter_result < 0)
+			return { exception_continue_execution, 0, 0 };
+
+		if (filter_result > 0)
+		{
+			const auto target = mod.addr + scope.jump_target;
+			return { exception_execute_handler, target, result.establisher_frame };
+		}
+	}
+
+	return { exception_continue_search, 0, 0 };
 }
 
 } // namespace win

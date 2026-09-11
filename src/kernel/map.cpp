@@ -4,7 +4,7 @@
 #include "../util/log.hpp"
 #include "../util/file.hpp"
 
-std::shared_ptr<proc_module> krnl::map_img(process& proc, const std::string_view name, const pe::image* const img, const bool supervisor)
+std::shared_ptr<proc_module> krnl::map_img(process& proc, const std::string_view name, const pe::image* const img, const bool supervisor, const bool skip_imports)
 {
 	auto flags = prot_read;
 
@@ -34,26 +34,29 @@ std::shared_ptr<proc_module> krnl::map_img(process& proc, const std::string_view
 		space->prot_mem(addr + sec.virtual_address, sec.virtual_size, sec_flags);
 	}
 
-	for (const auto imp : img->imports())
+	if (!skip_imports)
 	{
-		const auto mod = proc.find_module(imp.module_name);
-
-		if (!mod)
+		for (const auto imp : img->imports())
 		{
-			LOG_ERR("unable to find import module {}", imp.module_name);
-			return nullptr;
+			const auto mod = proc.find_module(imp.module_name);
+
+			if (!mod)
+			{
+				LOG_ERR("unable to find import module {}", imp.module_name);
+				return nullptr;
+			}
+
+			const auto patch_loc = addr + imp.iat_slot.rva();
+			const auto import_addr = mod->find_export(imp.import_name);
+
+			if (!import_addr)
+			{
+				LOG_ERR("unable to find import {}!{}", imp.module_name, imp.import_name);
+				return nullptr;
+			}
+
+			space->write_mem(patch_loc, import_addr.value());
 		}
-
-		const auto patch_loc = addr + imp.iat_slot.rva();
-		const auto import_addr = mod->find_export(imp.import_name);
-
-		if (!import_addr)
-		{
-			LOG_ERR("unable to find import {}!{}", imp.module_name, imp.import_name);
-			return nullptr;
-		}
-
-		space->write_mem(patch_loc, import_addr.value());
 	}
 
 	const addr_t delta = addr - img->base_addr();
@@ -107,7 +110,7 @@ static std::vector<std::uint8_t> map_pe_virtual(const std::vector<std::uint8_t>&
 	return mapped;
 }
 
-std::shared_ptr<proc_module> krnl::map_img(process& proc, const std::filesystem::path& path, const bool supervisor)
+std::shared_ptr<proc_module> krnl::map_img(process& proc, const std::filesystem::path& path, const bool supervisor, const bool skip_imports)
 {
 	auto raw = util::read_file(path);
 
@@ -121,5 +124,5 @@ std::shared_ptr<proc_module> krnl::map_img(process& proc, const std::filesystem:
 	const auto* img = reinterpret_cast<const pe::image*>(mapped.data());
 	const auto name = path.filename().string();
 
-	return map_img(proc, name, img, supervisor);
+	return map_img(proc, name, img, supervisor, skip_imports);
 }

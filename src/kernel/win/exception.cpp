@@ -1,7 +1,6 @@
 #include "exception.hpp"
 #include "win_kernel.hpp"
 #include "unwind/unwind.hpp"
-#include "unwind/x64_unwind.hpp"
 #include "../process.hpp"
 #include "../../sym/symbol.hpp"
 #include "../../emu/emu.hpp"
@@ -19,53 +18,6 @@ std::uint32_t exception_to_status(const cpu_exception ex)
 	case cpu_exception::illegal_instruction: return status_illegal_instruction;
 	default:                                 return status_access_violation;
 	}
-}
-
-static bool try_dispatch_handler(
-	const proc_module& mod, const addr_t control_pc,
-	const unwind_result& unwind, vcpu& cpu)
-{
-	if (!unwind.handler || !unwind.handler_data)
-		return false;
-
-	const auto* img = mod.pe();
-	if (!img)
-		return false;
-
-	const auto* img_base = img->as<const std::uint8_t*>();
-	const auto handler_data_rva = static_cast<std::uint32_t>(unwind.handler_data - mod.addr);
-	const auto* scope_table_ptr = reinterpret_cast<const std::uint32_t*>(img_base + handler_data_rva);
-	const auto scope_count = scope_table_ptr[0];
-	const auto* scopes = reinterpret_cast<const scope_entry*>(&scope_table_ptr[1]);
-
-	const auto control_pc_rva = static_cast<std::uint32_t>(control_pc - mod.addr);
-
-	for (std::uint32_t i = 0; i < scope_count; ++i)
-	{
-		const auto& scope = scopes[i];
-
-		if (control_pc_rva < scope.begin_address || control_pc_rva >= scope.end_address)
-			continue;
-
-		if (!scope.jump_target)
-			continue;
-
-		if (scope.handler_address == 1)
-		{
-			const auto target = mod.addr + scope.jump_target;
-			LOG_INFO("  EXCEPTION_EXECUTE_HANDLER, jumping to 0x{:X}", target);
-
-			cpu.set_pc(target);
-			cpu.set_sp(unwind.establisher_frame);
-			return true;
-		}
-
-		// TODO: evaluate filter expression via nested emulation
-		LOG_WARN("  scope[{}] has filter at rva 0x{:X}, skipping (not yet supported)",
-			i, scope.handler_address);
-	}
-
-	return false;
 }
 
 win_exception::win_exception(win_kernel_state& kernel)
@@ -93,38 +45,58 @@ bool win_exception::handle(vcpu& cpu, const cpu_exception ex)
 			return false;
 	}
 
-	auto ctx = unwinder_->context_from_vcpu(cpu);
+	auto& space = *cpu.curr_addr_space();
+	const auto saved_pc = cpu.pc();
+	const auto saved_sp = cpu.sp();
 
-	constexpr std::size_t max_frames = 64;
+	exception_info info{};
+	info.code = code;
+	info.exception_address = original_pc;
 
-	for (std::size_t depth = 0; depth < max_frames; ++depth)
+	auto uw_ctx = unwinder_->context_from_vcpu(cpu);
+
+	for (std::size_t depth = 0; depth < 64; ++depth)
 	{
-		mod = proc.find_module_by_addr(ctx.pc);
+		mod = proc.find_module_by_addr(uw_ctx.pc);
 		if (!mod)
 			break;
 
-		const auto control_pc = ctx.pc;
-		const auto control_rva = static_cast<std::uint32_t>(control_pc - mod->addr);
+		const auto control_pc = uw_ctx.pc;
 
 		unwind_result result{};
-		if (!unwinder_->unwind_frame(*cpu.curr_addr_space(), *mod, ctx, result))
+		if (!unwinder_->unwind_frame(space, *mod, uw_ctx, result))
 		{
-			LOG_WARN("  frame[{}]: unwind failed at rva 0x{:X}", depth, control_rva);
+			LOG_WARN("  frame[{}]: unwind failed at 0x{:X}", depth, control_pc);
 			break;
 		}
 
 		LOG_INFO("  frame[{}]: rip={}, handler=0x{:X}, ret=0x{:X}",
 			depth, symbols::format_addr(proc, control_pc),
-			result.handler, ctx.pc);
+			result.handler, uw_ctx.pc);
 
-		if (result.handler)
+		if (!result.handler)
+			continue;
+
+		const auto hr = unwinder_->evaluate_handler(cpu, *mod, result, control_pc, info);
+
+		if (hr.disposition == exception_execute_handler)
 		{
-			if (try_dispatch_handler(*mod, control_pc, result, cpu))
-			{
-				LOG_INFO("exception handled at frame {}", depth);
-				return true;
-			}
+			LOG_INFO("exception handled at frame {} -> 0x{:X}", depth, hr.target_ip);
+			cpu.set_pc(hr.target_ip);
+			cpu.set_sp(hr.establisher_frame);
+			return true;
 		}
+
+		if (hr.disposition == exception_continue_execution)
+		{
+			LOG_INFO("exception continue execution at 0x{:X}", original_pc);
+			cpu.set_pc(original_pc);
+			cpu.set_sp(saved_sp);
+			return true;
+		}
+
+		cpu.set_pc(saved_pc);
+		cpu.set_sp(saved_sp);
 	}
 
 	LOG_ERR("unhandled exception code=0x{:X} at 0x{:X}", code, original_pc);

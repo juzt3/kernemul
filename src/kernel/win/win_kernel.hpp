@@ -49,8 +49,11 @@ struct win_kernel_state : kernel_state
 
 			if (const auto ps_init = ntoskrnl->find_export("PsInitialSystemProcess"))
 			{
-				auto sys_eproc = insert_process(space, sys_proc->id(), "System");
-				space.write_mem(*ps_init, sys_eproc.address());
+				if (active_process_list.address())
+				{
+					auto sys_eproc = insert_process(space, sys_proc->id(), "System");
+					space.write_mem(*ps_init, sys_eproc.address());
+				}
 			}
 		}
 	}

@@ -63,53 +63,42 @@ static x86::seg_reg make_data_sr(std::uint16_t selector, std::uint32_t dpl, std:
 
 void init_vcpu(vcpu& cpu)
 {
-	auto* mem = cpu.emu()->mem().get();
+	auto space = cpu.curr_addr_space();
 
 	constexpr std::uint32_t tss_limit = 103;
-	addr_t tss_pa = mem->alloc_phys(tss_limit + 1, prot_rw);
+	addr_t tss_va = space->alloc(tss_limit + 1, prot_rw | prot_supervisor);
 
 	constexpr std::size_t gdt_entries = 11;
 	constexpr std::size_t gdt_size = gdt_entries * sizeof(ia32::segment_descriptor_32);
-	addr_t gdt_pa = mem->alloc_phys(gdt_size, prot_rw);
+	addr_t gdt_va = space->alloc(gdt_size, prot_rw | prot_supervisor);
 
-	// 0x00  null
-	// 0x08  null (reserved)
-	// 0x10  kernel CS
-	// 0x18  kernel DS
-	// 0x20  null (reserved)
-	// 0x28  user DS  (DPL=3)
-	// 0x30  user CS  (DPL=3)
-	// 0x38  null (reserved)
-	// 0x40  TSS low  (16-byte descriptor)
-	// 0x48  TSS high
-	// 0x50  null (reserved)
-	mem->write_phys<ia32::segment_descriptor_32>(gdt_pa + 0x00, {});
-	mem->write_phys<ia32::segment_descriptor_32>(gdt_pa + 0x08, {});
-	mem->write_phys(gdt_pa + 0x10, make_code_desc(0));
-	mem->write_phys(gdt_pa + 0x18, make_data_desc(0));
-	mem->write_phys<ia32::segment_descriptor_32>(gdt_pa + 0x20, {});
-	mem->write_phys(gdt_pa + 0x28, make_data_desc(3));
-	mem->write_phys(gdt_pa + 0x30, make_code_desc(3));
-	mem->write_phys<ia32::segment_descriptor_32>(gdt_pa + 0x38, {});
+	space->write_mem<ia32::segment_descriptor_32>(gdt_va + 0x00, {});
+	space->write_mem<ia32::segment_descriptor_32>(gdt_va + 0x08, {});
+	space->write_mem(gdt_va + 0x10, make_code_desc(0));
+	space->write_mem(gdt_va + 0x18, make_data_desc(0));
+	space->write_mem<ia32::segment_descriptor_32>(gdt_va + 0x20, {});
+	space->write_mem(gdt_va + 0x28, make_data_desc(3));
+	space->write_mem(gdt_va + 0x30, make_code_desc(3));
+	space->write_mem<ia32::segment_descriptor_32>(gdt_va + 0x38, {});
 
 	ia32::segment_descriptor_64 tss_desc{};
-	tss_desc.base_address_low = static_cast<std::uint16_t>(tss_pa);
-	tss_desc.base_address_middle = (tss_pa >> 16) & 0xFF;
-	tss_desc.base_address_high = (tss_pa >> 24) & 0xFF;
-	tss_desc.base_address_upper = static_cast<std::uint32_t>(tss_pa >> 32);
+	tss_desc.base_address_low = static_cast<std::uint16_t>(tss_va);
+	tss_desc.base_address_middle = (tss_va >> 16) & 0xFF;
+	tss_desc.base_address_high = (tss_va >> 24) & 0xFF;
+	tss_desc.base_address_upper = static_cast<std::uint32_t>(tss_va >> 32);
 	tss_desc.segment_limit_low = static_cast<std::uint16_t>(tss_limit);
 	tss_desc.type = SEGMENT_DESCRIPTOR_TYPE_TSS_AVAILABLE;
 	tss_desc.present = 1;
-	mem->write_phys(gdt_pa + 0x40, tss_desc);
+	space->write_mem(gdt_va + 0x40, tss_desc);
 
-	mem->write_phys<ia32::segment_descriptor_32>(gdt_pa + 0x50, {});
+	space->write_mem<ia32::segment_descriptor_32>(gdt_va + 0x50, {});
 
-	cpu.reg(x86::gdtr, x86::seg_reg{ 0, gdt_pa, static_cast<std::uint32_t>(gdt_size - 1), 0 });
+	cpu.reg(x86::gdtr, x86::seg_reg{ 0, gdt_va, static_cast<std::uint32_t>(gdt_size - 1), 0 });
 
 	ia32::segment_access_rights tr_access{};
 	tr_access.type = SEGMENT_DESCRIPTOR_TYPE_TSS_BUSY;
 	tr_access.present = 1;
-	cpu.reg(x86::tr, x86::seg_reg{ tss_sel, tss_pa, tss_limit, tr_access.flags });
+	cpu.reg(x86::tr, x86::seg_reg{ tss_sel, tss_va, tss_limit, tr_access.flags });
 
 	cpu.reg(x86::cs, make_code_sr(kernel_cs, 0));
 

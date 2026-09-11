@@ -26,6 +26,8 @@ struct calling_conv
 	}
 
 	virtual void set_arg(vcpu& cpu, thread& t, std::size_t index, std::uint64_t value) const = 0;
+	virtual void write_arg(vcpu& cpu, std::size_t index, std::uint64_t value) const = 0;
+	virtual std::uint64_t read_ret(vcpu& cpu) const = 0;
 
 protected:
 	virtual void arg_read(vcpu& cpu, std::size_t index, void* buf, std::size_t size) const = 0;
@@ -35,6 +37,18 @@ protected:
 struct x86_win_conv : calling_conv
 {
 	void set_arg(vcpu& cpu, thread& t, std::size_t index, std::uint64_t value) const override;
+
+	void write_arg(vcpu& cpu, std::size_t index, std::uint64_t value) const override
+	{
+		static constexpr reg_t regs[] = { x86::rcx, x86::rdx, x86::r8, x86::r9 };
+		if (index < 4)
+			cpu.reg(regs[index], value);
+	}
+
+	std::uint64_t read_ret(vcpu& cpu) const override
+	{
+		return cpu.reg(x86::rax);
+	}
 
 protected:
 	void arg_read(vcpu& cpu, std::size_t index, void* buf, std::size_t size) const override
