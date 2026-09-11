@@ -18,7 +18,13 @@ struct proc_module
 	addr_t addr;
 	std::uint32_t size;
 	addr_t entry_point;
+	std::vector<std::uint8_t> image;
 	std::unordered_map<std::string, addr_t, string_view_hash, std::equal_to<>> exports;
+
+	[[nodiscard]] const pe::image* pe() const
+	{
+		return image.empty() ? nullptr : reinterpret_cast<const pe::image*>(image.data());
+	}
 
 	[[nodiscard]] std::optional<addr_t> find_export(const std::string_view exp_name)
 	{
@@ -28,6 +34,11 @@ struct proc_module
 			return std::nullopt;
 
 		return it->second;
+	}
+
+	[[nodiscard]] bool contains_addr(addr_t a) const
+	{
+		return a >= addr && a < addr + size;
 	}
 };
 
@@ -51,6 +62,7 @@ public:
 
 	std::shared_ptr<proc_module> add_module(std::string_view name, addr_t addr, const pe::image* pe);
 	[[nodiscard]] std::shared_ptr<proc_module> find_module(std::string_view name) const;
+	[[nodiscard]] std::shared_ptr<proc_module> find_module_by_addr(addr_t addr) const;
 
 	[[nodiscard]] std::shared_ptr<addr_space> addr_space() const;
 	[[nodiscard]] id_type id() const { return id_; }

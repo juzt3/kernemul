@@ -3,7 +3,12 @@
 
 std::shared_ptr<proc_module> process::add_module(const std::string_view name, const addr_t addr, const pe::image* const pe)
 {
-	auto mod = std::make_shared<proc_module>(std::string(name), addr, pe->size(), addr + pe->entry_point());
+	auto mod = std::make_shared<proc_module>();
+	mod->name = std::string(name);
+	mod->addr = addr;
+	mod->size = pe->size();
+	mod->entry_point = addr + pe->entry_point();
+	mod->image.assign(pe->as<const std::uint8_t*>(), pe->as<const std::uint8_t*>() + pe->size());
 
 	module_add_cb(*mod);
 
@@ -25,6 +30,15 @@ std::shared_ptr<proc_module> process::find_module(const std::string_view name) c
 	const auto it = modules_.find(name);
 
 	return it != modules_.end() ? it->second : nullptr;
+}
+
+std::shared_ptr<proc_module> process::find_module_by_addr(const addr_t addr) const
+{
+	for (const auto& [_, mod] : modules_)
+		if (mod->contains_addr(addr))
+			return mod;
+
+	return nullptr;
 }
 
 std::shared_ptr<addr_space> process::addr_space() const
