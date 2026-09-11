@@ -2,9 +2,11 @@
 #include "../emu/emu.hpp"
 #include "process.hpp"
 #include <algorithm>
+#include <chrono>
 #include <deque>
 #include <memory>
 #include <mutex>
+#include <thread>
 
 class thread
 {
@@ -54,13 +56,20 @@ public:
 		}
 	}
 
+	void sleep_for(std::chrono::milliseconds ms) { sleep_until_ = clock::now() + ms; }
+	bool is_sleeping() const { return clock::now() < sleep_until_; }
+	auto sleep_until() const { return sleep_until_; }
+
 	[[nodiscard]] id_type id() const noexcept { return id_; }
 	[[nodiscard]] std::shared_ptr<process> proc() const noexcept { return process_; }
 
 private:
+	using clock = std::chrono::steady_clock;
+
 	id_type id_;
 	std::shared_ptr<class process> process_;
 	std::vector<reg_val> values_;
+	clock::time_point sleep_until_{};
 };
 
 class thread_scheduler
@@ -101,8 +110,24 @@ public:
 		if (ready_queue_.empty())
 			return nullptr;
 
-		auto next = ready_queue_.front();
-		ready_queue_.pop_front();
+		for (auto it = ready_queue_.begin(); it != ready_queue_.end(); ++it)
+		{
+			if (!(*it)->is_sleeping())
+			{
+				auto next = *it;
+				ready_queue_.erase(it);
+				next->restore(cpu);
+				return next;
+			}
+		}
+
+		auto earliest = std::min_element(ready_queue_.begin(), ready_queue_.end(),
+			[](const auto& a, const auto& b) { return a->sleep_until() < b->sleep_until(); });
+
+		std::this_thread::sleep_until((*earliest)->sleep_until());
+
+		auto next = *earliest;
+		ready_queue_.erase(earliest);
 		next->restore(cpu);
 		return next;
 	}
