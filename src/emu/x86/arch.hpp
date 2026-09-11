@@ -32,5 +32,6 @@ namespace x86
 		addr_t ret_addr(vcpu& cpu) const override;
 		void init_vcpu(vcpu& cpu) override;
 		std::span<const reg_t> regs() const override;
+		cpu_exception intr_to_excp(int vector) const override;
 	};
 }

@@ -304,6 +304,23 @@ public:
 		return &hk;
 	}
 
+	hook_handle hook_exception(exception_hk_cb cb) override
+	{
+		hooks_.push_back({});
+		auto& hk = hooks_.back();
+		hk.cb = std::move(cb);
+		hk.owner = this;
+		hk.start = 1;
+		hk.end = 0;
+		hk.uc_type = UC_HOOK_INTR;
+		hk.uc_insn = 0;
+
+		for (auto& cpu : cpus_)
+			add_uc_hook(hk, engine(cpu));
+
+		return &hk;
+	}
+
 	void remove_hook(hook_handle handle) override
 	{
 		auto* hk = static_cast<unicorn_hook*>(handle);
@@ -407,12 +424,37 @@ private:
 		return false;
 	}
 
+	static void exception_hook_trampoline(uc_engine* uc, std::uint32_t intno, void* user_data)
+	{
+		auto* hk = static_cast<unicorn_hook*>(user_data);
+		auto* self = static_cast<unicorn_emu*>(hk->owner);
+		auto& cb = std::get<exception_hk_cb>(hk->cb);
+
+		for (auto& cpu : self->cpus_)
+		{
+			if (engine(cpu) == uc)
+			{
+				auto ex = cpu->arch()->intr_to_excp(static_cast<int>(intno));
+				if (cb(*cpu, ex))
+				{
+					auto* ucpu = static_cast<unicorn_vcpu*>(cpu.get());
+					ucpu->redirect_ = true;
+					uc_emu_stop(uc);
+				}
+				return;
+			}
+		}
+	}
+
 	static void add_uc_hook(unicorn_hook& hk, uc_engine* uc)
 	{
 		uc_hook h{};
 		if (hk.uc_type == UC_HOOK_INSN)
 			uc_hook_add(uc, &h, hk.uc_type, reinterpret_cast<void*>(insn_hook_trampoline),
 				&hk, hk.start, hk.end, hk.uc_insn);
+		else if (hk.uc_type == UC_HOOK_INTR)
+			uc_hook_add(uc, &h, hk.uc_type, reinterpret_cast<void*>(exception_hook_trampoline),
+				&hk, hk.start, hk.end);
 		else if (hk.uc_type == UC_HOOK_CODE || hk.uc_type == UC_HOOK_BLOCK)
 			uc_hook_add(uc, &h, hk.uc_type, reinterpret_cast<void*>(code_hook_trampoline),
 				&hk, hk.start, hk.end);

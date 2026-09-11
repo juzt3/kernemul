@@ -1,12 +1,15 @@
 #pragma once
 #include "defs.hpp"
 #include <cstddef>
+#include <cstdint>
 #include <span>
 
 using reg_t = int;
 
 class emu;
 class vcpu;
+
+enum class cpu_exception : std::uint8_t;
 
 struct arch
 {
@@ -16,6 +19,7 @@ struct arch
 	virtual addr_t ret_addr(vcpu& cpu) const = 0;
 	virtual void init_vcpu(vcpu&) {}
 	virtual std::span<const reg_t> regs() const = 0;
+	virtual cpu_exception intr_to_excp(int vector) const = 0;
 
 	void set_emu(emu* e) { emu_ = e; }
 

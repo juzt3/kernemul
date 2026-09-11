@@ -132,4 +132,16 @@ void arch::init_vcpu(vcpu& cpu)
 	cpu.reg(x86::ldtr, seg_reg{});
 }
 
+cpu_exception arch::intr_to_excp(int vector) const
+{
+	switch (vector)
+	{
+	case 0:  return cpu_exception::divide_by_zero;
+	case 1:  return cpu_exception::debug;
+	case 3:  return cpu_exception::breakpoint;
+	case 6:  return cpu_exception::illegal_instruction;
+	default: return cpu_exception::other;
+	}
+}
+
 }
