@@ -105,6 +105,8 @@ static unwind_result apply_unwind_info(
 			ctx.sp = ctx.gp[static_cast<int>(info->frame_register)] -
 				static_cast<addr_t>(info->frame_offset) * 16;
 
+		result.establisher_frame = ctx.sp;
+
 		for (std::uint32_t i = 0; i < info->unwind_code_count; )
 		{
 			const auto& code = codes[i];
@@ -216,9 +218,10 @@ bool x64_unwinder::unwind_frame(
 
 	if (!func)
 	{
+		result = {};
+		result.establisher_frame = ctx.sp;
 		ctx.pc = mem.read_mem<addr_t>(ctx.sp);
 		ctx.sp += sizeof(std::uint64_t);
-		result = {};
 		return ctx.pc != 0;
 	}
 
