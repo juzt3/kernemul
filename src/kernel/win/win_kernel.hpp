@@ -77,9 +77,16 @@ class windows_emulator : public os_emulator
 public:
 	explicit windows_emulator(std::shared_ptr<class emu> emu)
 		: os_emulator(std::move(emu)), kernel_(emu_)
-	{ }
+	{
+		kernel_.sys_proc->set_scheduler(&scheduler_);
+	}
 
 	win_kernel_state& kernel() { return kernel_; }
+
+	std::shared_ptr<thread> create_kernel_thread(vcpu& cpu, const addr_t start_addr) override
+	{
+		return kernel_.sys_proc->create_thread(cpu, start_addr);
+	}
 
 private:
 	win_kernel_state kernel_;

@@ -1035,11 +1035,47 @@ typedef struct _KLDR_DATA_TABLE_ENTRY
   /* 0x009c */ unsigned int TimeDateStamp;
 } KLDR_DATA_TABLE_ENTRY, *PKLDR_DATA_TABLE_ENTRY; /* size: 0x00a0 */
 
+typedef void* HANDLE;
+typedef void* PVOID;
+typedef unsigned int ULONG;
+
+typedef struct _CLIENT_ID
+{
+  /* 0x0000 */ PVOID UniqueProcess;
+  /* 0x0008 */ PVOID UniqueThread;
+} CLIENT_ID, *PCLIENT_ID; /* size: 0x0010 */
+
+typedef struct _KTHREAD
+{
+  /* 0x0000 */ struct _DISPATCHER_HEADER Header;
+  /* 0x0018 */ unsigned char Padding0[0x80];
+  /* 0x0098 */ unsigned char ApcState[0x30];
+  /* 0x00c8 */ unsigned char Padding1[0x158];
+  /* 0x0220 */ struct _KPROCESS* Process;
+  /* 0x0228 */ unsigned char Padding2[0x258];
+} KTHREAD, *PKTHREAD; /* size: 0x0480 */
+
+typedef struct _ETHREAD
+{
+  /* 0x0000 */ struct _KTHREAD Tcb;
+  /* 0x0480 */ unsigned char Padding0[0x20];
+  /* 0x04a0 */ PVOID StartAddress;
+  /* 0x04a8 */ unsigned char Padding1[0x20];
+  /* 0x04c8 */ struct _CLIENT_ID Cid;
+  /* 0x04d8 */ unsigned char Padding2[0x48];
+  /* 0x0520 */ PVOID Win32StartAddress;
+  /* 0x0528 */ unsigned char Padding3[0x3D8];
+} ETHREAD, *PETHREAD; /* size: 0x0900 */
+
 #include <cstddef>
 static_assert(offsetof(_EPROCESS, UniqueProcessId) == 0x1D0);
 static_assert(offsetof(_EPROCESS, ActiveProcessLinks) == 0x1D8);
 static_assert(offsetof(_EPROCESS, ImageFileName) == 0x338);
 static_assert(sizeof(_EPROCESS) == 0x840);
+static_assert(offsetof(_ETHREAD, StartAddress) == 0x4A0);
+static_assert(offsetof(_ETHREAD, Cid) == 0x4C8);
+static_assert(offsetof(_ETHREAD, Win32StartAddress) == 0x520);
+static_assert(sizeof(_ETHREAD) == 0x900);
 static_assert(offsetof(_KLDR_DATA_TABLE_ENTRY, InLoadOrderLinks) == 0x000);
 static_assert(offsetof(_KLDR_DATA_TABLE_ENTRY, DllBase) == 0x030);
 static_assert(offsetof(_KLDR_DATA_TABLE_ENTRY, EntryPoint) == 0x038);

@@ -3,11 +3,14 @@
 #include "../util/string.hpp"
 #include <pe.hpp>
 
+#include <atomic>
+#include <map>
 #include <unordered_map>
 #include <string_view>
 #include <string>
 #include <optional>
 #include <memory>
+#include <mutex>
 
 struct proc_module
 {
@@ -28,10 +31,17 @@ struct proc_module
 	}
 };
 
-class process
+class vcpu;
+class thread;
+class thread_scheduler;
+
+class process : public std::enable_shared_from_this<process>
 {
 public:
 	using id_type = std::uint32_t;
+	using thread_id_type = std::uint32_t;
+
+	static constexpr std::size_t default_stack_size = 0x10000;
 
 	process(const id_type id, std::shared_ptr<struct addr_space> space)
 		:	id_(id), addr_space_(std::move(space)) { }
@@ -45,8 +55,21 @@ public:
 	[[nodiscard]] std::shared_ptr<addr_space> addr_space() const;
 	[[nodiscard]] id_type id() const { return id_; }
 
+	void set_scheduler(thread_scheduler* s) { scheduler_ = s; }
+
+	std::shared_ptr<thread> create_thread(vcpu& cpu, addr_t start_addr);
+	void terminate_thread(thread_id_type id);
+	[[nodiscard]] std::shared_ptr<thread> find_thread(thread_id_type id) const;
+
+	static thread_id_type alloc_thread_id() { return next_thread_id_++; }
+
 protected:
 	id_type id_;
 	std::unordered_map<std::string_view, std::shared_ptr<proc_module>> modules_;
 	std::shared_ptr<struct addr_space> addr_space_;
+	thread_scheduler* scheduler_ = nullptr;
+	mutable std::mutex thread_mtx_;
+	std::map<thread_id_type, std::shared_ptr<thread>> threads_;
+
+	static inline std::atomic<thread_id_type> next_thread_id_{1};
 };

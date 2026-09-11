@@ -24,6 +24,8 @@ public:
 	emu& emu() { return *emu_; }
 	thread_scheduler& scheduler() { return scheduler_; }
 
+	virtual std::shared_ptr<thread> create_kernel_thread(vcpu& cpu, addr_t start_addr) = 0;
+
 protected:
 	std::shared_ptr<class emu> emu_;
 	thread_scheduler scheduler_;
