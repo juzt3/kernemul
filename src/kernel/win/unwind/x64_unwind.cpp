@@ -60,30 +60,6 @@ std::optional<pe::runtime_function_x64> x64_unwinder::lookup_function_entry(
 	return std::nullopt;
 }
 
-static std::size_t slots_for_code(pe::unwind_opcode_x64 op, std::uint8_t info)
-{
-	switch (op)
-	{
-	case push_nonvol:
-	case alloc_small:
-	case set_fpreg:
-	case push_machframe:
-		return 1;
-	case save_nonvol:
-	case epilog:
-	case save_xmm128:
-		return 2;
-	case alloc_large:
-		return info == 0 ? 2 : 3;
-	case save_nonvol_far:
-	case spare:
-	case save_xmm128_far:
-		return 3;
-	default:
-		return 1;
-	}
-}
-
 static unwind_result apply_unwind_info(
 	addr_space& mem, const proc_module& mod,
 	const pe::runtime_function_x64& func, unwind_context& ctx)
@@ -112,7 +88,7 @@ static unwind_result apply_unwind_info(
 			const auto& code = codes[i];
 			const auto op = code.code;
 			const auto reg = code.info;
-			const auto n = slots_for_code(op, reg);
+			const auto n = code.slots();
 
 			if (in_prolog && code.offset > rva_in_func)
 			{
