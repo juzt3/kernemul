@@ -165,6 +165,12 @@ target_link_libraries(kernemul PRIVATE
 	OpenSSL::Crypto
 )
 
+if(WIN32) # windows
+	target_link_libraries(kernemul PRIVATE
+		ws2_32
+	)
+endif()
+
 get_directory_property(CMKR_VS_STARTUP_PROJECT DIRECTORY ${PROJECT_SOURCE_DIR} VS_STARTUP_PROJECT)
 if(NOT CMKR_VS_STARTUP_PROJECT)
 	set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT kernemul)

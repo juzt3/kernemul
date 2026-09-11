@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <limits>
 #include <string>
 
 namespace pdb_server
@@ -43,57 +44,106 @@ inline std::filesystem::path cached_path(const pe::codeview_rsds& cv)
 	return std::filesystem::path("symbols") / name / build_key(cv) / name;
 }
 
-inline bool download_file(const std::string& host, const std::string& target,
-	const std::filesystem::path& dest)
+inline void close_stream(beast::ssl_stream<beast::tcp_stream>& stream)
 {
-	std::filesystem::create_directories(dest.parent_path());
+	beast::error_code ec;
+	beast::get_lowest_layer(stream).socket().shutdown(tcp::socket::shutdown_both, ec);
+	beast::get_lowest_layer(stream).close();
+}
 
-	try
+inline void parse_redirect_url(
+	const std::string_view location,
+	std::string& host,
+	std::string& target)
+{
+	const auto scheme_end = location.find("://");
+
+	if (scheme_end == std::string_view::npos)
 	{
-		net::io_context ioc;
+		target = location;
+		return;
+	}
 
-		ssl::context ctx(ssl::context::tlsv12_client);
-		ctx.set_default_verify_paths();
+	const auto host_start = scheme_end + 3;
+	const auto path_start = location.find('/', host_start);
 
+	if (path_start == std::string_view::npos)
+	{
+		host = location.substr(host_start);
+		target = "/";
+	}
+	else
+	{
+		host = location.substr(host_start, path_start - host_start);
+		target = location.substr(path_start);
+	}
+}
+
+inline std::vector<std::uint8_t> https_get(
+	const std::string_view host,
+	const std::string_view target,
+	const std::uint32_t max_redirects = 5)
+{
+	net::io_context ioc;
+
+	ssl::context ctx(ssl::context::tlsv12_client);
+	ctx.set_default_verify_paths();
+	ctx.set_verify_mode(ssl::verify_none);
+
+	std::string current_host(host);
+	std::string current_target(target);
+
+	for (std::uint32_t redirect = 0; redirect <= max_redirects; ++redirect)
+	{
 		tcp::resolver resolver(ioc);
 		beast::ssl_stream<beast::tcp_stream> stream(ioc, ctx);
 
-		SSL_set_tlsext_host_name(stream.native_handle(), host.c_str());
+		SSL_set_tlsext_host_name(stream.native_handle(), current_host.c_str());
 
-		auto results = resolver.resolve(host, "443");
-		beast::get_lowest_layer(stream).connect(results);
+		beast::get_lowest_layer(stream).expires_after(std::chrono::seconds(30));
+		beast::get_lowest_layer(stream).connect(resolver.resolve(current_host, "443"));
 		stream.handshake(ssl::stream_base::client);
 
-		http::request<http::empty_body> req(http::verb::get, target, 11);
-		req.set(http::field::host, host);
-		req.set(http::field::user_agent, "Microsoft-Symbol-Server/10.0.0.0");
+		beast::get_lowest_layer(stream).expires_after(std::chrono::seconds(120));
 
+		http::request<http::empty_body> req(http::verb::get, current_target, 11);
+		req.set(http::field::host, current_host);
+		req.set(http::field::user_agent, "Microsoft-Symbol-Server/10.0.0.0");
 		http::write(stream, req);
 
 		beast::flat_buffer buffer;
-		http::response<http::dynamic_body> res;
-		http::read(stream, buffer, res);
+		http::response_parser<http::dynamic_body> parser;
+		parser.body_limit(std::numeric_limits<std::uint64_t>::max());
+		http::read(stream, buffer, parser);
 
-		beast::error_code ec;
-		stream.shutdown(ec);
+		auto response = parser.release();
+		const auto status = response.result_int();
 
-		if (res.result() != http::status::ok)
-			return false;
+		if (status >= 300 && status < 400)
+		{
+			const auto location = response[http::field::location];
 
-		std::ofstream file(dest, std::ios::binary);
-		if (!file.is_open())
-			return false;
+			if (location.empty())
+				return {};
 
-		for (const auto& buf : res.body().data())
-			file.write(static_cast<const char*>(buf.data()), buf.size());
+			parse_redirect_url(std::string_view(location), current_host, current_target);
+			close_stream(stream);
+			continue;
+		}
 
-		return file.good();
+		if (response.result() != http::status::ok)
+		{
+			close_stream(stream);
+			return {};
+		}
+
+		const auto body_str = beast::buffers_to_string(response.body().data());
+		close_stream(stream);
+
+		return { body_str.begin(), body_str.end() };
 	}
-	catch (const std::exception& e)
-	{
-		LOG_WARN("download failed: {}", e.what());
-		return false;
-	}
+
+	return {};
 }
 
 inline std::filesystem::path download(const pe::codeview_rsds& cv)
@@ -109,9 +159,29 @@ inline std::filesystem::path download(const pe::codeview_rsds& cv)
 
 	LOG_INFO("downloading {} from symbol server...", name);
 
-	if (!download_file("msdl.microsoft.com", target, dest))
+	try
 	{
-		LOG_WARN("failed to download {}", name);
+		auto data = https_get("msdl.microsoft.com", target);
+		if (data.empty())
+		{
+			LOG_WARN("failed to download {}", name);
+			return {};
+		}
+
+		std::filesystem::create_directories(dest.parent_path());
+
+		std::ofstream file(dest, std::ios::binary);
+		file.write(reinterpret_cast<const char*>(data.data()), data.size());
+
+		if (!file.good())
+		{
+			std::filesystem::remove(dest);
+			return {};
+		}
+	}
+	catch (const std::exception& e)
+	{
+		LOG_WARN("download failed: {}", e.what());
 		std::filesystem::remove(dest);
 		return {};
 	}

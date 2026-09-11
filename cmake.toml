@@ -2,6 +2,9 @@
 name = "kernemul"
 languages = ["CXX"]
 
+[conditions]
+windows = "WIN32"
+
 [fetch-content.spdlog]
 git = "https://github.com/gabime/spdlog"
 tag = "v1.x"
@@ -26,4 +29,5 @@ sources = ["src/**.cpp", "src/**.hpp"]
 include-directories = ["src", "vendor/pe/src", "vendor/ia32-doc/out"]
 compile-features = ["cxx_std_23"]
 link-libraries = ["spdlog::spdlog", "unicorn", "raw_pdb", "Boost::beast", "OpenSSL::SSL", "OpenSSL::Crypto"]
+windows.link-libraries = ["ws2_32"]
 compile-options = ["-Wno-changes-meaning"]

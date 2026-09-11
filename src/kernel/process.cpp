@@ -1,5 +1,6 @@
 #include "process.hpp"
 #include "thread_scheduler.hpp"
+#include "../sym/pdb.hpp"
 #include <ranges>
 
 std::shared_ptr<proc_module> process::add_module(const std::string_view name, const addr_t addr, const pe::image* const pe)
@@ -24,6 +25,7 @@ std::shared_ptr<proc_module> process::add_module(const std::string_view name, co
 	}
 
 	export_symbols{}.load(*mod);
+	pdb_symbols{}.load(*mod);
 
 	return mod;
 }
