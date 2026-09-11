@@ -1067,6 +1067,20 @@ typedef struct _ETHREAD
   /* 0x0528 */ unsigned char Padding3[0x3D8];
 } ETHREAD, *PETHREAD; /* size: 0x0900 */
 
+typedef struct _OBJECT_HEADER
+{
+  /* 0x0000 */ __int64 PointerCount;
+  /* 0x0008 */ __int64 HandleCount;
+  /* 0x0010 */ void* Lock;
+  /* 0x0018 */ unsigned char TypeIndex;
+  /* 0x0019 */ unsigned char TraceFlags;
+  /* 0x001a */ unsigned char InfoMask;
+  /* 0x001b */ unsigned char Flags;
+  /* 0x001c */ unsigned int Reserved;
+  /* 0x0020 */ void* ObjectCreateInfo;
+  /* 0x0028 */ void* SecurityDescriptor;
+} OBJECT_HEADER, *POBJECT_HEADER; /* size: 0x0030 */
+
 #include <cstddef>
 static_assert(offsetof(_EPROCESS, UniqueProcessId) == 0x1D0);
 static_assert(offsetof(_EPROCESS, ActiveProcessLinks) == 0x1D8);
@@ -1081,3 +1095,4 @@ static_assert(offsetof(_KLDR_DATA_TABLE_ENTRY, DllBase) == 0x030);
 static_assert(offsetof(_KLDR_DATA_TABLE_ENTRY, EntryPoint) == 0x038);
 static_assert(offsetof(_KLDR_DATA_TABLE_ENTRY, SizeOfImage) == 0x040);
 static_assert(sizeof(_KLDR_DATA_TABLE_ENTRY) == 0x0A0);
+static_assert(sizeof(_OBJECT_HEADER) == 0x30);

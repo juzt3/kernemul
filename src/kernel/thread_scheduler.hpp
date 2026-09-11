@@ -68,12 +68,12 @@ public:
 	explicit thread_scheduler(class emu& emu)
 		: emu_(&emu) { }
 
-	std::shared_ptr<thread> create_thread(vcpu& cpu, const addr_t start_addr, std::shared_ptr<process> proc)
+	std::shared_ptr<thread> create_thread(vcpu& cpu, const addr_t start_addr,
+		std::shared_ptr<process> proc, thread::id_type id)
 	{
 		auto space = proc->addr_space();
 		const addr_t stack_base = space->alloc(process::default_stack_size, prot_rw | prot_supervisor);
 		const addr_t stack_top = stack_base + process::default_stack_size - 0x100;
-		const auto id = process::alloc_thread_id();
 		auto t = std::make_shared<thread>(id, std::move(proc), start_addr, stack_top, cpu);
 
 		std::scoped_lock lock(mtx_);

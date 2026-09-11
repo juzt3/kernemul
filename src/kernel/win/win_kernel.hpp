@@ -4,6 +4,7 @@
 #include "defs.hpp"
 #include "modules/ntoskrnl.hpp"
 #include "modules/nt_thread_ops.hpp"
+#include "modules/nt_object_ops.hpp"
 #include <cstring>
 
 struct win_kernel_state : kernel_state
@@ -11,12 +12,14 @@ struct win_kernel_state : kernel_state
 	static constexpr process::id_type sys_proc_id = 4;
 	static constexpr process::id_type proc_id_step = 4;
 
+	win_obj_manager objs;
 	std::shared_ptr<win_kernel_proc> sys_proc;
 	loaded_module_list_t loaded_module_list;
 	active_process_list_t active_process_list;
 
 	explicit win_kernel_state(const std::shared_ptr<class emu>& emu)
-		:	sys_proc(std::make_shared<win_kernel_proc>(sys_proc_id, *this, emu->default_addr_space()))
+		:	objs(*emu->default_addr_space()),
+			sys_proc(std::make_shared<win_kernel_proc>(sys_proc_id, *this, emu->default_addr_space()))
 	{
 		emu_ = emu;
 		processes[sys_proc_id] = sys_proc;
@@ -26,6 +29,7 @@ struct win_kernel_state : kernel_state
 		{
 			modules::register_ntoskrnl(*this, *ntoskrnl);
 			modules::register_ntoskrnl_thread_ops(*this, *ntoskrnl);
+			modules::register_ntoskrnl_object_ops(*this, *ntoskrnl);
 
 			if (const auto ps_list = ntoskrnl->find_export("PsLoadedModuleList"))
 			{
@@ -52,7 +56,7 @@ struct win_kernel_state : kernel_state
 	{
 		std::scoped_lock lock(proc_mtx_);
 		const auto id = next_id_;
-		auto proc = std::make_shared<win_user_proc>(id, emu_->mem()->create_addr_space());
+		auto proc = std::make_shared<win_user_proc>(id, emu_->mem()->create_addr_space(), objs);
 		processes[id] = proc;
 		next_id_ += proc_id_step;
 

@@ -57,7 +57,7 @@ public:
 
 	void set_scheduler(thread_scheduler* s) { scheduler_ = s; }
 
-	std::shared_ptr<thread> create_thread(vcpu& cpu, addr_t start_addr);
+	virtual std::shared_ptr<thread> create_thread(vcpu& cpu, addr_t start_addr);
 	void terminate_thread(thread_id_type id);
 	[[nodiscard]] std::shared_ptr<thread> find_thread(thread_id_type id) const;
 

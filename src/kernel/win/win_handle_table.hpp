@@ -1,0 +1,42 @@
+#pragma once
+#include "win_obj_manager.hpp"
+
+#include <cstdint>
+#include <mutex>
+#include <optional>
+#include <unordered_map>
+
+class win_handle_table
+{
+public:
+	using handle_t = std::uint64_t;
+	using access_t = std::uint32_t;
+
+	struct handle_entry
+	{
+		addr_t body_addr;
+		access_t access;
+	};
+
+	explicit win_handle_table(win_obj_manager& objs);
+
+	handle_t create_handle(addr_t body_addr, access_t access);
+	bool close_handle(handle_t handle);
+	[[nodiscard]] std::optional<handle_entry> lookup_handle(handle_t handle) const;
+
+	template <typename T>
+	[[nodiscard]] std::shared_ptr<T> get_object(handle_t handle) const
+	{
+		auto entry = lookup_handle(handle);
+		if (!entry) return {};
+		return objs_.get_object<T>(entry->body_addr);
+	}
+
+private:
+	handle_t alloc_handle();
+
+	win_obj_manager& objs_;
+	mutable std::mutex mtx_;
+	std::unordered_map<handle_t, handle_entry> handles_;
+	handle_t next_handle_ = 4;
+};
