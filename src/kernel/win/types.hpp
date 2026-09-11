@@ -1,4 +1,6 @@
 #pragma once
+#include <cstdint>
+#include <cstddef>
 
 // MSVC uses __int64 as a built-in type; GCC/Clang need it defined
 #ifndef _MSC_VER
@@ -1081,7 +1083,81 @@ typedef struct _OBJECT_HEADER
   /* 0x0028 */ void* SecurityDescriptor;
 } OBJECT_HEADER, *POBJECT_HEADER; /* size: 0x0030 */
 
-#include <cstddef>
+typedef struct _PEB64
+{
+  /* 0x0000 */ unsigned char InheritedAddressSpace;
+  /* 0x0001 */ unsigned char ReadImageFileExecOptions;
+  /* 0x0002 */ unsigned char BeingDebugged;
+  /* 0x0003 */ unsigned char BitField;
+  /* 0x0004 */ unsigned char Padding0[4];
+  /* 0x0008 */ unsigned __int64 Mutant;
+  /* 0x0010 */ unsigned __int64 ImageBaseAddress;
+  /* 0x0018 */ unsigned __int64 Ldr;
+  /* 0x0020 */ unsigned __int64 ProcessParameters;
+  /* 0x0028 */ unsigned __int64 SubSystemData;
+  /* 0x0030 */ unsigned __int64 ProcessHeap;
+  /* 0x0038 */ unsigned __int64 FastPebLock;
+  /* 0x0040 */ unsigned __int64 AtlThunkSListPtr;
+  /* 0x0048 */ unsigned __int64 IFEOKey;
+  /* 0x0050 */ unsigned int CrossProcessFlags;
+  /* 0x0054 */ unsigned char Padding1[4];
+  /* 0x0058 */ unsigned __int64 KernelCallbackTable;
+  /* 0x0060 */ unsigned int SystemReserved;
+  /* 0x0064 */ unsigned int AtlThunkSListPtr32;
+  /* 0x0068 */ unsigned __int64 ApiSetMap;
+  /* 0x0070 */ unsigned int TlsExpansionCounter;
+  /* 0x0074 */ unsigned char Padding2[4];
+  /* 0x0078 */ unsigned __int64 TlsBitmap;
+  /* 0x0080 */ unsigned int TlsBitmapBits[2];
+  /* 0x0088 */ unsigned __int64 ReadOnlySharedMemoryBase;
+  /* 0x0090 */ unsigned __int64 SharedData;
+  /* 0x0098 */ unsigned __int64 ReadOnlyStaticServerData;
+  /* 0x00a0 */ unsigned __int64 AnsiCodePageData;
+  /* 0x00a8 */ unsigned __int64 OemCodePageData;
+  /* 0x00b0 */ unsigned __int64 UnicodeCaseTableData;
+  /* 0x00b8 */ unsigned int NumberOfProcessors;
+  /* 0x00bc */ unsigned int NtGlobalFlag;
+  /* 0x00c0 */ unsigned __int64 CriticalSectionTimeout;
+  /* 0x00c8 */ unsigned __int64 HeapSegmentReserve;
+  /* 0x00d0 */ unsigned __int64 HeapSegmentCommit;
+  /* 0x00d8 */ unsigned __int64 HeapDeCommitTotalFreeThreshold;
+  /* 0x00e0 */ unsigned __int64 HeapDeCommitFreeBlockThreshold;
+  /* 0x00e8 */ unsigned int NumberOfHeaps;
+  /* 0x00ec */ unsigned int MaximumNumberOfHeaps;
+  /* 0x00f0 */ unsigned __int64 ProcessHeaps;
+  /* 0x00f8 */ unsigned __int64 GdiSharedHandleTable;
+  /* 0x0100 */ unsigned __int64 ProcessStarterHelper;
+  /* 0x0108 */ unsigned int GdiDCAttributeList;
+  /* 0x010c */ unsigned char Padding3[4];
+  /* 0x0110 */ unsigned __int64 LoaderLock;
+  /* 0x0118 */ unsigned int OSMajorVersion;
+  /* 0x011c */ unsigned int OSMinorVersion;
+  /* 0x0120 */ unsigned short OSBuildNumber;
+  /* 0x0122 */ unsigned short OSCSDVersion;
+  /* 0x0124 */ unsigned int OSPlatformId;
+  /* 0x0128 */ unsigned int ImageSubsystem;
+  /* 0x012c */ unsigned int ImageSubsystemMajorVersion;
+  /* 0x0130 */ unsigned int ImageSubsystemMinorVersion;
+} PEB64, *PPEB64; /* size: 0x0134 */
+
+constexpr std::size_t peb64_alloc_size = 0x800;
+
+static_assert(offsetof(_PEB64, BeingDebugged) == 0x02);
+static_assert(offsetof(_PEB64, ImageBaseAddress) == 0x10);
+static_assert(offsetof(_PEB64, Ldr) == 0x18);
+static_assert(offsetof(_PEB64, ProcessParameters) == 0x20);
+static_assert(offsetof(_PEB64, ProcessHeap) == 0x30);
+static_assert(offsetof(_PEB64, ApiSetMap) == 0x68);
+static_assert(offsetof(_PEB64, AnsiCodePageData) == 0xA0);
+static_assert(offsetof(_PEB64, NumberOfProcessors) == 0xB8);
+static_assert(offsetof(_PEB64, HeapSegmentReserve) == 0xC8);
+static_assert(offsetof(_PEB64, MaximumNumberOfHeaps) == 0xEC);
+static_assert(offsetof(_PEB64, GdiSharedHandleTable) == 0xF8);
+static_assert(offsetof(_PEB64, OSMajorVersion) == 0x118);
+static_assert(offsetof(_PEB64, OSBuildNumber) == 0x120);
+static_assert(offsetof(_PEB64, ImageSubsystem) == 0x128);
+static_assert(offsetof(_PEB64, ImageSubsystemMinorVersion) == 0x130);
+
 static_assert(offsetof(_EPROCESS, UniqueProcessId) == 0x1D0);
 static_assert(offsetof(_EPROCESS, ActiveProcessLinks) == 0x1D8);
 static_assert(offsetof(_EPROCESS, ImageFileName) == 0x338);

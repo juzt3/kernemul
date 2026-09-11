@@ -66,16 +66,18 @@ struct win_kernel_state : kernel_state
 		processes[id] = proc;
 
 		if (active_process_list.address())
-			insert_process(*emu_->default_addr_space(), id, name);
+			insert_process(*emu_->default_addr_space(), id, name, proc->peb().address());
 
 		return proc;
 	}
 
 private:
-	emu_object<_EPROCESS> insert_process(addr_space& space, process::id_type id, std::string_view name)
+	emu_object<_EPROCESS> insert_process(addr_space& space, process::id_type id,
+		std::string_view name, addr_t peb_address = 0)
 	{
 		_EPROCESS ep{};
 		ep.UniqueProcessId = reinterpret_cast<void*>(static_cast<std::uintptr_t>(id));
+		ep.Peb = reinterpret_cast<_PEB*>(static_cast<std::uintptr_t>(peb_address));
 		std::memcpy(ep.ImageFileName, name.data(), std::min(name.size(), sizeof(ep.ImageFileName)));
 		return active_process_list.push_back(ep);
 	}
