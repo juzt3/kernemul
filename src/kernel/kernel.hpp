@@ -24,7 +24,7 @@ class os_emulator
 {
 public:
 	explicit os_emulator(std::shared_ptr<emu> emu)
-		: emu_(std::move(emu)), scheduler_(*emu_)
+		: emu_(std::move(emu))
 	{
 		emu_->hook_exception([this](vcpu& cpu, cpu_exception ex) {
 			return handle_exception(cpu, ex);

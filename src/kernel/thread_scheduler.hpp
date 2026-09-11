@@ -60,6 +60,9 @@ public:
 	bool is_sleeping() const { return clock::now() < sleep_until_; }
 	auto sleep_until() const { return sleep_until_; }
 
+	void finish() { finished_ = true; }
+	[[nodiscard]] bool is_finished() const { return finished_; }
+
 	[[nodiscard]] id_type id() const noexcept { return id_; }
 	[[nodiscard]] std::shared_ptr<process> proc() const noexcept { return process_; }
 
@@ -70,13 +73,13 @@ private:
 	std::shared_ptr<class process> process_;
 	std::vector<reg_val> values_;
 	clock::time_point sleep_until_{};
+	bool finished_{false};
 };
 
 class thread_scheduler
 {
 public:
-	explicit thread_scheduler(class emu& emu)
-		: emu_(&emu) { }
+	thread_scheduler() = default;
 
 	std::shared_ptr<thread> create_thread(vcpu& cpu, const addr_t start_addr,
 		std::shared_ptr<process> proc, thread::id_type id)
@@ -133,7 +136,6 @@ public:
 	}
 
 private:
-	class emu* emu_;
 	std::deque<std::shared_ptr<thread>> ready_queue_;
 	mutable std::mutex mtx_;
 };
