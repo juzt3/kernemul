@@ -1,14 +1,19 @@
-# cmake.toml - cmkr project description
-# NOTE: This project uses a hand-written CMakeLists.txt because the backend
-# switching logic (hypermulator vs unicorn, Windows vs Linux) requires
-# conditions that cmkr cannot express. This file serves as documentation.
-# Run: cmake -B build -DUSE_UNICORN_BACKEND=ON  (for unicorn/cross-platform)
-#      cmake -B build                            (for hypermulator on Windows)
-
-[cmake]
-version = "3.21"
-
 [project]
 name = "kernemul"
-version = "0.1.0"
 languages = ["CXX"]
+
+[fetch-content.spdlog]
+git = "https://github.com/gabime/spdlog"
+tag = "v1.x"
+
+[fetch-content.unicorn]
+git = "https://github.com/unicorn-engine/unicorn"
+tag = "master"
+
+[target.kernemul]
+type = "executable"
+sources = ["src/**.cpp", "src/**.hpp"]
+include-directories = ["src", "vendor/pe/src", "vendor/ia32-doc/out"]
+compile-features = ["cxx_std_23"]
+link-libraries = ["spdlog::spdlog", "unicorn"]
+compile-options = ["-Wno-changes-meaning"]
