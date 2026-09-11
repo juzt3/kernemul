@@ -16,7 +16,8 @@ public:
 	thread(const id_type id, std::shared_ptr<process> proc,
 		   const addr_t entry_point, const addr_t stack_ptr,
 		   vcpu& cpu)
-		: id_(id), process_(std::move(proc))
+		: id_(id), process_(std::move(proc)),
+		  values_(cpu.arch()->regs().size())
 	{
 		save(cpu);
 		const auto a = cpu.arch();
