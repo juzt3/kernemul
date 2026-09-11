@@ -13,21 +13,39 @@
 
 using redirect_fn = std::function<void(vcpu&)>;
 
+struct os_exception
+{
+	virtual ~os_exception() = default;
+	virtual bool handle(vcpu& cpu, cpu_exception ex) = 0;
+};
+
 class os_emulator
 {
 public:
 	explicit os_emulator(std::shared_ptr<emu> emu)
-		: emu_(std::move(emu)), scheduler_(*emu_) { }
+		: emu_(std::move(emu)), scheduler_(*emu_)
+	{
+		emu_->hook_exception([this](vcpu& cpu, cpu_exception ex) {
+			return handle_exception(cpu, ex);
+		});
+	}
 
 	virtual ~os_emulator() = default;
 
 	emu& emu() { return *emu_; }
 	thread_scheduler& scheduler() { return scheduler_; }
+	std::shared_ptr<os_exception> excp() const { return excp_; }
+
+	bool handle_exception(vcpu& cpu, cpu_exception ex)
+	{
+		return excp_ && excp_->handle(cpu, ex);
+	}
 
 	virtual std::shared_ptr<thread> create_kernel_thread(vcpu& cpu, addr_t start_addr) = 0;
 
 protected:
 	std::shared_ptr<class emu> emu_;
+	std::shared_ptr<os_exception> excp_;
 	thread_scheduler scheduler_;
 };
 

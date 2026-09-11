@@ -1,6 +1,7 @@
 #pragma once
 #include "../kernel.hpp"
 #include "process.hpp"
+#include "exception.hpp"
 #include "defs.hpp"
 #include "modules/ntoskrnl.hpp"
 #include "modules/nt_thread_ops.hpp"
@@ -80,6 +81,7 @@ public:
 		: os_emulator(std::move(emu)), kernel_(emu_)
 	{
 		kernel_.sys_proc->set_scheduler(&scheduler_);
+		excp_ = std::make_shared<win::win_exception>(kernel_);
 	}
 
 	win_kernel_state& kernel() { return kernel_; }

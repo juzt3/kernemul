@@ -78,6 +78,8 @@ set(kernemul_SOURCES
 	"src/kernel/process.hpp"
 	"src/kernel/thread_scheduler.hpp"
 	"src/kernel/win/defs.hpp"
+	"src/kernel/win/exception.cpp"
+	"src/kernel/win/exception.hpp"
 	"src/kernel/win/linked_list.hpp"
 	"src/kernel/win/modules/nt_object_ops.cpp"
 	"src/kernel/win/modules/nt_object_ops.hpp"

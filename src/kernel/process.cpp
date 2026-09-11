@@ -1,5 +1,6 @@
 #include "process.hpp"
 #include "thread_scheduler.hpp"
+#include <ranges>
 
 std::shared_ptr<proc_module> process::add_module(const std::string_view name, const addr_t addr, const pe::image* const pe)
 {
@@ -34,7 +35,7 @@ std::shared_ptr<proc_module> process::find_module(const std::string_view name) c
 
 std::shared_ptr<proc_module> process::find_module_by_addr(const addr_t addr) const
 {
-	for (const auto& [_, mod] : modules_)
+	for (const auto& mod : modules_ | std::views::values)
 		if (mod->contains_addr(addr))
 			return mod;
 
