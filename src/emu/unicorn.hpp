@@ -78,7 +78,9 @@ public:
 			std::memcpy(value, &sr, std::min(size, sizeof(sr)));
 			return;
 		}
-		uc_reg_read(uc_, to_uc_reg(reg), value);
+		std::uint64_t tmp{};
+		uc_reg_read(uc_, to_uc_reg(reg), &tmp);
+		std::memcpy(value, &tmp, std::min(size, sizeof(tmp)));
 	}
 
 	void reg_write(reg_t reg, const void* value, std::size_t size) override
@@ -99,7 +101,9 @@ public:
 			uc_reg_write(uc_, to_uc_reg(reg), &mmr);
 			return;
 		}
-		uc_reg_write(uc_, to_uc_reg(reg), value);
+		std::uint64_t tmp{};
+		std::memcpy(&tmp, value, std::min(size, sizeof(tmp)));
+		uc_reg_write(uc_, to_uc_reg(reg), &tmp);
 	}
 
 	uc_engine* native() const { return uc_; }
