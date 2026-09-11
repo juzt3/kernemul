@@ -18,30 +18,31 @@ public:
 		  values_(cpu.arch()->regs().size())
 	{
 		save(cpu);
+
 		const auto a = cpu.arch();
 		const auto regs = a->regs();
-		const auto pc = a->pc();
-		const auto sp = a->sp();
 
 		for (std::size_t i = 0; i < regs.size(); ++i)
 		{
-			if (regs[i] == pc) values_[i] = start_addr;
-			else if (regs[i] == sp) values_[i] = stack_ptr;
+			if (regs[i] == a->pc()) values_[i].gp = start_addr;
+			else if (regs[i] == a->sp()) values_[i].gp = stack_ptr;
 		}
 	}
 
 	void save(vcpu& cpu)
 	{
-		const auto regs = cpu.arch()->regs();
+		const auto a = cpu.arch();
+		const auto regs = a->regs();
 		for (std::size_t i = 0; i < regs.size(); ++i)
-			values_[i] = cpu.reg(regs[i]);
+			cpu.reg_read(regs[i], &values_[i], a->reg_size(regs[i]));
 	}
 
 	void restore(vcpu& cpu) const
 	{
-		const auto regs = cpu.arch()->regs();
+		const auto a = cpu.arch();
+		const auto regs = a->regs();
 		for (std::size_t i = 0; i < regs.size(); ++i)
-			cpu.reg(regs[i], values_[i]);
+			cpu.reg_write(regs[i], &values_[i], a->reg_size(regs[i]));
 	}
 
 	void set_reg(vcpu& cpu, const reg_t r, const std::uint64_t value)
@@ -49,7 +50,7 @@ public:
 		const auto regs = cpu.arch()->regs();
 		for (std::size_t i = 0; i < regs.size(); ++i)
 		{
-			if (regs[i] == r) { values_[i] = value; return; }
+			if (regs[i] == r) { values_[i].gp = value; return; }
 		}
 	}
 
@@ -59,7 +60,7 @@ public:
 private:
 	id_type id_;
 	std::shared_ptr<class process> process_;
-	std::vector<std::uint64_t> values_;
+	std::vector<reg_val> values_;
 };
 
 class thread_scheduler

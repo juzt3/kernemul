@@ -4,7 +4,6 @@
 #include <unicorn/unicorn.h>
 #include <atomic>
 #include <cstring>
-#include <limits>
 #include <mutex>
 #include <stdexcept>
 #include <unordered_map>
@@ -38,7 +37,7 @@ public:
 		{
 			running_ = true;
 			auto pc = reg<addr_t>(arch_->pc());
-			uc_emu_start(uc_, pc, std::numeric_limits<addr_t>::max(), 0, 0);
+			uc_emu_start(uc_, pc, 0, 0, 0);
 			running_ = false;
 
 			if (redirect_.exchange(false))
@@ -78,6 +77,13 @@ public:
 			std::memcpy(value, &sr, std::min(size, sizeof(sr)));
 			return;
 		}
+		if (is_xmm_reg(reg))
+		{
+			x86::xmm_t tmp{};
+			uc_reg_read(uc_, to_uc_reg(reg), &tmp);
+			std::memcpy(value, &tmp, std::min(size, sizeof(tmp)));
+			return;
+		}
 		std::uint64_t tmp{};
 		uc_reg_read(uc_, to_uc_reg(reg), &tmp);
 		std::memcpy(value, &tmp, std::min(size, sizeof(tmp)));
@@ -99,6 +105,13 @@ public:
 			std::memcpy(&sr, value, std::min(size, sizeof(sr)));
 			uc_x86_mmr mmr{ sr.selector, sr.base, sr.limit, sr.flags };
 			uc_reg_write(uc_, to_uc_reg(reg), &mmr);
+			return;
+		}
+		if (is_xmm_reg(reg))
+		{
+			x86::xmm_t tmp{};
+			std::memcpy(&tmp, value, std::min(size, sizeof(tmp)));
+			uc_reg_write(uc_, to_uc_reg(reg), &tmp);
 			return;
 		}
 		std::uint64_t tmp{};
@@ -124,6 +137,11 @@ public:
 	static constexpr bool is_seg_reg(reg_t reg)
 	{
 		return reg >= x86::cs && reg <= x86::idtr;
+	}
+
+	static constexpr bool is_xmm_reg(reg_t reg)
+	{
+		return reg >= x86::xmm0 && reg <= x86::xmm15;
 	}
 
 	static constexpr int to_uc_reg(reg_t reg)
@@ -161,6 +179,22 @@ public:
 		case x86::ldtr:   return UC_X86_REG_LDTR;
 		case x86::gdtr:   return UC_X86_REG_GDTR;
 		case x86::idtr:   return UC_X86_REG_IDTR;
+		case x86::xmm0:   return UC_X86_REG_XMM0;
+		case x86::xmm1:   return UC_X86_REG_XMM1;
+		case x86::xmm2:   return UC_X86_REG_XMM2;
+		case x86::xmm3:   return UC_X86_REG_XMM3;
+		case x86::xmm4:   return UC_X86_REG_XMM4;
+		case x86::xmm5:   return UC_X86_REG_XMM5;
+		case x86::xmm6:   return UC_X86_REG_XMM6;
+		case x86::xmm7:   return UC_X86_REG_XMM7;
+		case x86::xmm8:   return UC_X86_REG_XMM8;
+		case x86::xmm9:   return UC_X86_REG_XMM9;
+		case x86::xmm10:  return UC_X86_REG_XMM10;
+		case x86::xmm11:  return UC_X86_REG_XMM11;
+		case x86::xmm12:  return UC_X86_REG_XMM12;
+		case x86::xmm13:  return UC_X86_REG_XMM13;
+		case x86::xmm14:  return UC_X86_REG_XMM14;
+		case x86::xmm15:  return UC_X86_REG_XMM15;
 		default: return -1;
 		}
 	}
