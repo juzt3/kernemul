@@ -11,7 +11,7 @@ int main()
 	auto conv = std::make_shared<x86_win_conv>();
 	auto e = std::make_shared<unicorn_emu>(arch, mem, conv);
 
-	windows_emulator win(e);
+	x86_win_emulator win(e);
 
 	LOG_INFO("windows emulator initialized");
 
@@ -28,7 +28,7 @@ int main()
 
 	LOG_INFO("driver mapped at 0x{:X}, entry=0x{:X}", driver->addr, driver->entry_point);
 
-	auto cpu = e->add_vcpu();
+	auto cpu = win.add_vcpu();
 	auto space = cpu->curr_addr_space();
 
 	constexpr std::size_t stack_size = 0x10000;

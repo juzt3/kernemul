@@ -93,6 +93,8 @@ set(kernemul_SOURCES
 	"src/kernel/win/process.hpp"
 	"src/kernel/win/registry.cpp"
 	"src/kernel/win/registry.hpp"
+	"src/kernel/win/segments.cpp"
+	"src/kernel/win/segments.hpp"
 	"src/kernel/win/status.hpp"
 	"src/kernel/win/string.hpp"
 	"src/kernel/win/types.hpp"

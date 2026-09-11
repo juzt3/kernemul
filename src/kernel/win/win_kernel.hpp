@@ -8,6 +8,7 @@
 #include "modules/nt_object_ops.hpp"
 #include "registry.hpp"
 #include "filesystem.hpp"
+#include "segments.hpp"
 #include <cstring>
 
 struct win_kernel_state : kernel_state
@@ -97,4 +98,17 @@ public:
 
 private:
 	win_kernel_state kernel_;
+};
+
+class x86_win_emulator : public windows_emulator
+{
+public:
+	using windows_emulator::windows_emulator;
+
+	std::shared_ptr<vcpu> add_vcpu() override
+	{
+		auto cpu = emu_->add_vcpu();
+		x86_win_seg::init_vcpu(*cpu);
+		return cpu;
+	}
 };

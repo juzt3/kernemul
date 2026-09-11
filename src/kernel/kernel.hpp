@@ -41,6 +41,7 @@ public:
 		return excp_ && excp_->handle(cpu, ex);
 	}
 
+	virtual std::shared_ptr<vcpu> add_vcpu() = 0;
 	virtual std::shared_ptr<thread> create_kernel_thread(vcpu& cpu, addr_t start_addr) = 0;
 
 protected:
