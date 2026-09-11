@@ -10,6 +10,7 @@
 #include <vector>
 
 class emu;
+class thread;
 struct calling_conv;
 
 class vcpu
@@ -62,6 +63,9 @@ public:
 
 	[[nodiscard]] class emu* emu() const noexcept { return emu_; }
 
+	[[nodiscard]] std::shared_ptr<thread> thread() const noexcept { return thread_; }
+	void set_thread(std::shared_ptr<class thread> t) { thread_ = std::move(t); }
+
 	addr_t pc() { return reg(arch_->pc()); }
 	void set_pc(addr_t v) { reg(arch_->pc(), v); }
 
@@ -95,6 +99,7 @@ public:
 protected:
 	class emu* emu_;
 	std::shared_ptr<const struct arch> arch_;
+	std::shared_ptr<class thread> thread_;
 };
 
 enum class hook_insn_t : std::uint8_t

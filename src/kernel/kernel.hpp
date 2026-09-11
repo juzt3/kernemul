@@ -1,6 +1,7 @@
 #pragma once
 #include "process.hpp"
 #include "map.hpp"
+#include "thread_scheduler.hpp"
 #include "../emu/emu.hpp"
 #include "../emu/calling_conv.hpp"
 #include "../util/log.hpp"
@@ -16,14 +17,16 @@ class os_emulator
 {
 public:
 	explicit os_emulator(std::shared_ptr<emu> emu)
-		: emu_(std::move(emu)) { }
+		: emu_(std::move(emu)), scheduler_(*emu_) { }
 
 	virtual ~os_emulator() = default;
 
 	emu& emu() { return *emu_; }
+	thread_scheduler& scheduler() { return scheduler_; }
 
 protected:
 	std::shared_ptr<class emu> emu_;
+	thread_scheduler scheduler_;
 };
 
 struct kernel_state

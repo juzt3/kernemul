@@ -1,6 +1,7 @@
 #pragma once
 #include "defs.hpp"
 #include <cstddef>
+#include <span>
 
 using reg_t = int;
 
@@ -14,6 +15,7 @@ struct arch
 	virtual reg_t sp() const = 0;
 	virtual addr_t ret_addr(vcpu& cpu) const = 0;
 	virtual void init_vcpu(vcpu&) {}
+	virtual std::span<const reg_t> regs() const = 0;
 
 	void set_emu(emu* e) { emu_ = e; }
 
