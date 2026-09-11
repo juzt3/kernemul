@@ -28,7 +28,7 @@ struct proc_module
 		return image.empty() ? nullptr : reinterpret_cast<const pe::image*>(image.data());
 	}
 
-	[[nodiscard]] std::optional<addr_t> find_export(const std::string_view exp_name)
+	[[nodiscard]] std::optional<addr_t> find_export(const std::string_view exp_name) const
 	{
 		const auto it = exports.find(exp_name);
 
@@ -38,7 +38,7 @@ struct proc_module
 		return it->second;
 	}
 
-	[[nodiscard]] std::optional<addr_t> find_symbol(const std::string_view sym_name)
+	[[nodiscard]] std::optional<addr_t> find_symbol(const std::string_view sym_name) const
 	{
 		if (!symbols.empty())
 			return symbols.lookup(sym_name);

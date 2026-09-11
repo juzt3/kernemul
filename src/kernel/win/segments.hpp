@@ -3,6 +3,8 @@
 #include "../../emu/x86/arch.hpp"
 #include <cstdint>
 
+struct proc_module;
+
 namespace x86_win_seg
 {
 	constexpr std::uint16_t kernel_cs = 0x10;
@@ -12,6 +14,7 @@ namespace x86_win_seg
 	constexpr std::uint16_t tss_sel   = 0x40;
 
 	void init_vcpu(vcpu& cpu);
+	void init_idt(vcpu& cpu, const proc_module& ntoskrnl);
 
 	void set_kernel_gs(vcpu& cpu, std::uint64_t base);
 	void set_usermode_gs(vcpu& cpu, std::uint64_t teb_addr);

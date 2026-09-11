@@ -1,5 +1,6 @@
 #include "segments.hpp"
 #include "../../emu/mmu.hpp"
+#include "../process.hpp"
 
 namespace ia32 {
 #include <ia32.hpp>
@@ -103,11 +104,7 @@ void init_vcpu(vcpu& cpu)
 
 	mem->write_phys<ia32::segment_descriptor_32>(gdt_pa + 0x50, {});
 
-	constexpr std::size_t idt_size = 256 * sizeof(ia32::segment_descriptor_interrupt_gate_64);
-	addr_t idt_pa = mem->alloc_phys(idt_size, prot_rw);
-
 	cpu.reg(x86::gdtr, x86::seg_reg{ 0, gdt_pa, static_cast<std::uint32_t>(gdt_size - 1), 0 });
-	cpu.reg(x86::idtr, x86::seg_reg{ 0, idt_pa, static_cast<std::uint32_t>(idt_size - 1), 0 });
 
 	ia32::segment_access_rights tr_access{};
 	tr_access.type = SEGMENT_DESCRIPTOR_TYPE_TSS_BUSY;
@@ -146,6 +143,35 @@ void swap_to_usermode_segments(vcpu& cpu)
 {
 	cpu.reg(x86::cs, make_code_sr(user_cs, 3));
 	cpu.reg(x86::ss, make_data_sr(user_ds, 3));
+}
+
+void init_idt(vcpu& cpu, const proc_module& ntoskrnl)
+{
+	auto* space = cpu.curr_addr_space().get();
+
+	constexpr std::size_t idt_entries = 256;
+	constexpr std::size_t idt_size = idt_entries * sizeof(ia32::segment_descriptor_interrupt_gate_64);
+	const addr_t idt_va = space->alloc(idt_size, prot_rw | prot_supervisor);
+
+	constexpr std::size_t handler_stride = 16;
+	const auto base = ntoskrnl.find_symbol("KiPageFault").value_or(ntoskrnl.addr);
+
+	for (std::size_t i = 0; i < idt_entries; ++i)
+	{
+		const auto handler = base + i * handler_stride;
+
+		ia32::segment_descriptor_interrupt_gate_64 gate{};
+		gate.offset_low    = static_cast<std::uint16_t>(handler);
+		gate.segment_selector = kernel_cs;
+		gate.type          = SEGMENT_DESCRIPTOR_TYPE_INTERRUPT_GATE;
+		gate.present       = 1;
+		gate.offset_middle = static_cast<std::uint16_t>(handler >> 16);
+		gate.offset_high   = static_cast<std::uint32_t>(handler >> 32);
+
+		space->write_mem(idt_va + i * sizeof(gate), gate);
+	}
+
+	cpu.reg(x86::idtr, x86::seg_reg{ 0, idt_va, static_cast<std::uint32_t>(idt_size - 1), 0 });
 }
 
 }

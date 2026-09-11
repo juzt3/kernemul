@@ -109,6 +109,10 @@ public:
 	{
 		auto cpu = emu_->add_vcpu();
 		x86_win_seg::init_vcpu(*cpu);
+
+		if (auto nt = kernel().sys_proc->find_module("ntoskrnl.exe"))
+			x86_win_seg::init_idt(*cpu, *nt);
+
 		return cpu;
 	}
 };
