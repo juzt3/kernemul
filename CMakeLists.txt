@@ -29,6 +29,9 @@ project(kernemul
 		CXX
 )
 
+# Packages
+find_package(OpenSSL REQUIRED)
+
 include(FetchContent)
 
 # Fix warnings about DOWNLOAD_EXTRACT_TIMESTAMP
@@ -61,6 +64,13 @@ FetchContent_Declare(raw_pdb
 		main
 )
 FetchContent_MakeAvailable(raw_pdb)
+
+message(STATUS "Fetching Boost...")
+FetchContent_Declare(Boost
+	URL
+		"https://github.com/boostorg/boost/releases/download/boost-1.86.0/boost-1.86.0-cmake.tar.xz"
+)
+FetchContent_MakeAvailable(Boost)
 
 # Target: kernemul
 set(kernemul_SOURCES
@@ -118,6 +128,7 @@ set(kernemul_SOURCES
 	"src/kernel/win/win_obj_manager.hpp"
 	"src/main.cpp"
 	"src/sym/pdb.hpp"
+	"src/sym/pdb_server.hpp"
 	"src/sym/symbol.cpp"
 	"src/sym/symbol.hpp"
 	"src/util/file.hpp"
@@ -149,6 +160,9 @@ target_link_libraries(kernemul PRIVATE
 	spdlog::spdlog
 	unicorn
 	raw_pdb
+	Boost::beast
+	OpenSSL::SSL
+	OpenSSL::Crypto
 )
 
 get_directory_property(CMKR_VS_STARTUP_PROJECT DIRECTORY ${PROJECT_SOURCE_DIR} VS_STARTUP_PROJECT)

@@ -1,5 +1,6 @@
 #pragma once
 #include "symbol.hpp"
+#include "pdb_server.hpp"
 #include "../kernel/process.hpp"
 #include "../util/file.hpp"
 #include "../util/log.hpp"
@@ -27,12 +28,9 @@ struct pdb_symbols : symbols
 		if (!cv)
 			return;
 
-		const auto pdb_path = find_pdb(cv->pdb_path());
+		const auto pdb_path = find_pdb(*cv);
 		if (pdb_path.empty())
-		{
-			LOG_WARN("pdb not found: {}", std::string(cv->pdb_path()));
 			return;
-		}
 
 		auto data = util::read_file(pdb_path);
 		if (data.empty())
@@ -67,9 +65,9 @@ struct pdb_symbols : symbols
 private:
 	std::vector<std::filesystem::path> search_paths_;
 
-	[[nodiscard]] std::filesystem::path find_pdb(std::string_view pdb_name) const
+	[[nodiscard]] std::filesystem::path find_pdb(const pe::codeview_rsds& cv) const
 	{
-		auto name = std::filesystem::path(pdb_name).filename();
+		auto name = std::filesystem::path(cv.pdb_path()).filename();
 
 		for (const auto& dir : search_paths_)
 		{
@@ -81,7 +79,11 @@ private:
 		if (std::filesystem::exists(name))
 			return name;
 
-		return {};
+		auto cached = pdb_server::cached_path(cv);
+		if (std::filesystem::exists(cached))
+			return cached;
+
+		return pdb_server::download(cv);
 	}
 
 	static void load_module_functions(
