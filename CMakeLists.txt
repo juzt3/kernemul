@@ -80,6 +80,8 @@ set(kernemul_SOURCES
 	"src/kernel/win/defs.hpp"
 	"src/kernel/win/exception.cpp"
 	"src/kernel/win/exception.hpp"
+	"src/kernel/win/filesystem.cpp"
+	"src/kernel/win/filesystem.hpp"
 	"src/kernel/win/linked_list.hpp"
 	"src/kernel/win/modules/nt_object_ops.cpp"
 	"src/kernel/win/modules/nt_object_ops.hpp"

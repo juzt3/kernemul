@@ -7,12 +7,14 @@
 #include "modules/nt_thread_ops.hpp"
 #include "modules/nt_object_ops.hpp"
 #include "registry.hpp"
+#include "filesystem.hpp"
 #include <cstring>
 
 struct win_kernel_state : kernel_state
 {
 	win_obj_manager objs;
 	win_registry reg;
+	win_filesystem fs;
 	std::shared_ptr<win_kernel_proc> sys_proc;
 	loaded_module_list_t loaded_module_list;
 	active_process_list_t active_process_list;
