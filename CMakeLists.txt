@@ -53,6 +53,15 @@ FetchContent_Declare(unicorn
 )
 FetchContent_MakeAvailable(unicorn)
 
+message(STATUS "Fetching raw_pdb (main)...")
+FetchContent_Declare(raw_pdb
+	GIT_REPOSITORY
+		"https://github.com/MolecularMatters/raw_pdb"
+	GIT_TAG
+		main
+)
+FetchContent_MakeAvailable(raw_pdb)
+
 # Target: kernemul
 set(kernemul_SOURCES
 	cmake.toml
@@ -108,6 +117,9 @@ set(kernemul_SOURCES
 	"src/kernel/win/win_obj_manager.cpp"
 	"src/kernel/win/win_obj_manager.hpp"
 	"src/main.cpp"
+	"src/sym/pdb.hpp"
+	"src/sym/symbol.cpp"
+	"src/sym/symbol.hpp"
 	"src/util/file.hpp"
 	"src/util/format.hpp"
 	"src/util/log.hpp"
@@ -136,6 +148,7 @@ target_include_directories(kernemul PRIVATE
 target_link_libraries(kernemul PRIVATE
 	spdlog::spdlog
 	unicorn
+	raw_pdb
 )
 
 get_directory_property(CMKR_VS_STARTUP_PROJECT DIRECTORY ${PROJECT_SOURCE_DIR} VS_STARTUP_PROJECT)

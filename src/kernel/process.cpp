@@ -23,6 +23,8 @@ std::shared_ptr<proc_module> process::add_module(const std::string_view name, co
 		mod->exports[std::string(exp.name)] = addr + exp.loc.rva();
 	}
 
+	export_symbols{}.load(*mod);
+
 	return mod;
 }
 

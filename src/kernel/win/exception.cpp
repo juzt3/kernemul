@@ -3,6 +3,7 @@
 #include "unwind/unwind.hpp"
 #include "unwind/x64_unwind.hpp"
 #include "../process.hpp"
+#include "../../sym/symbol.hpp"
 #include "../../emu/emu.hpp"
 #include "../../util/log.hpp"
 
@@ -76,7 +77,7 @@ bool win_exception::handle(vcpu& cpu, const cpu_exception ex)
 	const auto original_pc = cpu.pc();
 	const auto code = exception_to_status(ex);
 
-	LOG_INFO("exception dispatch: code=0x{:X}, rip=0x{:X}", code, original_pc);
+	LOG_INFO("exception dispatch: code=0x{:X}, rip={}", code, symbols::format_addr(proc, original_pc));
 
 	auto mod = proc.find_module_by_addr(original_pc);
 	if (!mod)
@@ -112,8 +113,8 @@ bool win_exception::handle(vcpu& cpu, const cpu_exception ex)
 			break;
 		}
 
-		LOG_INFO("  frame[{}]: rip=0x{:X} ({}+0x{:X}), handler=0x{:X}, ret=0x{:X}",
-			depth, control_pc, mod->name, control_rva,
+		LOG_INFO("  frame[{}]: rip={}, handler=0x{:X}, ret=0x{:X}",
+			depth, symbols::format_addr(proc, control_pc),
 			result.handler, ctx.pc);
 
 		if (result.handler)

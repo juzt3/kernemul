@@ -2,6 +2,7 @@
 #include "process.hpp"
 #include "map.hpp"
 #include "thread_scheduler.hpp"
+#include "../sym/symbol.hpp"
 #include "../emu/emu.hpp"
 #include "../emu/calling_conv.hpp"
 #include "../util/log.hpp"
@@ -78,10 +79,11 @@ struct kernel_state
 	void hook_module_redirects(proc_module& mod)
 	{
 		auto* redirections = &redirections_;
+		auto* m = &mod;
 		auto a = emu_->arch();
 
 		emu_->hook_code(mod.addr, mod.addr + mod.size - 1,
-			[redirections, a](vcpu& cpu, addr_t addr, std::size_t)
+			[redirections, m, a](vcpu& cpu, addr_t addr, std::size_t)
 			{
 				const auto it = redirections->find(addr);
 
@@ -95,22 +97,26 @@ struct kernel_state
 					return;
 				}
 
-				LOG_ERR("unimplemented function at 0x{:X}", addr);
+				const auto sym = symbols::resolve(m->symbols_, addr);
+				if (sym)
+					LOG_ERR("unimplemented function {}!{}", m->name, sym->format());
+				else
+					LOG_ERR("unimplemented function at {}+0x{:X}", m->name, addr - m->addr);
 				cpu.stop();
 			});
 	}
 
 	void redirect(proc_module& mod, const std::string_view name, redirect_fn fn)
 	{
-		const auto exp = mod.find_export(name);
+		const auto addr = mod.find_symbol(name);
 
-		if (!exp)
+		if (!addr)
 		{
-			LOG_ERR("export '{}' not found in {}", name, mod.name);
+			LOG_ERR("symbol '{}' not found in {}", name, mod.name);
 			return;
 		}
 
-		redirections_[*exp] = std::move(fn);
+		redirections_[*addr] = std::move(fn);
 	}
 
 	template <typename F>

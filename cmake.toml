@@ -10,10 +10,14 @@ tag = "v1.x"
 git = "https://github.com/unicorn-engine/unicorn"
 tag = "master"
 
+[fetch-content.raw_pdb]
+git = "https://github.com/MolecularMatters/raw_pdb"
+tag = "main"
+
 [target.kernemul]
 type = "executable"
 sources = ["src/**.cpp", "src/**.hpp"]
 include-directories = ["src", "vendor/pe/src", "vendor/ia32-doc/out"]
 compile-features = ["cxx_std_23"]
-link-libraries = ["spdlog::spdlog", "unicorn"]
+link-libraries = ["spdlog::spdlog", "unicorn", "raw_pdb"]
 compile-options = ["-Wno-changes-meaning"]

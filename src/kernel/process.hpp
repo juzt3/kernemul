@@ -1,5 +1,6 @@
 #pragma once
 #include "../emu/addr_space.hpp"
+#include "../sym/symbol.hpp"
 #include "../util/string.hpp"
 #include <pe.hpp>
 
@@ -20,6 +21,7 @@ struct proc_module
 	addr_t entry_point;
 	std::vector<std::uint8_t> image;
 	std::unordered_map<std::string, addr_t, string_view_hash, std::equal_to<>> exports;
+	module_symbols symbols_;
 
 	[[nodiscard]] const pe::image* pe() const
 	{
@@ -34,6 +36,14 @@ struct proc_module
 			return std::nullopt;
 
 		return it->second;
+	}
+
+	[[nodiscard]] std::optional<addr_t> find_symbol(const std::string_view sym_name)
+	{
+		if (!symbols_.empty())
+			return symbols::lookup(symbols_, sym_name);
+
+		return find_export(sym_name);
 	}
 
 	[[nodiscard]] bool contains_addr(addr_t a) const
