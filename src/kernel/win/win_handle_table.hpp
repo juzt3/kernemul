@@ -23,6 +23,7 @@ public:
 	handle_t create_handle(addr_t body_addr, access_t access);
 	bool close_handle(handle_t handle);
 	[[nodiscard]] std::optional<handle_entry> lookup_handle(handle_t handle) const;
+	[[nodiscard]] win_obj_manager& objs() { return objs_; }
 
 	template <typename T>
 	[[nodiscard]] std::shared_ptr<T> get_object(handle_t handle) const

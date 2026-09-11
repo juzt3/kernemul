@@ -89,6 +89,8 @@ set(kernemul_SOURCES
 	"src/kernel/win/modules/ntoskrnl.hpp"
 	"src/kernel/win/process.cpp"
 	"src/kernel/win/process.hpp"
+	"src/kernel/win/registry.cpp"
+	"src/kernel/win/registry.hpp"
 	"src/kernel/win/status.hpp"
 	"src/kernel/win/string.hpp"
 	"src/kernel/win/types.hpp"
