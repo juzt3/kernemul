@@ -9,9 +9,6 @@
 
 struct win_kernel_state : kernel_state
 {
-	static constexpr process::id_type sys_proc_id = 4;
-	static constexpr process::id_type proc_id_step = 4;
-
 	win_obj_manager objs;
 	std::shared_ptr<win_kernel_proc> sys_proc;
 	loaded_module_list_t loaded_module_list;
@@ -19,10 +16,10 @@ struct win_kernel_state : kernel_state
 
 	explicit win_kernel_state(const std::shared_ptr<class emu>& emu)
 		:	objs(*emu->default_addr_space()),
-			sys_proc(std::make_shared<win_kernel_proc>(sys_proc_id, *this, emu->default_addr_space()))
+			sys_proc(std::make_shared<win_kernel_proc>(objs.allocate_id(), *this, emu->default_addr_space()))
 	{
 		emu_ = emu;
-		processes[sys_proc_id] = sys_proc;
+		processes[sys_proc->id()] = sys_proc;
 		auto& space = *emu->default_addr_space();
 
 		if (const auto ntoskrnl = map_redirect_module(*sys_proc, "fs/ntoskrnl.exe", true))
@@ -46,7 +43,7 @@ struct win_kernel_state : kernel_state
 
 			if (const auto ps_init = ntoskrnl->find_export("PsInitialSystemProcess"))
 			{
-				auto sys_eproc = insert_process(space, sys_proc_id, "System");
+				auto sys_eproc = insert_process(space, sys_proc->id(), "System");
 				space.write_mem(*ps_init, sys_eproc.address());
 			}
 		}
@@ -55,10 +52,9 @@ struct win_kernel_state : kernel_state
 	std::shared_ptr<process> create_process(const std::string_view name) override
 	{
 		std::scoped_lock lock(proc_mtx_);
-		const auto id = next_id_;
+		const auto id = objs.allocate_id();
 		auto proc = std::make_shared<win_user_proc>(id, emu_->mem()->create_addr_space(), objs);
 		processes[id] = proc;
-		next_id_ += proc_id_step;
 
 		if (active_process_list.address())
 			insert_process(*emu_->default_addr_space(), id, name);
@@ -75,7 +71,6 @@ private:
 		return active_process_list.push_back(ep);
 	}
 
-	process::id_type next_id_ = 8;
 };
 
 class windows_emulator : public os_emulator
