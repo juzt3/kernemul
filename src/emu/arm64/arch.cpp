@@ -94,13 +94,6 @@ cpu_exception arch::intr_to_excp(const int vector) const
 
 addr_t arch::fault_addr(vcpu& cpu) const
 {
-	// Only meaningful if something wrote FAR_EL1. Unicorn calls the interrupt
-	// hook instead of arm_cpu_do_interrupt, and it is do_interrupt that would
-	// latch env->exception.vaddress into FAR_EL1, so on a translation fault
-	// this reads stale state. It does not affect exception dispatch -- the
-	// only consumer is win_exception::handle_page_fault, which resolves lazily
-	// committed user pages, and that path needs a Unicorn-side fix (or
-	// instruction decode) before it can work on this target.
 	return cpu.reg(far_el1);
 }
 

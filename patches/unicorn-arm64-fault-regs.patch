@@ -1,0 +1,21 @@
+diff --git a/qemu/target/arm/tlb_helper.c b/qemu/target/arm/tlb_helper.c
+index e19d6c17..82b5e2e1 100644
+--- a/qemu/target/arm/tlb_helper.c
++++ b/qemu/target/arm/tlb_helper.c
+@@ -102,6 +102,16 @@ static void QEMU_NORETURN arm_deliver_fault(ARMCPU *cpu, vaddr addr,
+ 
+     env->exception.vaddress = addr;
+     env->exception.fsr = fsr;
++
++    /* Unicorn: record the fault address and syndrome in the architectural
++       registers. Unicorn calls the UC_HOOK_INTR callback in place of
++       arm_cpu_do_interrupt, and it is do_interrupt that normally latches
++       these into FAR_ELn / ESR_ELn -- so without this they keep stale values
++       and nothing in the API surfaces the real fault address. cputlb.c and
++       the MIPS target already record faults for the same reason. */
++    env->cp15.far_el[target_el] = addr;
++    env->cp15.esr_el[target_el] = syn;
++
+     raise_exception(env, exc, syn, target_el);
+ }
+ 

@@ -46,6 +46,27 @@ endif()
 
 message(STATUS "kernemul guest architecture: ${KERNEMUL_ARCH}")
 
+# Unicorn is declared here rather than in [fetch-content] because it needs a
+# PATCH_COMMAND, which cmkr has no key for.
+#
+# The patch makes an AArch64 fault record its address and syndrome in FAR_ELn /
+# ESR_ELn. Unicorn calls the UC_HOOK_INTR callback in place of
+# arm_cpu_do_interrupt, and it is do_interrupt that would normally latch them,
+# so without this arm64::arch::fault_addr has no way to learn which address
+# faulted -- no Unicorn API exposes it. Pinned to a commit rather than master so
+# the patch keeps applying.
+include(FetchContent)
+message(STATUS "Fetching unicorn (patched)...")
+FetchContent_Declare(unicorn
+	GIT_REPOSITORY "https://github.com/unicorn-engine/unicorn"
+	GIT_TAG 7c5db94191defc1e04a4f66f4eb1220903cba837
+	PATCH_COMMAND "${CMAKE_COMMAND}"
+		"-DSRC=<SOURCE_DIR>"
+		"-DPATCH=${CMAKE_CURRENT_SOURCE_DIR}/patches/unicorn-arm64-fault-regs.patch"
+		-P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/apply_patch.cmake"
+)
+FetchContent_MakeAvailable(unicorn)
+
 # Packages
 find_package(OpenSSL REQUIRED)
 
@@ -63,15 +84,6 @@ FetchContent_Declare(spdlog
 		v1.x
 )
 FetchContent_MakeAvailable(spdlog)
-
-message(STATUS "Fetching unicorn (master)...")
-FetchContent_Declare(unicorn
-	GIT_REPOSITORY
-		"https://github.com/unicorn-engine/unicorn"
-	GIT_TAG
-		master
-)
-FetchContent_MakeAvailable(unicorn)
 
 message(STATUS "Fetching raw_pdb (main)...")
 FetchContent_Declare(raw_pdb
