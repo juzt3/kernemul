@@ -111,6 +111,14 @@ inline void set_thread_state(const emu_object<_ETHREAD>& et, const KTHREAD_STATE
 		running ? 1 : 0);
 }
 
+// Why a waiting thread is waiting, which is the only thing that tells the two
+// kinds of Waiting apart once the state itself says no more than "not runnable".
+inline void set_thread_wait_reason(const emu_object<_ETHREAD>& et, const KWAIT_REASON reason)
+{
+	et.space()->write_mem<unsigned char>(et.address() + offsetof(_ETHREAD, Tcb.WaitReason),
+		static_cast<unsigned char>(reason));
+}
+
 // Which cpu the thread is on. Windows uses this to decide where to send an
 // interrupt that has to reach a particular thread.
 inline void set_thread_processor(const emu_object<_ETHREAD>& et, const std::uint32_t number)

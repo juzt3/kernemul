@@ -4,6 +4,7 @@
 #include "../status.hpp"
 #include "../types.hpp"
 #include "../../../util/log.hpp"
+#include <chrono>
 
 void modules::register_ntoskrnl_thread_ops(win_kernel_state& state, proc_module& mod)
 {
@@ -57,6 +58,39 @@ void modules::register_ntoskrnl_thread_ops(win_kernel_state& state, proc_module&
 			}
 
 			LOG_INFO("PsCreateSystemThread: created tid={}, handle=0x{:X}", t->id(), handle);
+			return STATUS_SUCCESS;
+		});
+
+	// The interval is in 100ns units: negative is a delay from now, positive an
+	// absolute guest time to wait until. Nothing here queues APCs, so an
+	// alertable wait has nothing to be interrupted by and always runs its
+	// course -- which is why the result is only ever success.
+	state.redirect(mod, "KeDelayExecutionThread",
+		[](vcpu& cpu, const std::uint8_t wait_mode, const std::uint8_t alertable,
+			emu_object<std::int64_t> interval) -> NTSTATUS
+		{
+			if (!interval)
+			{
+				LOG_ERR("KeDelayExecutionThread: null interval");
+				return STATUS_INVALID_PARAMETER;
+			}
+
+			const auto ticks = interval.read();
+			const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+				win_ticks(ticks < 0 ? -ticks : ticks - win_system_time()));
+
+			LOG_INFO("KeDelayExecutionThread(wait_mode={}, alertable={}, interval={}): {}ms",
+				wait_mode, alertable, ticks, ms.count());
+
+			// An absolute time already past, or a delay too short to name in
+			// milliseconds, is a request to give up the rest of the quantum
+			// rather than to wait: the thread is runnable the moment it is off
+			// the cpu, so it goes back on the queue awake.
+			if (ms > std::chrono::milliseconds::zero())
+				thread_scheduler::sleep_current(cpu, ms);
+			else
+				thread_scheduler::yield_current(cpu);
+
 			return STATUS_SUCCESS;
 		});
 }
