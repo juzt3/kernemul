@@ -27,8 +27,10 @@ const addr_space& mmu::as_x86(const ::addr_space& space)
 
 std::shared_ptr<::addr_space> mmu::create_addr_space()
 {
+	std::unique_lock lk(mtx_);
+
 	auto space = std::make_shared<addr_space>();
-	space->pml4_pa = alloc_phys(page_size(), prot_rw);
+	space->pml4_pa = alloc_phys_locked(page_size(), prot_rw);
 	space->mmu_ = this;
 	spaces_[space->pml4_pa] = space;
 	return space;
@@ -36,6 +38,8 @@ std::shared_ptr<::addr_space> mmu::create_addr_space()
 
 void mmu::destroy_addr_space(std::shared_ptr<::addr_space> space)
 {
+	std::unique_lock lk(mtx_);
+
 	auto& s = as_x86(*space);
 	spaces_.erase(s.pml4_pa);
 }
@@ -43,6 +47,8 @@ void mmu::destroy_addr_space(std::shared_ptr<::addr_space> space)
 std::shared_ptr<::addr_space> mmu::curr_addr_space(vcpu& cpu)
 {
 	addr_t cr3 = cpu.reg<addr_t>(x86::cr3);
+
+	std::shared_lock lk(mtx_);
 	auto it = spaces_.find(cr3);
 	if (it == spaces_.end())
 		return nullptr;
@@ -75,7 +81,7 @@ void mmu::switch_to(vcpu& cpu, std::shared_ptr<::addr_space> space)
 {
 	auto& s = as_x86(*space);
 
-	std::lock_guard lk(mtx_);
+	std::shared_lock lk(mtx_);
 
 	cpu.reg(x86::cr3, s.pml4_pa);
 	cpu.flush_tlb();
@@ -94,7 +100,7 @@ addr_t mmu::ensure_table(addr_t table_pa, std::size_t index)
 	if (entry.present)
 		return pfn_to_pa(entry.page_frame_number);
 
-	addr_t child = alloc_phys(page_size(), prot_rw);
+	addr_t child = alloc_phys_locked(page_size(), prot_rw);
 	entry.flags = 0;
 	entry.present = 1;
 	entry.write = 1;
@@ -146,7 +152,7 @@ void mmu::unmap_page(addr_space& space, addr_t va)
 void mmu::map_virt(::addr_space& space, addr_t va, std::size_t size, mem_prot prot)
 {
 	auto& s = as_x86(space);
-	std::lock_guard lk(mtx_);
+	std::unique_lock lk(mtx_);
 
 	bool user = !(prot & prot_supervisor);
 	auto phys_prot = prot & ~prot_supervisor;
@@ -154,7 +160,7 @@ void mmu::map_virt(::addr_space& space, addr_t va, std::size_t size, mem_prot pr
 	const addr_t start = page_align(va);
 	const std::size_t aligned = size_align(size);
 
-	const addr_t pa_block = alloc_phys(aligned, phys_prot);
+	const addr_t pa_block = alloc_phys_locked(aligned, phys_prot);
 
 	for (std::size_t off = 0; off < aligned; off += page_size())
 		map_page(s, start + off, pa_block + off, user);
@@ -165,7 +171,7 @@ void mmu::map_virt(::addr_space& space, addr_t va, std::size_t size, mem_prot pr
 void mmu::map_virt_phys(::addr_space& space, addr_t va, addr_t pa, std::size_t size, mem_prot prot)
 {
 	auto& s = as_x86(space);
-	std::lock_guard lk(mtx_);
+	std::unique_lock lk(mtx_);
 
 	const bool user = !(prot & prot_supervisor);
 	const addr_t start = page_align(va);
@@ -181,7 +187,7 @@ void mmu::map_virt_phys(::addr_space& space, addr_t va, addr_t pa, std::size_t s
 void mmu::unmap_virt(::addr_space& space, addr_t va, std::size_t size)
 {
 	auto& s = as_x86(space);
-	std::lock_guard lk(mtx_);
+	std::unique_lock lk(mtx_);
 
 	const addr_t start = page_align(va);
 	const std::size_t aligned = size_align(size);
@@ -222,21 +228,21 @@ void mmu::copy_virt(const addr_space& space, addr_t va, void* buf, std::size_t s
 void mmu::read_virt(const ::addr_space& space, addr_t va, void* buf, std::size_t size)
 {
 	auto& s = as_x86(space);
-	std::lock_guard lk(mtx_);
+	std::shared_lock lk(mtx_);
 	copy_virt(s, va, buf, size, false);
 }
 
 void mmu::write_virt(const ::addr_space& space, addr_t va, const void* buf, std::size_t size)
 {
 	auto& s = as_x86(space);
-	std::lock_guard lk(mtx_);
+	std::shared_lock lk(mtx_);
 	copy_virt(s, va, const_cast<void*>(buf), size, true);
 }
 
 void mmu::prot_virt(::addr_space& space, addr_t va, std::size_t size, mem_prot prot)
 {
 	auto& s = as_x86(space);
-	std::lock_guard lk(mtx_);
+	std::unique_lock lk(mtx_);
 
 	const addr_t start = page_align(va);
 	const std::size_t aligned = size_align(size);
@@ -275,7 +281,7 @@ void mmu::prot_virt(::addr_space& space, addr_t va, std::size_t size, mem_prot p
 std::optional<addr_t> mmu::virt_to_phys(const ::addr_space& space, addr_t va)
 {
 	auto& s = as_x86(space);
-	std::lock_guard lk(mtx_);
+	std::shared_lock lk(mtx_);
 
 	addr_t page = page_align(va);
 	auto it = s.shadow.find(page);
@@ -288,7 +294,7 @@ std::optional<addr_t> mmu::virt_to_phys(const ::addr_space& space, addr_t va)
 std::optional<addr_t> mmu::phys_to_virt(const ::addr_space& space, addr_t pa)
 {
 	auto& s = as_x86(space);
-	std::lock_guard lk(mtx_);
+	std::shared_lock lk(mtx_);
 
 	addr_t pa_page = pa & ~(page_size() - 1);
 	addr_t offset = pa - pa_page;

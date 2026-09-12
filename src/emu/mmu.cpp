@@ -28,8 +28,12 @@ void mmu::write_phys(addr_t pa, const void* buf, std::size_t size)
 
 addr_t mmu::alloc_phys(std::size_t size, mem_prot prot)
 {
-	std::lock_guard lk(mtx_);
+	std::unique_lock lk(mtx_);
+	return alloc_phys_locked(size, prot);
+}
 
+addr_t mmu::alloc_phys_locked(std::size_t size, mem_prot prot)
+{
 	const std::size_t aligned = size_align(size);
 
 	const addr_t addr = phys_next_;

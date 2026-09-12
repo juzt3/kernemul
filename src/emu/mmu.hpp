@@ -3,6 +3,7 @@
 #include "addr_space.hpp"
 #include <memory>
 #include <mutex>
+#include <shared_mutex>
 #include <optional>
 
 class emu;
@@ -55,10 +56,16 @@ public:
 	[[nodiscard]] class emu* emu() const noexcept { return emu_; }
 
 protected:
+	// The same, for callers that already hold mtx_ -- the table walkers do,
+	// and they allocate the tables they are missing as they go.
+	addr_t alloc_phys_locked(std::size_t size, mem_prot prot);
+
 	addr_t page_align(addr_t addr) const { return addr & ~(page_size() - 1); }
 	std::size_t size_align(std::size_t size) const { return (size + page_size() - 1) & ~(page_size() - 1); }
 
 	class emu* emu_ = nullptr;
 	addr_t phys_next_ = 0x10000;
-	mutable std::recursive_mutex mtx_;
+	// Walks read the tables, mapping rewrites them. Reads are by far the more
+	// common: every guest memory access from the host side is one.
+	mutable std::shared_mutex mtx_;
 };
