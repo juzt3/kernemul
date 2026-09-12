@@ -418,3 +418,5 @@ vfs/
 
 # Emulator filesystem
 fs/
+
+tools/*
