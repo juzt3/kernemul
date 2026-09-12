@@ -16,6 +16,8 @@ class thread
 {
 public:
 	using id_type = std::uint32_t;
+	using clock = std::chrono::steady_clock;
+	using time_point = clock::time_point;
 
 	thread(const id_type id, std::shared_ptr<process> proc,
 		   const addr_t start_addr, const addr_t stack_ptr,
@@ -85,9 +87,12 @@ public:
 		}
 	}
 
-	void sleep_for(std::chrono::milliseconds ms) { sleep_until_ = clock::now() + ms; }
-	bool is_sleeping() const { return clock::now() < sleep_until_; }
-	auto sleep_until() const { return sleep_until_; }
+	// A thread waits by staying on the ready queue with a time on it, rather
+	// than by leaving the queue: nothing has to remember to put it back, and a
+	// cpu looking for work passes over it until that time comes round.
+	void sleep_for(const std::chrono::milliseconds ms) { sleep_until_ = clock::now() + ms; }
+	[[nodiscard]] bool is_sleeping() const { return clock::now() < sleep_until_; }
+	[[nodiscard]] time_point sleep_until() const { return sleep_until_; }
 
 	void finish() { finished_ = true; }
 	[[nodiscard]] bool is_finished() const { return finished_; }
@@ -101,9 +106,7 @@ protected:
 	std::vector<reg_val> values_;
 
 private:
-	using clock = std::chrono::steady_clock;
-
-	clock::time_point sleep_until_{};
+	time_point sleep_until_{};
 	bool finished_{false};
 };
 
@@ -160,6 +163,26 @@ public:
 		cv_.notify_all();
 	}
 
+	// Take the thread a cpu is running off it, without ending it. The cpu's
+	// loop banks the thread and goes back to schedule(), which puts it on the
+	// queue and picks whatever should run next -- possibly the same thread.
+	static void yield_current(vcpu& cpu)
+	{
+		cpu.stop();
+	}
+
+	// The same, for a thread that asked to wait: it goes back on the queue
+	// asleep, and no cpu picks it up again until its time is up. Waiting is the
+	// whole point of the call that asks for this, so the thread gives up its cpu
+	// now rather than running on to the end of its quantum.
+	static void sleep_current(vcpu& cpu, const std::chrono::milliseconds ms)
+	{
+		if (const auto t = cpu.thread())
+			t->sleep_for(ms);
+
+		yield_current(cpu);
+	}
+
 	// A cpu's scheduling loop. It returns only once every thread everywhere has
 	// finished: a cpu with nothing to do waits instead, since a thread running
 	// on another cpu can create more work at any point.
@@ -210,10 +233,7 @@ public:
 			if (stopped_ || nothing_left(cpu))
 				return nullptr;
 
-			const auto it = std::ranges::find_if(ready_queue_,
-				[](const auto& t) { return !t->is_sleeping(); });
-
-			if (it != ready_queue_.end())
+			if (const auto it = first_runnable(); it != ready_queue_.end())
 			{
 				auto next = *it;
 				ready_queue_.erase(it);
@@ -232,20 +252,34 @@ public:
 			// Every thread is either on another cpu or asleep. Waiting drops the
 			// lock, so whoever holds them can get back in to requeue or retire.
 			if (ready_queue_.empty())
-			{
 				cv_.wait(lock);
-			}
 			else
-			{
-				const auto earliest = std::ranges::min_element(ready_queue_, {},
-					[](const auto& t) { return t->sleep_until(); });
-
-				cv_.wait_until(lock, (*earliest)->sleep_until());
-			}
+				cv_.wait_until(lock, next_wake());
 		}
 	}
 
 private:
+	// The first thread on the queue that is not sleeping. A sleeping thread is
+	// passed over rather than taken, so being the only thread left is no reason
+	// to run one early: a cpu with nothing else to do waits it out instead.
+	// Called with the lock held.
+	std::deque<std::shared_ptr<thread>>::iterator first_runnable()
+	{
+		return std::ranges::find_if(ready_queue_,
+			[](const auto& t) { return !t->is_sleeping(); });
+	}
+
+	// When the first of the queued sleepers is due, which is the soonest this
+	// cpu could have anything to do. Only asked with every queued thread asleep,
+	// so there is always one to find. Called with the lock held.
+	thread::time_point next_wake() const
+	{
+		const auto earliest = std::ranges::min_element(ready_queue_, {},
+			[](const auto& t) { return t->sleep_until(); });
+
+		return (*earliest)->sleep_until();
+	}
+
 	// Put the thread's context on the cpu. Page tables are not part of that
 	// context and processes share none of them, so the cpu follows the thread
 	// into its own address space.

@@ -12,9 +12,15 @@ void win_thread::save(vcpu& cpu)
 	if (!ethread_)
 		return;
 
-	// A thread that has not finished is going back on the queue, so it is ready
-	// rather than waiting on anything.
-	set_thread_state(ethread_, is_finished() ? Terminated : Ready, false);
+	// A thread that has not finished is going back on the queue. It is ready to
+	// run again unless it asked to wait, which is the one thing a thread here
+	// waits on: the scheduler will pass over it until its delay is up.
+	const auto state = is_finished() ? Terminated : (is_sleeping() ? Waiting : Ready);
+
+	set_thread_state(ethread_, state, false);
+
+	if (state == Waiting)
+		set_thread_wait_reason(ethread_, DelayExecution);
 }
 
 // And going on one.
