@@ -1,6 +1,8 @@
 #pragma once
 #include "linked_list.hpp"
 #include "types.hpp"
+#include <chrono>
+#include <cstdint>
 
 using loaded_module_list_t = win_linked_list<
 	_KLDR_DATA_TABLE_ENTRY,
@@ -11,3 +13,29 @@ using active_process_list_t = win_linked_list<
 	_EPROCESS,
 	offsetof(_EPROCESS, ActiveProcessLinks)
 >;
+
+// A thread appears on two lists, both anchored in its own process: the
+// scheduler's, whose head is in the KPROCESS, and the executive's, whose head
+// is in the EPROCESS wrapped around it. Both thread through the same ETHREAD,
+// at different offsets.
+using kprocess_thread_list_t = win_linked_list<
+	_ETHREAD,
+	offsetof(_ETHREAD, Tcb.ThreadListEntry)
+>;
+
+using eprocess_thread_list_t = win_linked_list<
+	_ETHREAD,
+	offsetof(_ETHREAD, ThreadListEntry)
+>;
+
+// Windows counts 100ns ticks from 1601-01-01 and the host clock counts seconds
+// from 1970-01-01, so a guest timestamp is the host's plus the gap.
+inline constexpr std::int64_t win_epoch_delta_100ns = 116444736000000000;
+
+using win_ticks = std::chrono::duration<std::int64_t, std::ratio<1, 10000000>>;
+
+inline std::int64_t win_system_time()
+{
+	const auto now = std::chrono::system_clock::now().time_since_epoch();
+	return win_epoch_delta_100ns + std::chrono::duration_cast<win_ticks>(now).count();
+}

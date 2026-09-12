@@ -8,8 +8,11 @@
 #include "modules/nt_object_ops.hpp"
 #include "registry.hpp"
 #include "filesystem.hpp"
+#include "ethread.hpp"
+#include "per_cpu.hpp"
 #include "../../target.hpp"
 #include <cstring>
+#include <deque>
 #include <string>
 
 struct win_kernel_state : kernel_state
@@ -22,9 +25,11 @@ struct win_kernel_state : kernel_state
 	active_process_list_t active_process_list;
 	emu_object<_KUSER_SHARED_DATA> kuser_shared_data;
 
-	// The two lists live in guest memory and a push_back rewrites the head and
-	// the old tail, so concurrent module loads would tangle the guest's own
-	// links. Public because win_kernel_proc appends to the module list.
+	// Every list the guest keeps lives in guest memory, and a push rewrites the
+	// head and the old tail, so a module load or a thread starting at the same
+	// time as another would tangle the guest's own links. Public because
+	// win_kernel_proc appends to the module list and windows_process to the
+	// per-process thread lists.
 	std::mutex list_mtx_;
 
 	explicit win_kernel_state(const std::shared_ptr<class emu>& emu)
@@ -56,13 +61,16 @@ struct win_kernel_state : kernel_state
 				active_process_list.init();
 			}
 
-			if (const auto ps_init = ntoskrnl->find_export("PsInitialSystemProcess"))
+			if (active_process_list.address())
 			{
-				if (active_process_list.address())
-				{
-					auto sys_eproc = insert_process(space, sys_proc->id(), "System");
+				// The system process's own EPROCESS. Every kernel thread hangs
+				// off the thread lists inside it, so it is worth having even
+				// when nothing points the guest at it.
+				const auto sys_eproc = insert_process(space, sys_proc->id(), "System");
+				sys_proc->set_eprocess(sys_eproc);
+
+				if (const auto ps_init = ntoskrnl->find_export("PsInitialSystemProcess"))
 					space.write_mem(*ps_init, sys_eproc.address());
-				}
 			}
 		}
 
@@ -73,6 +81,26 @@ struct win_kernel_state : kernel_state
 	}
 
 	void set_emulator(windows_emulator* e) { emulator_ = e; }
+
+	// Called once as each cpu is added, in the order they are added: that order
+	// is what makes a block's index the cpu's own id.
+	win_per_cpu& init_per_cpu(vcpu& cpu)
+	{
+		auto& pcpu = per_cpu_.emplace_back(*emu_->default_addr_space(),
+			static_cast<std::uint32_t>(cpu.id()));
+
+		// Where the guest looks to find out how many cpus the machine has.
+		kuser_shared_data.space()->write_mem<std::uint32_t>(
+			kuser_shared_data.address() + offsetof(_KUSER_SHARED_DATA, ActiveProcessorCount),
+			static_cast<std::uint32_t>(per_cpu_.size()));
+
+		return pcpu;
+	}
+
+	win_per_cpu* per_cpu(const std::size_t cpu_id)
+	{
+		return cpu_id < per_cpu_.size() ? &per_cpu_[cpu_id] : nullptr;
+	}
 
 	std::shared_ptr<process> create_process(const std::string_view name) override
 	{
@@ -85,13 +113,22 @@ struct win_kernel_state : kernel_state
 		processes[id] = proc;
 
 		if (active_process_list.address())
-			insert_process(*emu_->default_addr_space(), id, name, proc->peb().address());
+		{
+			const auto eproc = insert_process(*emu_->default_addr_space(), id, name,
+				proc->peb().address());
+			proc->set_eprocess(eproc);
+		}
 
 		return proc;
 	}
 
 private:
 	windows_emulator* emulator_ = nullptr;
+
+	// One KPCR per cpu, indexed by a cpu's id. A deque rather than a vector
+	// because each block is handed out by pointer as its cpu is added.
+	std::deque<win_per_cpu> per_cpu_;
+
 	emu_object<_EPROCESS> insert_process(addr_space& space, process::id_type id,
 		std::string_view name, addr_t peb_address = 0)
 	{
@@ -99,8 +136,16 @@ private:
 		ep.UniqueProcessId = reinterpret_cast<void*>(static_cast<std::uintptr_t>(id));
 		ep.Peb = reinterpret_cast<_PEB*>(static_cast<std::uintptr_t>(peb_address));
 		std::memcpy(ep.ImageFileName, name.data(), std::min(name.size(), sizeof(ep.ImageFileName)));
+
 		std::scoped_lock lock(list_mtx_);
-		return active_process_list.push_back(ep);
+		auto obj = active_process_list.push_back(ep);
+
+		// Empty circular lists, so the process's first thread has something to
+		// link itself into.
+		kprocess_thread_list(space, obj.address()).init();
+		eprocess_thread_list(space, obj.address()).init();
+
+		return obj;
 	}
 
 };
@@ -118,6 +163,12 @@ public:
 	}
 
 	win_kernel_state& kernel() { return kernel_; }
+
+	[[nodiscard]] win_per_cpu* per_cpu(const vcpu& cpu) { return kernel_.per_cpu(cpu.id()); }
+
+	// Point the cpu's per-processor register at its own KPCR. Which register
+	// that is belongs to the arch: the GS base on x86-64, TPIDR_EL1 on ARM64.
+	virtual void set_pcr(vcpu&, addr_t) {}
 
 	std::shared_ptr<thread> create_kernel_thread(vcpu& cpu, const addr_t start_addr) override
 	{

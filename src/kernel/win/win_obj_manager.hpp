@@ -29,9 +29,11 @@ class win_obj_manager
 public:
 	explicit win_obj_manager(addr_space& space);
 
+	// prot is the object's memory: everything the guest reaches only from
+	// kernel mode belongs behind prot_supervisor.
 	addr_t create_object(std::uint8_t type_index,
 		const void* body_data, std::size_t body_size,
-		std::shared_ptr<win_object> host = {});
+		std::shared_ptr<win_object> host = {}, mem_prot prot = prot_rw);
 
 	void register_object(addr_t body_addr, std::shared_ptr<win_object> host);
 

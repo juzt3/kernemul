@@ -87,7 +87,7 @@ public:
 	// thread inside one of these and it ends the thread when the routine
 	// returns; reaching it is how the emulator sees the same thing.
 	[[nodiscard]] virtual addr_t thread_exit_addr() const { return 0; }
-	void terminate_thread(thread_id_type id);
+	virtual void terminate_thread(thread_id_type id);
 	[[nodiscard]] std::shared_ptr<thread> find_thread(thread_id_type id) const;
 
 	static thread_id_type alloc_thread_id() { return next_thread_id_++; }

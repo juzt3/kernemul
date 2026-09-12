@@ -9,6 +9,7 @@
 
 struct win_kernel_state;
 class windows_emulator;
+class win_thread;
 
 // The stub a thread's start routine returns to. ntdll exports its one;
 // ntoskrnl's is internal, so that one needs the ntoskrnl PDB.
@@ -23,6 +24,7 @@ public:
 		:	process(id, std::move(space)), objs_(objs), handle_table_(objs), fs_(fs) {}
 
 	std::shared_ptr<thread> create_thread(vcpu& cpu, addr_t start_addr) override;
+	void terminate_thread(thread_id_type id) override;
 
 	virtual std::shared_ptr<proc_module> load_module(std::string_view name, bool supervisor);
 
@@ -32,13 +34,28 @@ public:
 
 	void set_emulator(windows_emulator* e) { emulator_ = e; }
 
+	// The guest's own view of this process, and the anchor for its thread
+	// lists. Unset when the guest has no view of it -- without ntoskrnl's
+	// symbols there is no list to put it on.
+	void set_eprocess(emu_object<_EPROCESS> ep) { eprocess_ = std::move(ep); }
+	[[nodiscard]] const emu_object<_EPROCESS>& eprocess() const { return eprocess_; }
+
 protected:
 	// 0 if the module is not mapped or has no such symbol, logging either way.
 	addr_t find_symbol(std::string_view mod_name, std::string_view sym) const;
 
+	// Gives the thread the guest-side half of itself and links it into this
+	// process's thread lists. Both create_thread paths call it once the thread
+	// has the stack and TEB the ETHREAD describes.
+	void setup_ethread(const std::shared_ptr<win_thread>& t, addr_t start_addr);
+
+	// The other end: off the lists, and stamped with when it stopped.
+	void destroy_ethread(const win_thread& t);
+
 	win_obj_manager& objs_;
 	win_handle_table handle_table_;
 	emu_object<_PEB64> peb_;
+	emu_object<_EPROCESS> eprocess_;
 	windows_emulator* emulator_ = nullptr;
 	const win_filesystem& fs_;
 };

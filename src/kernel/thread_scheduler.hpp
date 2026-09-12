@@ -37,7 +37,10 @@ public:
 
 	virtual ~thread() = default;
 
-	void save(vcpu& cpu)
+	// The two halves of a context switch, and the only points a thread moves on
+	// or off a cpu. Registers are not all a guest can see of which thread is
+	// running, so an OS layer with more to say overrides these.
+	virtual void save(vcpu& cpu)
 	{
 		const auto a = cpu.arch();
 		const auto regs = a->regs();
@@ -45,7 +48,7 @@ public:
 			cpu.reg_read(regs[i], &values_[i], a->reg_size(regs[i]));
 	}
 
-	void restore(vcpu& cpu) const
+	virtual void restore(vcpu& cpu) const
 	{
 		const auto a = cpu.arch();
 		const auto regs = a->regs();

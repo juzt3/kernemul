@@ -1,4 +1,5 @@
 #include "nt_thread_ops.hpp"
+#include "../thread.hpp"
 #include "../win_kernel.hpp"
 #include "../status.hpp"
 #include "../types.hpp"
@@ -21,7 +22,7 @@ void modules::register_ntoskrnl_thread_ops(win_kernel_state& state, proc_module&
 	});
 
 	state.redirect(mod, "PsCreateSystemThread",
-		[sys_proc, &objs = state.objs](vcpu& cpu, emu_object<std::uint64_t> thread_handle_out,
+		[sys_proc](vcpu& cpu, emu_object<std::uint64_t> thread_handle_out,
 			[[maybe_unused]] std::uint32_t desired_access,
 			[[maybe_unused]] emu_object<void> object_attributes, [[maybe_unused]] std::uint64_t process_handle,
 			emu_object<CLIENT_ID> client_id_out, addr_t start_routine, addr_t start_context) -> NTSTATUS
@@ -32,10 +33,17 @@ void modules::register_ntoskrnl_thread_ops(win_kernel_state& state, proc_module&
 			auto t = sys_proc->create_thread(cpu, start_routine);
 			cpu.emu()->call_conv()->set_arg(cpu, *t, 0, start_context);
 
-			auto host_obj = std::make_shared<thread_object>(t);
-			const auto body_addr = objs.create_object(0, nullptr, 0, host_obj);
+			// The thread's ETHREAD is already a registered object, so the
+			// handle names it directly and the guest can read what it gets.
+			const auto ethread = std::static_pointer_cast<win_thread>(t)->ethread().address();
 
-			const auto handle = sys_proc->handle_table().create_handle(body_addr, THREAD_ALL_ACCESS);
+			if (!ethread)
+			{
+				LOG_ERR("PsCreateSystemThread: tid={} has no ETHREAD", t->id());
+				return STATUS_NO_MEMORY;
+			}
+
+			const auto handle = sys_proc->handle_table().create_handle(ethread, THREAD_ALL_ACCESS);
 
 			if (thread_handle_out)
 				thread_handle_out.write(handle);

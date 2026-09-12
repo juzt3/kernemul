@@ -61,7 +61,41 @@ static x86::seg_reg make_data_sr(std::uint16_t selector, std::uint32_t dpl, std:
 	return { selector, base, 0xFFFFFFFF, ar.flags };
 }
 
-void init_vcpu(vcpu& cpu)
+// Every vector points into ntoskrnl's trap handlers. Nothing dispatches through
+// the table -- Unicorn calls the interrupt hook and win_exception::handle sees
+// the fault first -- so it exists for guest code that reads the IDT back.
+static addr_t init_idt(vcpu& cpu, const proc_module& ntoskrnl)
+{
+	auto* space = cpu.curr_addr_space().get();
+
+	constexpr std::size_t idt_entries = 256;
+	constexpr std::size_t idt_size = idt_entries * sizeof(ia32::segment_descriptor_interrupt_gate_64);
+	const addr_t idt_va = space->alloc(idt_size, prot_rw | prot_supervisor);
+
+	constexpr std::size_t handler_stride = 16;
+	const auto base = ntoskrnl.find_symbol("KiPageFault").value_or(ntoskrnl.addr);
+
+	for (std::size_t i = 0; i < idt_entries; ++i)
+	{
+		const auto handler = base + i * handler_stride;
+
+		ia32::segment_descriptor_interrupt_gate_64 gate{};
+		gate.offset_low    = static_cast<std::uint16_t>(handler);
+		gate.segment_selector = kernel_cs;
+		gate.type          = SEGMENT_DESCRIPTOR_TYPE_INTERRUPT_GATE;
+		gate.present       = 1;
+		gate.offset_middle = static_cast<std::uint16_t>(handler >> 16);
+		gate.offset_high   = static_cast<std::uint32_t>(handler >> 32);
+
+		space->write_mem(idt_va + i * sizeof(gate), gate);
+	}
+
+	cpu.reg(x86::idtr, x86::seg_reg{ 0, idt_va, static_cast<std::uint32_t>(idt_size - 1), 0 });
+
+	return idt_va;
+}
+
+cpu_tables init_vcpu(vcpu& cpu, const proc_module& ntoskrnl)
 {
 	auto space = cpu.curr_addr_space();
 
@@ -110,6 +144,8 @@ void init_vcpu(vcpu& cpu)
 	cpu.reg(x86::gs, data_sr);
 
 	cpu.reg(x86::ldtr, x86::seg_reg{});
+
+	return { gdt_va, tss_va, init_idt(cpu, ntoskrnl) };
 }
 
 void set_kernel_gs(vcpu& cpu, const std::uint64_t base)
@@ -137,35 +173,6 @@ void swap_to_usermode_segments(vcpu& cpu)
 {
 	cpu.reg(x86::cs, make_code_sr(user_cs, 3));
 	cpu.reg(x86::ss, make_data_sr(user_ds, 3));
-}
-
-void init_idt(vcpu& cpu, const proc_module& ntoskrnl)
-{
-	auto* space = cpu.curr_addr_space().get();
-
-	constexpr std::size_t idt_entries = 256;
-	constexpr std::size_t idt_size = idt_entries * sizeof(ia32::segment_descriptor_interrupt_gate_64);
-	const addr_t idt_va = space->alloc(idt_size, prot_rw | prot_supervisor);
-
-	constexpr std::size_t handler_stride = 16;
-	const auto base = ntoskrnl.find_symbol("KiPageFault").value_or(ntoskrnl.addr);
-
-	for (std::size_t i = 0; i < idt_entries; ++i)
-	{
-		const auto handler = base + i * handler_stride;
-
-		ia32::segment_descriptor_interrupt_gate_64 gate{};
-		gate.offset_low    = static_cast<std::uint16_t>(handler);
-		gate.segment_selector = kernel_cs;
-		gate.type          = SEGMENT_DESCRIPTOR_TYPE_INTERRUPT_GATE;
-		gate.present       = 1;
-		gate.offset_middle = static_cast<std::uint16_t>(handler >> 16);
-		gate.offset_high   = static_cast<std::uint32_t>(handler >> 32);
-
-		space->write_mem(idt_va + i * sizeof(gate), gate);
-	}
-
-	cpu.reg(x86::idtr, x86::seg_reg{ 0, idt_va, static_cast<std::uint32_t>(idt_size - 1), 0 });
 }
 
 }

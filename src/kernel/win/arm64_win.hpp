@@ -12,6 +12,11 @@ public:
 
 	std::shared_ptr<vcpu> add_vcpu() override;
 
+	void set_pcr(vcpu& cpu, const addr_t kpcr_va) override
+	{
+		cpu.reg(arm64::tpidr_el1, kpcr_va);
+	}
+
 	void init_thread_teb(thread& t, vcpu& cpu, addr_t teb_addr) override
 	{
 		t.set_reg(cpu, arm64::tpidr_el0, teb_addr);

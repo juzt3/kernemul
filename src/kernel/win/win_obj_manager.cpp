@@ -5,10 +5,10 @@ win_obj_manager::win_obj_manager(addr_space& space)
 
 addr_t win_obj_manager::create_object(const std::uint8_t type_index,
 	const void* body_data, const std::size_t body_size,
-	std::shared_ptr<win_object> host)
+	std::shared_ptr<win_object> host, const mem_prot prot)
 {
 	constexpr auto hdr_size = sizeof(_OBJECT_HEADER);
-	const auto base = space_.alloc(hdr_size + body_size, prot_rw);
+	const auto base = space_.alloc(hdr_size + body_size, prot);
 	const auto body_addr = base + hdr_size;
 
 	_OBJECT_HEADER hdr{};

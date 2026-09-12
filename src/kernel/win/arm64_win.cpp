@@ -17,5 +17,10 @@ std::shared_ptr<vcpu> arm64_win_emulator::add_vcpu()
 	const addr_t vbar = space->alloc(vector_table_size, prot_rx | prot_supervisor);
 	cpu->reg(arm64::vbar_el1, vbar);
 
+	// TPIDR_EL1 is not part of a thread's context, so unlike the GS base on
+	// x86-64 it stays pointed at this cpu's block for as long as the cpu lives.
+	const auto& pcpu = kernel().init_per_cpu(*cpu);
+	set_pcr(*cpu, pcpu.address());
+
 	return cpu;
 }
