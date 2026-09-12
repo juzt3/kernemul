@@ -58,12 +58,10 @@ bool win_exception::handle(vcpu& cpu, const cpu_exception ex)
 		return false;
 	}
 
+	std::call_once(unwinder_once_, [&] { unwinder_ = make_unwinder(*mod); });
+
 	if (!unwinder_)
-	{
-		unwinder_ = make_unwinder(*mod);
-		if (!unwinder_)
-			return false;
-	}
+		return false;
 
 	auto& space = *cpu.curr_addr_space();
 	const auto saved_pc = cpu.pc();

@@ -18,6 +18,8 @@ private:
 	std::int32_t call_filter(vcpu& cpu, addr_t filter_addr, addr_t establisher_frame, const exception_info& info);
 	addr_t ensure_trampoline(vcpu& cpu);
 
+	// Allocated on the first filter call, from whichever cpu makes it.
+	std::once_flag trampoline_once_;
 	addr_t trampoline_ = 0;
 };
 

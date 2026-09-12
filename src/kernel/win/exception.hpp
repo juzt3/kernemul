@@ -1,6 +1,7 @@
 #pragma once
 #include "../kernel.hpp"
 #include "unwind/unwind.hpp"
+#include <mutex>
 
 class win_kernel_state;
 
@@ -84,6 +85,10 @@ private:
 	bool handle_page_fault(vcpu& cpu);
 
 	win_kernel_state& kernel_;
+
+	// Built on the first fault, from whichever cpu faults first, and only read
+	// afterwards -- so this is a build-once, not a reader/writer problem.
+	std::once_flag unwinder_once_;
 	std::unique_ptr<win_unwinder> unwinder_;
 };
 

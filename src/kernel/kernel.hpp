@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <map>
 #include <mutex>
+#include <shared_mutex>
 #include <thread>
 #include <vector>
 #include <unordered_map>
@@ -87,7 +88,7 @@ struct kernel_state
 
 	std::shared_ptr<process> find_process(const process::id_type id)
 	{
-		std::scoped_lock lock(proc_mtx_);
+		std::shared_lock lock(proc_mtx_);
 		const auto it = processes.find(id);
 		return it != processes.end() ? it->second : nullptr;
 	}
@@ -155,7 +156,7 @@ struct kernel_state
 
 protected:
 	std::shared_ptr<class emu> emu_;
-	std::mutex proc_mtx_;
+	std::shared_mutex proc_mtx_;
 	std::map<process::id_type, std::shared_ptr<process>> processes;
 	std::unordered_map<addr_t, redirect_fn> redirections_;
 };

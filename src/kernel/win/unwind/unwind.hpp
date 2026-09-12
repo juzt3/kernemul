@@ -1,4 +1,5 @@
 #pragma once
+#include <mutex>
 #include "../../../emu/defs.hpp"
 #include <cstdint>
 #include <memory>

@@ -22,6 +22,11 @@ struct win_kernel_state : kernel_state
 	active_process_list_t active_process_list;
 	emu_object<_KUSER_SHARED_DATA> kuser_shared_data;
 
+	// The two lists live in guest memory and a push_back rewrites the head and
+	// the old tail, so concurrent module loads would tangle the guest's own
+	// links. Public because win_kernel_proc appends to the module list.
+	std::mutex list_mtx_;
+
 	explicit win_kernel_state(const std::shared_ptr<class emu>& emu)
 		:	objs(*emu->default_addr_space()),
 			sys_proc(std::make_shared<win_kernel_proc>(objs.allocate_id(), *this, emu->default_addr_space()))
@@ -71,7 +76,7 @@ struct win_kernel_state : kernel_state
 
 	std::shared_ptr<process> create_process(const std::string_view name) override
 	{
-		std::scoped_lock lock(proc_mtx_);
+		std::unique_lock lock(proc_mtx_);
 		const auto id = objs.allocate_id();
 		auto& kspace = *emu_->default_addr_space();
 		const auto kusd_pa = *kspace.mmu_->virt_to_phys(kspace, kuser_shared_data_kernel_va);
@@ -94,6 +99,7 @@ private:
 		ep.UniqueProcessId = reinterpret_cast<void*>(static_cast<std::uintptr_t>(id));
 		ep.Peb = reinterpret_cast<_PEB*>(static_cast<std::uintptr_t>(peb_address));
 		std::memcpy(ep.ImageFileName, name.data(), std::min(name.size(), sizeof(ep.ImageFileName)));
+		std::scoped_lock lock(list_mtx_);
 		return active_process_list.push_back(ep);
 	}
 

@@ -14,7 +14,10 @@ std::shared_ptr<proc_module> process::add_module(const std::string_view name, co
 
 	module_add_cb(*mod);
 
-	modules_[mod->name] = mod;
+	{
+		std::unique_lock lock(modules_mtx_);
+		modules_[mod->name] = mod;
+	}
 
 	for (const auto exp : pe->exports())
 	{
@@ -32,6 +35,8 @@ std::shared_ptr<proc_module> process::add_module(const std::string_view name, co
 
 std::shared_ptr<proc_module> process::find_module(const std::string_view name) const
 {
+	std::shared_lock lock(modules_mtx_);
+
 	const auto it = modules_.find(name);
 
 	return it != modules_.end() ? it->second : nullptr;
@@ -39,6 +44,8 @@ std::shared_ptr<proc_module> process::find_module(const std::string_view name) c
 
 std::shared_ptr<proc_module> process::find_module_by_addr(const addr_t addr) const
 {
+	std::shared_lock lock(modules_mtx_);
+
 	for (const auto& mod : modules_ | std::views::values)
 		if (mod->contains_addr(addr))
 			return mod;
@@ -56,7 +63,7 @@ std::shared_ptr<thread> process::create_thread(vcpu& cpu, const addr_t start_add
 	const auto id = alloc_thread_id();
 	auto t = scheduler_->create_thread(cpu, start_addr, shared_from_this(), id);
 
-	std::scoped_lock lock(thread_mtx_);
+	std::unique_lock lock(thread_mtx_);
 	threads_[t->id()] = t;
 	return t;
 }
@@ -66,7 +73,7 @@ void process::terminate_thread(const thread_id_type id)
 	std::shared_ptr<thread> t;
 
 	{
-		std::scoped_lock lock(thread_mtx_);
+		std::unique_lock lock(thread_mtx_);
 		const auto it = threads_.find(id);
 		if (it == threads_.end())
 			return;
@@ -80,7 +87,7 @@ void process::terminate_thread(const thread_id_type id)
 
 std::shared_ptr<thread> process::find_thread(const thread_id_type id) const
 {
-	std::scoped_lock lock(thread_mtx_);
+	std::shared_lock lock(thread_mtx_);
 	const auto it = threads_.find(id);
 	return it != threads_.end() ? it->second : nullptr;
 }

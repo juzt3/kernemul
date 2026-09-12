@@ -2,7 +2,7 @@
 #include "win_obj_manager.hpp"
 
 #include <cstdint>
-#include <mutex>
+#include <shared_mutex>
 #include <optional>
 #include <unordered_map>
 
@@ -37,7 +37,8 @@ private:
 	handle_t alloc_handle();
 
 	win_obj_manager& objs_;
-	mutable std::mutex mtx_;
+	// Looked up on every call that takes a handle, written only on open/close.
+	mutable std::shared_mutex mtx_;
 	std::unordered_map<handle_t, handle_entry> handles_;
 	handle_t next_handle_ = 4;
 };

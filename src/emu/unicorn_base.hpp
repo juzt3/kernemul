@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cstring>
 #include <mutex>
+#include <shared_mutex>
 #include <stdexcept>
 #include <unordered_map>
 #include <list>
@@ -154,7 +155,7 @@ public:
 
 	void unmap_phys_mem(addr_t addr, std::size_t size, mem_prot) override
 	{
-		std::lock_guard mem_lk(mem_mtx_);
+		std::unique_lock mem_lk(mem_mtx_);
 
 		run_on_all([&] {
 			for (auto& cpu : cpus_)
@@ -166,7 +167,7 @@ public:
 
 	void read_phys_mem(addr_t addr, void* buf, std::size_t size) override
 	{
-		std::lock_guard mem_lk(mem_mtx_);
+		std::shared_lock mem_lk(mem_mtx_);
 
 		auto [src, avail] = find_backing(addr);
 		if (src)
@@ -175,7 +176,7 @@ public:
 
 	void write_phys_mem(addr_t addr, const void* buf, std::size_t size) override
 	{
-		std::lock_guard mem_lk(mem_mtx_);
+		std::shared_lock mem_lk(mem_mtx_);
 
 		auto [dst, avail] = find_backing(addr);
 		if (dst)
@@ -544,5 +545,6 @@ private:
 
 	// mem_ is host state. Pausing the engines says nothing about the other host
 	// threads walking page tables through read_phys_mem and write_phys_mem.
-	std::recursive_mutex mem_mtx_;
+	// Those two only look the region up, so they share; growing it is exclusive.
+	mutable std::shared_mutex mem_mtx_;
 };

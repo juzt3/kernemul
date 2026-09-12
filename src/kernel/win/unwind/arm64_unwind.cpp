@@ -557,14 +557,14 @@ bool arm64_unwinder::unwind_frame(
 
 addr_t arm64_unwinder::ensure_trampoline(vcpu& cpu)
 {
-	if (trampoline_)
-		return trampoline_;
+	std::call_once(trampoline_once_, [&]
+	{
+		auto& space = *cpu.curr_addr_space();
+		trampoline_ = space.alloc(0x1000, prot_rwx);
 
-	auto& space = *cpu.curr_addr_space();
-	trampoline_ = space.alloc(0x1000, prot_rwx);
-
-	cpu.emu()->hook_code(trampoline_, trampoline_,
-		[](vcpu& c, addr_t, std::size_t) { c.stop(); });
+		cpu.emu()->hook_code(trampoline_, trampoline_,
+			[](vcpu& c, addr_t, std::size_t) { c.stop(); });
+	});
 
 	return trampoline_;
 }

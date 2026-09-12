@@ -25,7 +25,7 @@ std::shared_ptr<thread> windows_process::create_thread(vcpu& cpu, const addr_t s
 	const auto id = static_cast<thread_id_type>(objs_.allocate_id());
 	auto t = scheduler_->create_thread(cpu, start_addr, shared_from_this(), id);
 
-	std::scoped_lock lock(thread_mtx_);
+	std::unique_lock lock(thread_mtx_);
 	threads_[t->id()] = t;
 	return t;
 }
@@ -44,7 +44,7 @@ std::shared_ptr<thread> win_user_proc::create_thread(vcpu& cpu, const addr_t sta
 
 	scheduler_->enqueue(cpu, t);
 
-	std::scoped_lock lock(thread_mtx_);
+	std::unique_lock lock(thread_mtx_);
 	threads_[t->id()] = t;
 	return t;
 }
@@ -86,5 +86,6 @@ void win_kernel_proc::module_add_cb(proc_module& mod)
 	entry.EntryPoint = reinterpret_cast<void*>(mod.entry_point);
 	entry.SizeOfImage = mod.size;
 
+	std::scoped_lock lock(kernel_.list_mtx_);
 	kernel_.loaded_module_list.push_back(entry);
 }

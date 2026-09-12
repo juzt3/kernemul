@@ -12,6 +12,7 @@
 #include <optional>
 #include <memory>
 #include <mutex>
+#include <shared_mutex>
 
 struct proc_module
 {
@@ -93,10 +94,13 @@ public:
 
 protected:
 	id_type id_;
+	// Read on every symbol lookup and every fault, written only when a module
+	// is mapped.
+	mutable std::shared_mutex modules_mtx_;
 	std::unordered_map<std::string_view, std::shared_ptr<proc_module>> modules_;
 	std::shared_ptr<struct addr_space> addr_space_;
 	thread_scheduler* scheduler_ = nullptr;
-	mutable std::mutex thread_mtx_;
+	mutable std::shared_mutex thread_mtx_;
 	std::map<thread_id_type, std::shared_ptr<thread>> threads_;
 
 	static inline std::atomic<thread_id_type> next_thread_id_{1};

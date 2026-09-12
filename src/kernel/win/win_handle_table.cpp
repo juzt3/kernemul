@@ -15,7 +15,7 @@ win_handle_table::handle_t win_handle_table::create_handle(addr_t body_addr, acc
 	const auto h = alloc_handle();
 
 	{
-		std::scoped_lock lock(mtx_);
+		std::unique_lock lock(mtx_);
 		handles_[h] = { body_addr, access };
 	}
 
@@ -28,7 +28,7 @@ bool win_handle_table::close_handle(handle_t handle)
 	addr_t body_addr;
 
 	{
-		std::scoped_lock lock(mtx_);
+		std::unique_lock lock(mtx_);
 		auto it = handles_.find(handle);
 		if (it == handles_.end()) return false;
 		body_addr = it->second.body_addr;
@@ -41,7 +41,7 @@ bool win_handle_table::close_handle(handle_t handle)
 
 std::optional<win_handle_table::handle_entry> win_handle_table::lookup_handle(handle_t handle) const
 {
-	std::scoped_lock lock(mtx_);
+	std::shared_lock lock(mtx_);
 	auto it = handles_.find(handle);
 	if (it == handles_.end()) return std::nullopt;
 	return it->second;
@@ -49,7 +49,7 @@ std::optional<win_handle_table::handle_entry> win_handle_table::lookup_handle(ha
 
 win_handle_table::handle_t win_handle_table::alloc_handle()
 {
-	std::scoped_lock lock(mtx_);
+	std::unique_lock lock(mtx_);
 	auto h = next_handle_;
 	next_handle_ += 4;
 	return h;
