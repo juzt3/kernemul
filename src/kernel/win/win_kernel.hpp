@@ -19,6 +19,7 @@ struct win_kernel_state : kernel_state
 	std::shared_ptr<win_kernel_proc> sys_proc;
 	loaded_module_list_t loaded_module_list;
 	active_process_list_t active_process_list;
+	emu_object<_KUSER_SHARED_DATA> kuser_shared_data;
 
 	explicit win_kernel_state(const std::shared_ptr<class emu>& emu)
 		:	objs(*emu->default_addr_space()),
@@ -56,6 +57,11 @@ struct win_kernel_state : kernel_state
 				}
 			}
 		}
+
+		space.mmu_->map_virt(space, kuser_shared_data_kernel_va,
+			sizeof(_KUSER_SHARED_DATA), prot_rw | prot_supervisor);
+		kuser_shared_data = emu_object<_KUSER_SHARED_DATA>(space, kuser_shared_data_kernel_va);
+		kuser_shared_data.write(make_default_kuser_shared_data());
 	}
 
 	void set_emulator(windows_emulator* e) { emulator_ = e; }
@@ -64,7 +70,9 @@ struct win_kernel_state : kernel_state
 	{
 		std::scoped_lock lock(proc_mtx_);
 		const auto id = objs.allocate_id();
-		auto proc = std::make_shared<win_user_proc>(id, emu_->mem()->create_addr_space(), objs, fs, name);
+		auto& kspace = *emu_->default_addr_space();
+		const auto kusd_pa = *kspace.mmu_->virt_to_phys(kspace, kuser_shared_data_kernel_va);
+		auto proc = std::make_shared<win_user_proc>(id, emu_->mem()->create_addr_space(), objs, fs, kusd_pa, name);
 		proc->set_emulator(emulator_);
 		processes[id] = proc;
 

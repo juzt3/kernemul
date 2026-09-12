@@ -15,6 +15,7 @@ public:
 	virtual ~mmu() = default;
 
 	virtual void map_virt(addr_space& space, addr_t va, std::size_t size, mem_prot prot) = 0;
+	virtual void map_virt_phys(addr_space& space, addr_t va, addr_t pa, std::size_t size, mem_prot prot) = 0;
 	virtual void unmap_virt(addr_space& space, addr_t va, std::size_t size) = 0;
 	virtual void read_virt(const addr_space& space, addr_t va, void* buf, std::size_t size) = 0;
 	virtual void write_virt(const addr_space& space, addr_t va, const void* buf, std::size_t size) = 0;

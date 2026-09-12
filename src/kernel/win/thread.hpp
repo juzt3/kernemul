@@ -1,7 +1,7 @@
 #pragma once
 #include "../thread_scheduler.hpp"
 #include "process.hpp"
-#include "eb.hpp"
+#include "user_setup.hpp"
 
 class win_thread : public thread
 {

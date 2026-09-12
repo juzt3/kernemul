@@ -4,6 +4,7 @@
 #include "string.hpp"
 #include <pe.hpp>
 
+constexpr std::wstring_view windows_dir  = L"C:\\Windows";
 constexpr std::wstring_view system32_dir = L"C:\\Windows\\System32\\";
 
 namespace win
@@ -12,9 +13,11 @@ namespace win
 inline addr_t allocate_environment_block(addr_space& space)
 {
 	std::wstring env;
-	env += L"PATH=C:\\Windows\\System32";
+	env += L"PATH=";
+	env += system32_dir;
 	env += L'\0';
-	env += L"SystemRoot=C:\\Windows";
+	env += L"SystemRoot=";
+	env += windows_dir;
 	env += L'\0';
 	env += L"TEMP=C:\\Users\\Default\\AppData\\Local\\Temp";
 	env += L'\0';

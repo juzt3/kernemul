@@ -1261,6 +1261,68 @@ typedef struct _API_SET_NAMESPACE
 
 static_assert(sizeof(_API_SET_NAMESPACE) == 0x1C);
 
+typedef struct _KSYSTEM_TIME
+{
+  /* 0x0000 */ unsigned int LowPart;
+  /* 0x0004 */ int High1Time;
+  /* 0x0008 */ int High2Time;
+} KSYSTEM_TIME; /* size: 0x000c */
+
+typedef struct _KUSER_SHARED_DATA
+{
+  /* 0x0000 */ unsigned int TickCountLowDeprecated;
+  /* 0x0004 */ unsigned int TickCountMultiplier;
+  /* 0x0008 */ _KSYSTEM_TIME InterruptTime;
+  /* 0x0014 */ _KSYSTEM_TIME SystemTime;
+  /* 0x0020 */ _KSYSTEM_TIME TimeZoneBias;
+  /* 0x002c */ unsigned short ImageNumberLow;
+  /* 0x002e */ unsigned short ImageNumberHigh;
+  /* 0x0030 */ wchar_t NtSystemRoot[260];
+  /* 0x0238 */ unsigned int MaxStackTraceDepth;
+  /* 0x023c */ unsigned int CryptoExponent;
+  /* 0x0240 */ unsigned int TimeZoneId;
+  /* 0x0244 */ unsigned int LargePageMinimum;
+  /* 0x0248 */ unsigned char _pad0[0x18];
+  /* 0x0260 */ unsigned int NtBuildNumber;
+  /* 0x0264 */ unsigned int NtProductType;
+  /* 0x0268 */ unsigned char ProductTypeIsValid;
+  /* 0x0269 */ unsigned char _pad1;
+  /* 0x026a */ unsigned short NativeProcessorArchitecture;
+  /* 0x026c */ unsigned int NtMajorVersion;
+  /* 0x0270 */ unsigned int NtMinorVersion;
+  /* 0x0274 */ unsigned char ProcessorFeatures[64];
+  /* 0x02b4 */ unsigned char _pad2[0x34];
+  /* 0x02e8 */ unsigned int NumberOfPhysicalPages;
+  /* 0x02ec */ unsigned char _pad3[0x34];
+  /* 0x0320 */ unsigned __int64 TickCountQuad;
+  /* 0x0328 */ unsigned char _pad4[0x08];
+  /* 0x0330 */ unsigned int Cookie;
+  /* 0x0334 */ unsigned char _pad5[0x8c];
+  /* 0x03c0 */ unsigned int ActiveProcessorCount;
+  /* 0x03c4 */ unsigned char ActiveGroupCount;
+  /* 0x03c5 */ unsigned char _pad6[0x35b];
+} KUSER_SHARED_DATA; /* size: 0x0720 */
+
+
+static_assert(sizeof(_KUSER_SHARED_DATA) == 0x720);
+static_assert(sizeof(_KSYSTEM_TIME) == 0x0C);
+static_assert(offsetof(_KUSER_SHARED_DATA, TickCountMultiplier) == 0x04);
+static_assert(offsetof(_KUSER_SHARED_DATA, SystemTime) == 0x14);
+static_assert(offsetof(_KUSER_SHARED_DATA, ImageNumberLow) == 0x2C);
+static_assert(offsetof(_KUSER_SHARED_DATA, NtSystemRoot) == 0x30);
+static_assert(offsetof(_KUSER_SHARED_DATA, LargePageMinimum) == 0x244);
+static_assert(offsetof(_KUSER_SHARED_DATA, NtBuildNumber) == 0x260);
+static_assert(offsetof(_KUSER_SHARED_DATA, NtProductType) == 0x264);
+static_assert(offsetof(_KUSER_SHARED_DATA, ProductTypeIsValid) == 0x268);
+static_assert(offsetof(_KUSER_SHARED_DATA, NativeProcessorArchitecture) == 0x26A);
+static_assert(offsetof(_KUSER_SHARED_DATA, NtMajorVersion) == 0x26C);
+static_assert(offsetof(_KUSER_SHARED_DATA, NtMinorVersion) == 0x270);
+static_assert(offsetof(_KUSER_SHARED_DATA, NumberOfPhysicalPages) == 0x2E8);
+static_assert(offsetof(_KUSER_SHARED_DATA, TickCountQuad) == 0x320);
+static_assert(offsetof(_KUSER_SHARED_DATA, Cookie) == 0x330);
+static_assert(offsetof(_KUSER_SHARED_DATA, ActiveProcessorCount) == 0x3C0);
+static_assert(offsetof(_KUSER_SHARED_DATA, ActiveGroupCount) == 0x3C4);
+
 static_assert(sizeof(_CURDIR64) == 0x18);
 static_assert(sizeof(_RTL_USER_PROCESS_PARAMETERS64) == 0x88);
 static_assert(offsetof(_RTL_USER_PROCESS_PARAMETERS64, ConsoleHandle) == 0x10);

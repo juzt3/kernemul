@@ -1,6 +1,33 @@
 #pragma once
 #include "../../emu/object.hpp"
-#include "types.hpp"
+#include "process_params.hpp"
+#include <cwchar>
+
+constexpr std::uint64_t kuser_shared_data_user_va   = 0x7FFE0000;
+constexpr std::uint64_t kuser_shared_data_kernel_va  = 0xFFFFF78000000000;
+
+inline _KUSER_SHARED_DATA make_default_kuser_shared_data()
+{
+	_KUSER_SHARED_DATA sd{};
+
+	sd.NtMajorVersion = 10;
+	sd.NtMinorVersion = 0;
+	sd.NtBuildNumber = 19045;
+	sd.NtProductType = 1;
+	sd.ProductTypeIsValid = 1;
+	sd.NativeProcessorArchitecture = 9;
+	sd.ImageNumberLow = 0x8664;
+	sd.ImageNumberHigh = 0x8664;
+	sd.ActiveProcessorCount = 1;
+	sd.ActiveGroupCount = 1;
+	sd.NumberOfPhysicalPages = 0x100000;
+	sd.LargePageMinimum = 0x200000;
+	sd.TickCountMultiplier = 0x0FA00000;
+
+	std::wcscpy(sd.NtSystemRoot, windows_dir.data());
+
+	return sd;
+}
 
 inline _PEB64 make_default_peb()
 {

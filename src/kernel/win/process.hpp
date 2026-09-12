@@ -1,7 +1,7 @@
 #pragma once
 #include "../process.hpp"
 #include "win_handle_table.hpp"
-#include "eb.hpp"
+#include "user_setup.hpp"
 #include "ldr.hpp"
 #include "process_params.hpp"
 
@@ -33,7 +33,8 @@ class win_user_proc : public windows_process
 {
 public:
 	win_user_proc(id_type id, std::shared_ptr<struct addr_space> space,
-		win_obj_manager& objs, const win_filesystem& fs, std::string_view name)
+		win_obj_manager& objs, const win_filesystem& fs,
+		addr_t shared_data_pa, std::string_view name)
 		:	windows_process(id, std::move(space), objs)
 	{
 		auto& sp = *addr_space_;
@@ -46,6 +47,9 @@ public:
 		ldr_ = ldr_module_list(sp, ldr_addr);
 
 		params_ = win::init_process_parameters(sp, name);
+
+		sp.mmu_->map_virt_phys(sp, kuser_shared_data_user_va, shared_data_pa,
+			sizeof(_KUSER_SHARED_DATA), prot_read);
 
 		auto peb = peb_.read();
 		peb.Ldr = ldr_addr;

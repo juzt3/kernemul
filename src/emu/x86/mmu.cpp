@@ -161,6 +161,22 @@ void mmu::map_virt(::addr_space& space, addr_t va, std::size_t size, mem_prot pr
 	flush_all_tlb();
 }
 
+void mmu::map_virt_phys(::addr_space& space, addr_t va, addr_t pa, std::size_t size, mem_prot prot)
+{
+	auto& s = as_x86(space);
+	std::lock_guard lk(mtx_);
+
+	const bool user = !(prot & prot_supervisor);
+	const addr_t start = page_align(va);
+	const addr_t pa_start = page_align(pa);
+	const std::size_t aligned = size_align(size);
+
+	for (std::size_t off = 0; off < aligned; off += page_size())
+		map_page(s, start + off, pa_start + off, user);
+
+	flush_all_tlb();
+}
+
 void mmu::unmap_virt(::addr_space& space, addr_t va, std::size_t size)
 {
 	auto& s = as_x86(space);

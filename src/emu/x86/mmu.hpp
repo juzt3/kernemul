@@ -11,6 +11,7 @@ namespace x86
 		std::size_t page_size() const override { return 0x1000; }
 
 		void map_virt(::addr_space& space, addr_t va, std::size_t size, mem_prot prot) override;
+		void map_virt_phys(::addr_space& space, addr_t va, addr_t pa, std::size_t size, mem_prot prot) override;
 		void unmap_virt(::addr_space& space, addr_t va, std::size_t size) override;
 		void read_virt(const ::addr_space& space, addr_t va, void* buf, std::size_t size) override;
 		void write_virt(const ::addr_space& space, addr_t va, const void* buf, std::size_t size) override;
