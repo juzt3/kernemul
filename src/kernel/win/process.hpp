@@ -33,7 +33,7 @@ class win_user_proc : public windows_process
 {
 public:
 	win_user_proc(id_type id, std::shared_ptr<struct addr_space> space,
-		win_obj_manager& objs, std::string_view name)
+		win_obj_manager& objs, const win_filesystem& fs, std::string_view name)
 		:	windows_process(id, std::move(space), objs)
 	{
 		auto& sp = *addr_space_;
@@ -50,6 +50,7 @@ public:
 		auto peb = peb_.read();
 		peb.Ldr = ldr_addr;
 		peb.ProcessParameters = params_.address();
+		peb.ApiSetMap = win::init_api_set_map(sp, fs);
 		peb_.write(peb);
 	}
 

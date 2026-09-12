@@ -64,7 +64,7 @@ struct win_kernel_state : kernel_state
 	{
 		std::scoped_lock lock(proc_mtx_);
 		const auto id = objs.allocate_id();
-		auto proc = std::make_shared<win_user_proc>(id, emu_->mem()->create_addr_space(), objs, name);
+		auto proc = std::make_shared<win_user_proc>(id, emu_->mem()->create_addr_space(), objs, fs, name);
 		proc->set_emulator(emulator_);
 		processes[id] = proc;
 

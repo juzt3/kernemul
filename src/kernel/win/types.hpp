@@ -1248,6 +1248,19 @@ typedef struct _RTL_USER_PROCESS_PARAMETERS64
 
 constexpr std::size_t rtl_user_process_parameters64_alloc_size = 0x448;
 
+typedef struct _API_SET_NAMESPACE
+{
+  /* 0x0000 */ unsigned int Version;
+  /* 0x0004 */ unsigned int Size;
+  /* 0x0008 */ unsigned int Flags;
+  /* 0x000c */ unsigned int Count;
+  /* 0x0010 */ unsigned int EntryOffset;
+  /* 0x0014 */ unsigned int HashOffset;
+  /* 0x0018 */ unsigned int HashFactor;
+} API_SET_NAMESPACE; /* size: 0x001c */
+
+static_assert(sizeof(_API_SET_NAMESPACE) == 0x1C);
+
 static_assert(sizeof(_CURDIR64) == 0x18);
 static_assert(sizeof(_RTL_USER_PROCESS_PARAMETERS64) == 0x88);
 static_assert(offsetof(_RTL_USER_PROCESS_PARAMETERS64, ConsoleHandle) == 0x10);
