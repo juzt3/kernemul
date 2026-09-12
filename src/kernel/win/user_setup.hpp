@@ -13,7 +13,7 @@ inline _KUSER_SHARED_DATA make_default_kuser_shared_data()
 	sd.NtMajorVersion = 10;
 	sd.NtMinorVersion = 0;
 	sd.NtBuildNumber = 19045;
-	sd.NtProductType = 1;
+	sd.NtProductType = NtProductWinNt;
 	sd.ProductTypeIsValid = 1;
 	sd.NativeProcessorArchitecture = 9;
 	sd.ImageNumberLow = 0x8664;

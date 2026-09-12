@@ -38,25 +38,25 @@ inline std::wstring_view dir_from_path(std::wstring_view path)
 	return pos != std::wstring_view::npos ? path.substr(0, pos + 1) : path;
 }
 
-inline emu_object<_RTL_USER_PROCESS_PARAMETERS64> init_process_parameters(
+inline emu_object<_RTL_USER_PROCESS_PARAMETERS> init_process_parameters(
 	win_user_mem& mem, std::wstring_view image_path)
 {
-	const auto addr = mem.alloc(rtl_user_process_parameters64_alloc_size, prot_rw);
+	const auto addr = mem.alloc(sizeof(_RTL_USER_PROCESS_PARAMETERS), prot_rw);
 	const auto current_dir = dir_from_path(image_path);
 
-	_RTL_USER_PROCESS_PARAMETERS64 params{};
-	params.MaximumLength = rtl_user_process_parameters64_alloc_size;
-	params.Length = sizeof(_RTL_USER_PROCESS_PARAMETERS64);
+	_RTL_USER_PROCESS_PARAMETERS params{};
+	params.MaximumLength = sizeof(_RTL_USER_PROCESS_PARAMETERS);
+	params.Length = sizeof(_RTL_USER_PROCESS_PARAMETERS);
 	params.Flags = 0x6001;
-	params.ConsoleHandle = ~0ULL;
+	params.ConsoleHandle = guest_ptr(~0ULL);
 
-	params.CurrentDirectory.DosPath = init_unicode_string64(mem, current_dir);
-	params.DllPath = init_unicode_string64(mem, system32_dir);
-	params.ImagePathName = init_unicode_string64(mem, image_path);
-	params.CommandLine = init_unicode_string64(mem, image_path);
-	params.Environment = allocate_environment_block(mem);
+	params.CurrentDirectory.DosPath = init_unicode_string(mem, current_dir);
+	params.DllPath = init_unicode_string(mem, system32_dir);
+	params.ImagePathName = init_unicode_string(mem, image_path);
+	params.CommandLine = init_unicode_string(mem, image_path);
+	params.Environment = guest_ptr(allocate_environment_block(mem));
 
-	auto obj = emu_object<_RTL_USER_PROCESS_PARAMETERS64>(mem.space(), addr);
+	auto obj = emu_object<_RTL_USER_PROCESS_PARAMETERS>(mem.space(), addr);
 	obj.write(params);
 	return obj;
 }

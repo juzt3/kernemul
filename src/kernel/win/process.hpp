@@ -53,7 +53,7 @@ public:
 		peb_ = emu_object<_PEB64>(sp, peb_addr);
 		peb_.write(make_default_peb());
 
-		const auto ldr_addr = mem_.alloc(peb_ldr_data64_alloc_size, prot_rw);
+		const auto ldr_addr = mem_.alloc(sizeof(_PEB_LDR_DATA), prot_rw);
 		ldr_ = ldr_module_list(mem_, ldr_addr);
 
 		params_ = win::init_process_parameters(mem_, wide_path);
@@ -83,7 +83,7 @@ public:
 private:
 	win_user_mem mem_;
 	ldr_module_list ldr_;
-	emu_object<_RTL_USER_PROCESS_PARAMETERS64> params_;
+	emu_object<_RTL_USER_PROCESS_PARAMETERS> params_;
 	std::string current_dir_;
 };
 
