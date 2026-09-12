@@ -45,6 +45,18 @@ public:
 	virtual std::shared_ptr<vcpu> add_vcpu() = 0;
 	virtual std::shared_ptr<thread> create_kernel_thread(vcpu& cpu, addr_t start_addr) = 0;
 
+	// The machine's cpus. Each needs a host thread of its own to run anything.
+	void create_vcpus(const std::size_t count)
+	{
+		for (std::size_t i = 0; i < count; ++i)
+			add_vcpu();
+	}
+
+	[[nodiscard]] std::span<const std::shared_ptr<vcpu>> cpus() const noexcept
+	{
+		return emu_->cpus();
+	}
+
 protected:
 	std::shared_ptr<class emu> emu_;
 	std::shared_ptr<os_exception> excp_;

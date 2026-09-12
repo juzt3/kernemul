@@ -50,7 +50,10 @@ int main()
 		return 1;
 	}
 
-	auto cpu = win.add_vcpu();
+	constexpr std::size_t vcpu_count = 4;
+	win.create_vcpus(vcpu_count);
+
+	auto cpu = win.cpus().front();
 
 	// DriverEntry runs as a system thread like any other, so the scheduler owns
 	// its stack and the return address that says it is done.
