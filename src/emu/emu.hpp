@@ -16,8 +16,8 @@ struct calling_conv;
 class vcpu
 {
 public:
-	vcpu(emu* const emu, std::shared_ptr<const arch> arch)
-		:	emu_(emu), arch_(std::move(arch)) { }
+	vcpu(emu* const emu, std::shared_ptr<const arch> arch, const std::size_t id)
+		:	emu_(emu), arch_(std::move(arch)), id_(id) { }
 
 	virtual ~vcpu() = default;
 
@@ -63,6 +63,9 @@ public:
 
 	[[nodiscard]] class emu* emu() const noexcept { return emu_; }
 
+	// Position in emu::cpus(), fixed when the cpu is added.
+	[[nodiscard]] std::size_t id() const noexcept { return id_; }
+
 	[[nodiscard]] std::shared_ptr<thread> thread() const noexcept { return thread_; }
 	void set_thread(std::shared_ptr<class thread> t) { thread_ = std::move(t); }
 
@@ -100,6 +103,7 @@ protected:
 	class emu* emu_;
 	std::shared_ptr<const struct arch> arch_;
 	std::shared_ptr<class thread> thread_;
+	const std::size_t id_;
 };
 
 enum class hook_insn_t : std::uint8_t
@@ -160,7 +164,7 @@ public:
 
 	[[nodiscard]] std::shared_ptr<vcpu> add_vcpu()
 	{
-		auto cpu = create_vcpu();
+		auto cpu = create_vcpu(cpus_.size());
 		cpus_.push_back(cpu);
 
 		if (arch_)
@@ -208,7 +212,7 @@ public:
 	}
 
 protected:
-	virtual std::shared_ptr<vcpu> create_vcpu() = 0;
+	virtual std::shared_ptr<vcpu> create_vcpu(std::size_t id) = 0;
 
 	std::shared_ptr<struct arch> arch_;
 	std::vector<std::shared_ptr<vcpu>> cpus_;

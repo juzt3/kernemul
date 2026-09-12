@@ -28,8 +28,9 @@ struct unicorn_hook : emu_hook
 class unicorn_vcpu_base : public vcpu
 {
 public:
-	unicorn_vcpu_base(class emu* e, std::shared_ptr<const struct arch> arch, uc_engine* uc)
-		:	vcpu(e, std::move(arch)), uc_(uc) { }
+	unicorn_vcpu_base(class emu* e, std::shared_ptr<const struct arch> arch, uc_engine* uc,
+		const std::size_t id)
+		:	vcpu(e, std::move(arch), id), uc_(uc) { }
 
 	~unicorn_vcpu_base() override
 	{
@@ -198,7 +199,7 @@ protected:
 	virtual uc_engine* open_engine() = 0;
 
 	// Wrap it in the vcpu type that knows this architecture's registers.
-	virtual std::shared_ptr<unicorn_vcpu_base> wrap_engine(uc_engine* uc) = 0;
+	virtual std::shared_ptr<unicorn_vcpu_base> wrap_engine(uc_engine* uc, std::size_t id) = 0;
 
 	// The UC_<arch>_INS_* value for an instruction hook, or -1 if the
 	// architecture cannot hook that instruction.
@@ -214,7 +215,7 @@ protected:
 	// to hand the callback the instruction's own address.
 	virtual addr_t insn_as_intr_len() const { return 0; }
 
-	std::shared_ptr<vcpu> create_vcpu() final
+	std::shared_ptr<vcpu> create_vcpu(const std::size_t id) final
 	{
 		uc_engine* uc = open_engine();
 
@@ -227,7 +228,7 @@ protected:
 		// Use the CPU's own MMU, so the guest page tables are actually walked.
 		uc_ctl_tlb_mode(uc, UC_TLB_CPU);
 
-		return wrap_engine(uc);
+		return wrap_engine(uc, id);
 	}
 
 private:

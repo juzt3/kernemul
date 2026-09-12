@@ -172,9 +172,9 @@ protected:
 		return uc;
 	}
 
-	std::shared_ptr<unicorn_vcpu_base> wrap_engine(uc_engine* uc) override
+	std::shared_ptr<unicorn_vcpu_base> wrap_engine(uc_engine* uc, const std::size_t id) override
 	{
-		return std::make_shared<x86_unicorn_vcpu>(this, arch_, uc);
+		return std::make_shared<x86_unicorn_vcpu>(this, arch_, uc, id);
 	}
 
 	int to_uc_insn(hook_insn_t insn) const override
