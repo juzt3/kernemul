@@ -63,6 +63,12 @@ public:
 		{
 			auto pc = reg<addr_t>(arch_->pc());
 
+			// run_on_all only waits for the cpus that were executing when it
+			// looked. Starting now would have it flush this cpu's tlb, or remap
+			// its memory, while it runs. Before running_, or it would be
+			// waiting on a cpu that is waiting on it.
+			while (pending_pause_.load()) {}
+
 			// A nested run executes guest code, so for its duration this cpu is
 			// not at a hook's safe point, whatever the hook around it says.
 			const auto hooks = in_hook_.exchange(0);
@@ -192,6 +198,41 @@ public:
 		auto [dst, avail] = find_backing(addr);
 		if (dst)
 			std::memcpy(dst, buf, std::min(size, avail));
+	}
+
+	// Runs fn with no cpu executing guest code. A cpu inside a hook already
+	// qualifies: it is asked to pause, which its hook waits on before returning,
+	// and it is neither stopped nor waited for. That is what lets a hook itself
+	// call in here -- stopping it would end the run it is in the middle of, and
+	// waiting for it would be waiting on the caller.
+	void run_on_all(const std::function<void()>& fn) override
+	{
+		std::lock_guard lk(op_mtx_);
+
+		for (auto& cpu : cpus_)
+			static_cast<unicorn_vcpu_base*>(cpu.get())->pending_pause_ = true;
+
+		for (auto& cpu : cpus_)
+		{
+			auto* uc = static_cast<unicorn_vcpu_base*>(cpu.get());
+
+			if (!uc->in_hook_.load())
+				uc->stop();
+		}
+
+		// in_hook_ is re-read every time round: a cpu that was executing when
+		// it was stopped can still enter a hook before it gets there, and would
+		// then be parked on the way out with running_ never clearing.
+		for (auto& cpu : cpus_)
+		{
+			auto* uc = static_cast<unicorn_vcpu_base*>(cpu.get());
+			while (uc->running_.load() && !uc->in_hook_.load()) {}
+		}
+
+		fn();
+
+		for (auto& cpu : cpus_)
+			static_cast<unicorn_vcpu_base*>(cpu.get())->pending_pause_ = false;
 	}
 
 	hook_handle hook_mem(addr_t start_addr, addr_t end_addr, mem_prot prot, mem_hk_cb cb) override
@@ -515,40 +556,6 @@ private:
 		return { nullptr, 0 };
 	}
 
-	// Runs fn with no cpu executing guest code. A cpu inside a hook already
-	// qualifies: it is asked to pause, which its hook waits on before returning,
-	// and it is neither stopped nor waited for. That is what lets a hook itself
-	// call in here -- stopping it would end the run it is in the middle of, and
-	// waiting for it would be waiting on the caller.
-	void run_on_all(std::function<void()> fn)
-	{
-		std::lock_guard lk(op_mtx_);
-
-		for (auto& cpu : cpus_)
-			static_cast<unicorn_vcpu_base*>(cpu.get())->pending_pause_ = true;
-
-		for (auto& cpu : cpus_)
-		{
-			auto* uc = static_cast<unicorn_vcpu_base*>(cpu.get());
-
-			if (!uc->in_hook_.load())
-				uc->stop();
-		}
-
-		// in_hook_ is re-read every time round: a cpu that was executing when
-		// it was stopped can still enter a hook before it gets there, and would
-		// then be parked on the way out with running_ never clearing.
-		for (auto& cpu : cpus_)
-		{
-			auto* uc = static_cast<unicorn_vcpu_base*>(cpu.get());
-			while (uc->running_.load() && !uc->in_hook_.load()) {}
-		}
-
-		fn();
-
-		for (auto& cpu : cpus_)
-			static_cast<unicorn_vcpu_base*>(cpu.get())->pending_pause_ = false;
-	}
 
 	std::unordered_map<addr_t, std::vector<std::uint8_t>> mem_;
 	std::list<unicorn_hook> hooks_;

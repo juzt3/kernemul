@@ -95,8 +95,13 @@ void mmu::switch_to(vcpu& cpu, std::shared_ptr<::addr_space> space)
 
 void mmu::flush_all_tlb()
 {
-	for (auto& cpu : emu_->cpus())
-		cpu->flush_tlb();
+	// A cpu reads its tlb on every access, and uc_ctl_flush_tlb rewrites it, so
+	// flushing one that is running corrupts it under the cpu.
+	emu_->run_on_all([&]
+	{
+		for (auto& cpu : emu_->cpus())
+			cpu->flush_tlb();
+	});
 }
 
 std::uint64_t mmu::page_attrs(const mem_prot prot)

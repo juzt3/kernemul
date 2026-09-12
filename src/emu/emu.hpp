@@ -194,6 +194,10 @@ public:
 	virtual hook_handle hook_exception(exception_hk_cb) = 0;
 	virtual void remove_hook(hook_handle handle) = 0;
 
+	// Run fn with no cpu executing guest code, for anything a cpu would trip
+	// over being changed underneath it.
+	virtual void run_on_all(const std::function<void()>& fn) { fn(); }
+
 	virtual void map_phys_mem(addr_t addr, std::size_t size, mem_prot prot) = 0;
 	virtual void unmap_phys_mem(addr_t addr, std::size_t size, mem_prot prot) = 0;
 	virtual void read_phys_mem(addr_t addr, void* buf, std::size_t size) = 0;
