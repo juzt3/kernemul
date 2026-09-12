@@ -63,11 +63,9 @@ int main()
 	conv->set_arg(*cpu, *entry, 0, 0);
 	conv->set_arg(*cpu, *entry, 1, 0);
 
-	// There is no scheduler loop yet, so the one thread is dispatched by hand.
-	win.scheduler().schedule(*cpu);
-	cpu->run();
+	win.run_all();
 
-	LOG_INFO("driver returned, status=0x{:X}", conv->read_ret(*cpu));
+	LOG_INFO("driver returned, status=0x{:X}", conv->read_ret(*cpu, *entry));
 
 	return 0;
 }

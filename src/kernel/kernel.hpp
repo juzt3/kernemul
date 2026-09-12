@@ -10,6 +10,8 @@
 #include <filesystem>
 #include <map>
 #include <mutex>
+#include <thread>
+#include <vector>
 #include <unordered_map>
 
 using redirect_fn = std::function<void(vcpu&)>;
@@ -55,6 +57,20 @@ public:
 	[[nodiscard]] std::span<const std::shared_ptr<vcpu>> cpus() const noexcept
 	{
 		return emu_->cpus();
+	}
+
+	// Give every cpu a host thread of its own and let the scheduler spread the
+	// guest's threads over them. Returns once they have all run out of work.
+	void run_all()
+	{
+		std::vector<std::thread> hosts;
+		hosts.reserve(cpus().size());
+
+		for (const auto& cpu : cpus())
+			hosts.emplace_back([this, cpu] { scheduler_.run(*cpu); });
+
+		for (auto& host : hosts)
+			host.join();
 	}
 
 protected:

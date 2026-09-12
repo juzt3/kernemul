@@ -1,9 +1,11 @@
 #pragma once
 #include "../emu/calling_conv.hpp"
 #include "../emu/emu.hpp"
+#include "../util/log.hpp"
 #include "process.hpp"
 #include <algorithm>
 #include <chrono>
+#include <condition_variable>
 #include <cstring>
 #include <deque>
 #include <memory>
@@ -126,65 +128,165 @@ public:
 		// Where the start routine returns to, which is how a cpu sees it finish.
 		cpu.emu()->call_conv()->set_ret_addr(cpu, *t, t->proc()->thread_exit_addr());
 
-		std::scoped_lock lock(mtx_);
-		ready_queue_.push_back(std::move(t));
+		{
+			std::scoped_lock lock(mtx_);
+			ready_queue_.push_back(std::move(t));
+		}
+
+		cv_.notify_one();
 	}
 
 	void remove(const thread::id_type id)
 	{
-		std::scoped_lock lock(mtx_);
-		std::erase_if(ready_queue_, [id](const auto& t) { return t->id() == id; });
+		{
+			std::scoped_lock lock(mtx_);
+			std::erase_if(ready_queue_, [id](const auto& t) { return t->id() == id; });
+		}
+
+		cv_.notify_all();
 	}
 
+	// Bring every cpu's loop down, whether or not threads are left.
+	void stop()
+	{
+		{
+			std::scoped_lock lock(mtx_);
+			stopped_ = true;
+		}
+
+		cv_.notify_all();
+	}
+
+	// A cpu's scheduling loop. It returns only once every thread everywhere has
+	// finished: a cpu with nothing to do waits instead, since a thread running
+	// on another cpu can create more work at any point.
+	void run(vcpu& cpu)
+	{
+		std::shared_ptr<thread> curr;
+
+		for (;;)
+		{
+			curr = schedule(cpu, std::move(curr));
+
+			if (!curr)
+				break;
+
+			cpu.run();
+			curr->save(cpu);
+
+			if (!curr->is_finished())
+			{
+				// A hook halted the cpu -- an unimplemented function, say.
+				// Nothing else can stop a thread short of its start routine
+				// returning, and rescheduling would spin on the same address.
+				LOG_ERR("cpu {} halted at 0x{:X} in thread {}", cpu.id(), cpu.pc(), curr->id());
+				stop();
+				break;
+			}
+
+			release(cpu);
+			curr->proc()->terminate_thread(curr->id());
+			curr = nullptr;
+		}
+
+		release(cpu);
+	}
+
+	// The next thread for this cpu, or nothing at all once the machine is done.
+	// Waits while other cpus still hold threads that could produce more.
 	std::shared_ptr<thread> schedule(vcpu& cpu, std::shared_ptr<thread> prev = nullptr)
 	{
-		std::scoped_lock lock(mtx_);
+		std::unique_lock lock(mtx_);
 
 		if (prev)
 		{
 			prev->save(cpu);
 			ready_queue_.push_back(std::move(prev));
+			cv_.notify_one();
 		}
 
-		if (ready_queue_.empty())
-			return nullptr;
-
-		for (auto it = ready_queue_.begin(); it != ready_queue_.end(); ++it)
+		for (;;)
 		{
-			if (!(*it)->is_sleeping())
+			if (stopped_ || nothing_left(cpu))
+				return nullptr;
+
+			const auto it = std::ranges::find_if(ready_queue_,
+				[](const auto& t) { return !t->is_sleeping(); });
+
+			if (it != ready_queue_.end())
 			{
 				auto next = *it;
 				ready_queue_.erase(it);
-				run_on(cpu, next);
+
+				// Off the queue and onto a cpu in one step, so no other cpu can
+				// see the thread as gone from both. The cpu has to know which
+				// thread it runs anyway: the exit stub's redirect has no other
+				// way to tell who returned.
+				cpu.set_thread(next);
+				lock.unlock();
+
+				resume(cpu, *next);
 				return next;
 			}
+
+			// Every thread is either on another cpu or asleep. Waiting drops the
+			// lock, so whoever holds them can get back in to requeue or retire.
+			if (ready_queue_.empty())
+			{
+				cv_.wait(lock);
+			}
+			else
+			{
+				const auto earliest = std::ranges::min_element(ready_queue_, {},
+					[](const auto& t) { return t->sleep_until(); });
+
+				cv_.wait_until(lock, (*earliest)->sleep_until());
+			}
 		}
-
-		auto earliest = std::min_element(ready_queue_.begin(), ready_queue_.end(),
-			[](const auto& a, const auto& b) { return a->sleep_until() < b->sleep_until(); });
-
-		std::this_thread::sleep_until((*earliest)->sleep_until());
-
-		auto next = *earliest;
-		ready_queue_.erase(earliest);
-		run_on(cpu, next);
-		return next;
 	}
 
 private:
-	// Hand the thread to the cpu. It has to know which one it is running: the
-	// exit page's hook has no other way to tell who returned.
-	static void run_on(vcpu& cpu, const std::shared_ptr<thread>& t)
+	// Put the thread's context on the cpu. Page tables are not part of that
+	// context and processes share none of them, so the cpu follows the thread
+	// into its own address space.
+	static void resume(vcpu& cpu, const thread& t)
 	{
-		// Page tables are not part of a thread's context and processes share
-		// none of them, so the cpu follows the thread into its own space.
-		if (const auto space = t->proc()->addr_space(); cpu.curr_addr_space() != space)
+		if (const auto space = t.proc()->addr_space(); cpu.curr_addr_space() != space)
 			cpu.emu()->mem()->switch_to(cpu, space);
 
-		t->restore(cpu);
-		cpu.set_thread(t);
+		t.restore(cpu);
+	}
+
+	// The cpu stops holding a thread, which is what lets the others finish.
+	void release(vcpu& cpu)
+	{
+		{
+			std::scoped_lock lock(mtx_);
+			cpu.set_thread(nullptr);
+		}
+
+		cv_.notify_all();
+	}
+
+	// A thread is either queued or running on some cpu, so with none of either
+	// left there is nothing to wait for: only a running thread creates threads.
+	// Called with the lock held, which is what makes the two halves agree.
+	bool nothing_left(vcpu& cpu) const
+	{
+		if (!ready_queue_.empty())
+			return false;
+
+		for (const auto& c : cpu.emu()->cpus())
+		{
+			if (c->thread())
+				return false;
+		}
+
+		return true;
 	}
 
 	std::deque<std::shared_ptr<thread>> ready_queue_;
 	mutable std::mutex mtx_;
+	std::condition_variable cv_;
+	bool stopped_ = false;
 };
