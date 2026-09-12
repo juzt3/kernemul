@@ -176,6 +176,11 @@ private:
 	// exit page's hook has no other way to tell who returned.
 	static void run_on(vcpu& cpu, const std::shared_ptr<thread>& t)
 	{
+		// Page tables are not part of a thread's context and processes share
+		// none of them, so the cpu follows the thread into its own space.
+		if (const auto space = t->proc()->addr_space(); cpu.curr_addr_space() != space)
+			cpu.emu()->mem()->switch_to(cpu, space);
+
 		t->restore(cpu);
 		cpu.set_thread(t);
 	}
