@@ -51,6 +51,7 @@ public:
 		peb.Ldr = ldr_addr;
 		peb.ProcessParameters = params_.address();
 		peb.ApiSetMap = win::init_api_set_map(sp, fs);
+		peb.GdiSharedHandleTable = sp.alloc(0x1000, prot_rw);
 		peb_.write(peb);
 	}
 
