@@ -2,9 +2,23 @@
 #include "thread.hpp"
 #include "win_kernel.hpp"
 #include "../thread_scheduler.hpp"
+#include "../../util/log.hpp"
 
 win_kernel_proc::win_kernel_proc(id_type id, win_kernel_state& kernel, std::shared_ptr<struct addr_space> space)
 	:	windows_process(id, std::move(space), kernel.objs, kernel.fs), kernel_(kernel) {}
+
+addr_t windows_process::find_symbol(const std::string_view mod_name,
+	const std::string_view sym) const
+{
+	if (const auto mod = find_module(mod_name))
+	{
+		if (const auto addr = mod->find_symbol(sym))
+			return *addr;
+	}
+
+	LOG_ERR("{}!{} not found", mod_name, sym);
+	return 0;
+}
 
 std::shared_ptr<thread> windows_process::create_thread(vcpu& cpu, const addr_t start_addr)
 {
@@ -28,7 +42,7 @@ std::shared_ptr<thread> win_user_proc::create_thread(vcpu& cpu, const addr_t sta
 
 	emulator_->init_thread_teb(*t, cpu, t->teb().address());
 
-	scheduler_->enqueue(t);
+	scheduler_->enqueue(cpu, t);
 
 	std::scoped_lock lock(thread_mtx_);
 	threads_[t->id()] = t;

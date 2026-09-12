@@ -10,6 +10,11 @@
 struct win_kernel_state;
 class windows_emulator;
 
+// The stub a thread's start routine returns to. ntdll exports its one;
+// ntoskrnl's is internal, so that one needs the ntoskrnl PDB.
+constexpr std::string_view kernel_thread_startup = "PspSystemThreadStartup";
+constexpr std::string_view user_thread_startup   = "RtlUserThreadStart";
+
 class windows_process : public process
 {
 public:
@@ -28,6 +33,9 @@ public:
 	void set_emulator(windows_emulator* e) { emulator_ = e; }
 
 protected:
+	// 0 if the module is not mapped or has no such symbol, logging either way.
+	addr_t find_symbol(std::string_view mod_name, std::string_view sym) const;
+
 	win_obj_manager& objs_;
 	win_handle_table handle_table_;
 	emu_object<_PEB64> peb_;
@@ -77,6 +85,11 @@ public:
 
 	std::shared_ptr<thread> create_thread(vcpu& cpu, addr_t start_addr) override;
 
+	addr_t thread_exit_addr() const override
+	{
+		return find_symbol("ntdll.dll", user_thread_startup);
+	}
+
 	win_user_mem& mem() { return mem_; }
 	const win_user_mem& mem() const { return mem_; }
 
@@ -91,6 +104,11 @@ class win_kernel_proc : public windows_process
 {
 public:
 	win_kernel_proc(id_type id, win_kernel_state& kernel, std::shared_ptr<struct addr_space> space);
+
+	addr_t thread_exit_addr() const override
+	{
+		return find_symbol("ntoskrnl.exe", kernel_thread_startup);
+	}
 
 	void module_add_cb(proc_module& mod) override;
 

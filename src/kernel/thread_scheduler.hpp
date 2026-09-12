@@ -1,4 +1,5 @@
 #pragma once
+#include "../emu/calling_conv.hpp"
 #include "../emu/emu.hpp"
 #include "process.hpp"
 #include <algorithm>
@@ -114,13 +115,17 @@ public:
 		const addr_t stack_top = stack_base + process::default_stack_size - process::stack_reserve;
 		auto t = std::make_shared<thread>(id, std::move(proc), start_addr, stack_top, cpu);
 
-		std::scoped_lock lock(mtx_);
-		ready_queue_.push_back(t);
+		enqueue(cpu, t);
 		return t;
 	}
 
-	void enqueue(std::shared_ptr<thread> t)
+	// Admit a thread built elsewhere: a user thread needs a TEB and a stack in
+	// its own process, so win_user_proc builds its own.
+	void enqueue(vcpu& cpu, std::shared_ptr<thread> t)
 	{
+		// Where the start routine returns to, which is how a cpu sees it finish.
+		cpu.emu()->call_conv()->set_ret_addr(cpu, *t, t->proc()->thread_exit_addr());
+
 		std::scoped_lock lock(mtx_);
 		ready_queue_.push_back(std::move(t));
 	}
@@ -150,7 +155,7 @@ public:
 			{
 				auto next = *it;
 				ready_queue_.erase(it);
-				next->restore(cpu);
+				run_on(cpu, next);
 				return next;
 			}
 		}
@@ -162,11 +167,19 @@ public:
 
 		auto next = *earliest;
 		ready_queue_.erase(earliest);
-		next->restore(cpu);
+		run_on(cpu, next);
 		return next;
 	}
 
 private:
+	// Hand the thread to the cpu. It has to know which one it is running: the
+	// exit page's hook has no other way to tell who returned.
+	static void run_on(vcpu& cpu, const std::shared_ptr<thread>& t)
+	{
+		t->restore(cpu);
+		cpu.set_thread(t);
+	}
+
 	std::deque<std::shared_ptr<thread>> ready_queue_;
 	mutable std::mutex mtx_;
 };

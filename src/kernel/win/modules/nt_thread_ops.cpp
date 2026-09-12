@@ -8,6 +8,18 @@ void modules::register_ntoskrnl_thread_ops(win_kernel_state& state, proc_module&
 {
 	auto* sys_proc = state.sys_proc.get();
 
+	// A system thread starts inside this stub in real Windows: it calls the
+	// start routine and ends the thread when it returns. Nothing of it is
+	// executed here -- threads are given it as their return address, so landing
+	// on it means the start routine returned.
+	state.redirect(mod, kernel_thread_startup, [](vcpu& cpu)
+	{
+		if (const auto t = cpu.thread())
+			t->finish();
+
+		cpu.stop();
+	});
+
 	state.redirect(mod, "PsCreateSystemThread",
 		[sys_proc, &objs = state.objs](vcpu& cpu, emu_object<std::uint64_t> thread_handle_out,
 			[[maybe_unused]] std::uint32_t desired_access,

@@ -81,6 +81,11 @@ public:
 	void set_scheduler(thread_scheduler* s) { scheduler_ = s; }
 
 	virtual std::shared_ptr<thread> create_thread(vcpu& cpu, addr_t start_addr);
+
+	// The start stub a thread's start routine returns to. Windows starts a
+	// thread inside one of these and it ends the thread when the routine
+	// returns; reaching it is how the emulator sees the same thing.
+	[[nodiscard]] virtual addr_t thread_exit_addr() const { return 0; }
 	void terminate_thread(thread_id_type id);
 	[[nodiscard]] std::shared_ptr<thread> find_thread(thread_id_type id) const;
 

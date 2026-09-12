@@ -51,27 +51,17 @@ int main()
 	}
 
 	auto cpu = win.add_vcpu();
-	auto space = cpu->curr_addr_space();
 
-	constexpr std::size_t stack_size = 0x10000;
-	const addr_t stack_base = space->alloc(stack_size, prot_rw | prot_supervisor);
-	cpu->set_sp(stack_base + stack_size - 0x100);
-
-	const addr_t sentinel_page = space->alloc(0x1000, prot_rx | prot_supervisor);
-
-	e->hook_code(sentinel_page, sentinel_page + 0xFFF,
-		[](vcpu& cpu, addr_t, std::size_t) { cpu.stop(); });
-
-	// Hand DriverEntry a return address the emulator can catch. On x86 that
-	// means pushing it; on AArch64 it goes in the link register.
-	e->arch()->set_ret_addr(*cpu, sentinel_page);
+	// DriverEntry runs as a system thread like any other, so the scheduler owns
+	// its stack and the return address that says it is done.
+	const auto entry = win.create_kernel_thread(*cpu, driver->entry_point);
 
 	// DriverEntry(DriverObject, RegistryPath)
-	conv->write_arg(*cpu, 0, 0);
-	conv->write_arg(*cpu, 1, 0);
+	conv->set_arg(*cpu, *entry, 0, 0);
+	conv->set_arg(*cpu, *entry, 1, 0);
 
-	cpu->set_pc(driver->entry_point);
-
+	// There is no scheduler loop yet, so the one thread is dispatched by hand.
+	win.scheduler().schedule(*cpu);
 	cpu->run();
 
 	LOG_INFO("driver returned, status=0x{:X}", conv->read_ret(*cpu));
