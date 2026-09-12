@@ -29,6 +29,8 @@ struct win_kernel_state : kernel_state
 		processes[sys_proc->id()] = sys_proc;
 		auto& space = *emu->default_addr_space();
 
+		fs.load_dir("fs/", root_dir_narrow);
+
 		if (const auto ntoskrnl = map_redirect_module(*sys_proc, "fs/ntoskrnl.exe", true))
 		{
 			modules::register_ntoskrnl(*this, *ntoskrnl);

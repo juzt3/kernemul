@@ -4,6 +4,9 @@
 #include "string.hpp"
 #include <pe.hpp>
 
+constexpr std::string_view  root_dir_narrow     = "C:\\";
+constexpr std::string_view  windows_dir_narrow  = "C:\\Windows";
+constexpr std::string_view  system32_dir_narrow = "C:\\Windows\\System32\\";
 constexpr std::wstring_view windows_dir  = L"C:\\Windows";
 constexpr std::wstring_view system32_dir = L"C:\\Windows\\System32\\";
 
@@ -29,13 +32,17 @@ inline addr_t allocate_environment_block(addr_space& space)
 	return addr;
 }
 
+inline std::wstring_view dir_from_path(std::wstring_view path)
+{
+	const auto pos = path.find_last_of(L"\\/");
+	return pos != std::wstring_view::npos ? path.substr(0, pos + 1) : path;
+}
+
 inline emu_object<_RTL_USER_PROCESS_PARAMETERS64> init_process_parameters(
-	addr_space& space, std::string_view name)
+	addr_space& space, std::wstring_view image_path)
 {
 	const auto addr = space.alloc(rtl_user_process_parameters64_alloc_size, prot_rw);
-
-	const auto wide_name = widen_string(name);
-	const auto full_path = std::wstring(system32_dir) + wide_name;
+	const auto current_dir = dir_from_path(image_path);
 
 	_RTL_USER_PROCESS_PARAMETERS64 params{};
 	params.MaximumLength = rtl_user_process_parameters64_alloc_size;
@@ -43,10 +50,10 @@ inline emu_object<_RTL_USER_PROCESS_PARAMETERS64> init_process_parameters(
 	params.Flags = 0x6001;
 	params.ConsoleHandle = ~0ULL;
 
-	params.CurrentDirectory.DosPath = init_unicode_string64(space, system32_dir);
+	params.CurrentDirectory.DosPath = init_unicode_string64(space, current_dir);
 	params.DllPath = init_unicode_string64(space, system32_dir);
-	params.ImagePathName = init_unicode_string64(space, full_path);
-	params.CommandLine = init_unicode_string64(space, full_path);
+	params.ImagePathName = init_unicode_string64(space, image_path);
+	params.CommandLine = init_unicode_string64(space, image_path);
 	params.Environment = allocate_environment_block(space);
 
 	auto obj = emu_object<_RTL_USER_PROCESS_PARAMETERS64>(space, addr);
@@ -86,7 +93,7 @@ inline addr_t load_api_set_from_pe(addr_space& space, std::span<const std::uint8
 
 inline addr_t init_api_set_map(addr_space& space, const win_filesystem& fs)
 {
-	if (const auto file = fs.open("C:\\Windows\\System32\\apisetschema.dll"))
+	if (const auto file = fs.open(std::string(system32_dir_narrow) + "apisetschema.dll"))
 	{
 		if (const auto addr = load_api_set_from_pe(space, file->data()))
 			return addr;

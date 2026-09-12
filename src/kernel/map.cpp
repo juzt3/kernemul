@@ -120,9 +120,13 @@ std::shared_ptr<proc_module> krnl::map_img(process& proc, const std::filesystem:
 		return nullptr;
 	}
 
-	auto mapped = map_pe_virtual(raw);
+	return map_img(proc, path.filename().string(), std::span{raw}, supervisor, skip_imports);
+}
+
+std::shared_ptr<proc_module> krnl::map_img(process& proc, const std::string_view name, const std::span<const std::uint8_t> raw, const bool supervisor, const bool skip_imports)
+{
+	auto mapped = map_pe_virtual({raw.begin(), raw.end()});
 	const auto* img = reinterpret_cast<const pe::image*>(mapped.data());
-	const auto name = path.filename().string();
 
 	return map_img(proc, name, img, supervisor, skip_imports);
 }

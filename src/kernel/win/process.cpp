@@ -4,7 +4,7 @@
 #include "../thread_scheduler.hpp"
 
 win_kernel_proc::win_kernel_proc(id_type id, win_kernel_state& kernel, std::shared_ptr<struct addr_space> space)
-	:	windows_process(id, std::move(space), kernel.objs), kernel_(kernel) {}
+	:	windows_process(id, std::move(space), kernel.objs, kernel.fs), kernel_(kernel) {}
 
 std::shared_ptr<thread> windows_process::create_thread(vcpu& cpu, const addr_t start_addr)
 {
@@ -34,6 +34,25 @@ std::shared_ptr<thread> win_user_proc::create_thread(vcpu& cpu, const addr_t sta
 	std::scoped_lock lock(thread_mtx_);
 	threads_[t->id()] = t;
 	return t;
+}
+
+std::shared_ptr<proc_module> windows_process::load_module(const std::string_view name, const bool supervisor)
+{
+	const auto path = std::string(system32_dir_narrow) + std::string(name);
+	const auto file = fs_.open(path);
+
+	if (!file)
+		return nullptr;
+
+	return krnl::map_img(*this, name, file->data(), supervisor);
+}
+
+std::shared_ptr<proc_module> win_user_proc::load_module(const std::string_view name, const bool supervisor)
+{
+	if (const auto file = fs_.open(current_dir_ + std::string(name)))
+		return krnl::map_img(*this, name, file->data(), supervisor);
+
+	return windows_process::load_module(name, supervisor);
 }
 
 void win_user_proc::module_add_cb(proc_module& mod)
