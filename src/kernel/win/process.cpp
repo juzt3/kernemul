@@ -36,6 +36,12 @@ std::shared_ptr<thread> win_user_proc::create_thread(vcpu& cpu, const addr_t sta
 	return t;
 }
 
+void win_user_proc::module_add_cb(proc_module& mod)
+{
+	ldr_.add_module(*addr_space_, mod.addr, mod.entry_point,
+		mod.size, mod.name, true);
+}
+
 void win_kernel_proc::module_add_cb(proc_module& mod)
 {
 	if (!kernel_.loaded_module_list.address())

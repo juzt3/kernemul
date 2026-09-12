@@ -1171,6 +1171,77 @@ typedef struct _TEB64
 
 constexpr std::size_t teb64_alloc_size = 0x2000;
 
+typedef struct _UNICODE_STRING64
+{
+  /* 0x0000 */ unsigned short Length;
+  /* 0x0002 */ unsigned short MaximumLength;
+  /* 0x0004 */ unsigned char _pad[4];
+  /* 0x0008 */ unsigned __int64 Buffer;
+} UNICODE_STRING64; /* size: 0x0010 */
+
+typedef struct _LIST_ENTRY64
+{
+  /* 0x0000 */ unsigned __int64 Flink;
+  /* 0x0008 */ unsigned __int64 Blink;
+} LIST_ENTRY64; /* size: 0x0010 */
+
+typedef struct _PEB_LDR_DATA64
+{
+  /* 0x0000 */ unsigned int Length;
+  /* 0x0004 */ unsigned char Initialized;
+  /* 0x0005 */ unsigned char _pad0[3];
+  /* 0x0008 */ unsigned __int64 SsHandle;
+  /* 0x0010 */ _LIST_ENTRY64 InLoadOrderModuleList;
+  /* 0x0020 */ _LIST_ENTRY64 InMemoryOrderModuleList;
+  /* 0x0030 */ _LIST_ENTRY64 InInitializationOrderModuleList;
+  /* 0x0040 */ unsigned __int64 EntryInProgress;
+  /* 0x0048 */ unsigned char ShutdownInProgress;
+  /* 0x0049 */ unsigned char _pad1[7];
+  /* 0x0050 */ unsigned __int64 ShutdownThreadId;
+} PEB_LDR_DATA64; /* size: 0x0058 */
+
+constexpr std::size_t peb_ldr_data64_alloc_size = 0x58;
+
+typedef struct _LDR_DATA_TABLE_ENTRY64
+{
+  /* 0x0000 */ _LIST_ENTRY64 InLoadOrderLinks;
+  /* 0x0010 */ _LIST_ENTRY64 InMemoryOrderLinks;
+  /* 0x0020 */ _LIST_ENTRY64 InInitializationOrderLinks;
+  /* 0x0030 */ unsigned __int64 DllBase;
+  /* 0x0038 */ unsigned __int64 EntryPoint;
+  /* 0x0040 */ unsigned int SizeOfImage;
+  /* 0x0044 */ unsigned int _pad0;
+  /* 0x0048 */ _UNICODE_STRING64 FullDllName;
+  /* 0x0058 */ _UNICODE_STRING64 BaseDllName;
+  /* 0x0068 */ unsigned int Flags;
+  /* 0x006c */ unsigned short ObsoleteLoadCount;
+  /* 0x006e */ unsigned short TlsIndex;
+  /* 0x0070 */ _LIST_ENTRY64 HashLinks;
+} LDR_DATA_TABLE_ENTRY64; /* size: 0x0080 */
+
+constexpr std::size_t ldr_data_table_entry64_alloc_size = 0x120;
+
+static_assert(sizeof(_UNICODE_STRING64) == 0x10);
+static_assert(sizeof(_LIST_ENTRY64) == 0x10);
+
+static_assert(sizeof(_PEB_LDR_DATA64) == 0x58);
+static_assert(offsetof(_PEB_LDR_DATA64, Initialized) == 0x04);
+static_assert(offsetof(_PEB_LDR_DATA64, InLoadOrderModuleList) == 0x10);
+static_assert(offsetof(_PEB_LDR_DATA64, InMemoryOrderModuleList) == 0x20);
+static_assert(offsetof(_PEB_LDR_DATA64, InInitializationOrderModuleList) == 0x30);
+
+static_assert(offsetof(_LDR_DATA_TABLE_ENTRY64, InLoadOrderLinks) == 0x00);
+static_assert(offsetof(_LDR_DATA_TABLE_ENTRY64, InMemoryOrderLinks) == 0x10);
+static_assert(offsetof(_LDR_DATA_TABLE_ENTRY64, InInitializationOrderLinks) == 0x20);
+static_assert(offsetof(_LDR_DATA_TABLE_ENTRY64, DllBase) == 0x30);
+static_assert(offsetof(_LDR_DATA_TABLE_ENTRY64, EntryPoint) == 0x38);
+static_assert(offsetof(_LDR_DATA_TABLE_ENTRY64, SizeOfImage) == 0x40);
+static_assert(offsetof(_LDR_DATA_TABLE_ENTRY64, FullDllName) == 0x48);
+static_assert(offsetof(_LDR_DATA_TABLE_ENTRY64, BaseDllName) == 0x58);
+static_assert(offsetof(_LDR_DATA_TABLE_ENTRY64, Flags) == 0x68);
+static_assert(offsetof(_LDR_DATA_TABLE_ENTRY64, ObsoleteLoadCount) == 0x6C);
+static_assert(offsetof(_LDR_DATA_TABLE_ENTRY64, HashLinks) == 0x70);
+
 static_assert(sizeof(_NT_TIB64) == 0x38);
 static_assert(offsetof(_NT_TIB64, StackBase) == 0x08);
 static_assert(offsetof(_NT_TIB64, StackLimit) == 0x10);
