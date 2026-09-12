@@ -1,6 +1,7 @@
 #pragma once
 #include "../../emu/object.hpp"
 #include "string.hpp"
+#include "process_params.hpp"
 
 class ldr_module_list
 {
@@ -31,7 +32,7 @@ public:
 		const auto entry_addr = space.alloc(ldr_data_table_entry64_alloc_size, prot_rw);
 
 		const auto wide_name = widen_string(name);
-		const auto full_path = L"C:\\Windows\\System32\\" + wide_name;
+		const auto full_path = std::wstring(system32_dir) + wide_name;
 
 		_LDR_DATA_TABLE_ENTRY64 entry{};
 		entry.DllBase = base;

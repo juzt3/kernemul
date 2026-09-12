@@ -1221,6 +1221,45 @@ typedef struct _LDR_DATA_TABLE_ENTRY64
 
 constexpr std::size_t ldr_data_table_entry64_alloc_size = 0x120;
 
+typedef struct _CURDIR64
+{
+  /* 0x0000 */ _UNICODE_STRING64 DosPath;
+  /* 0x0010 */ unsigned __int64 Handle;
+} CURDIR64; /* size: 0x0018 */
+
+typedef struct _RTL_USER_PROCESS_PARAMETERS64
+{
+  /* 0x0000 */ unsigned int MaximumLength;
+  /* 0x0004 */ unsigned int Length;
+  /* 0x0008 */ unsigned int Flags;
+  /* 0x000c */ unsigned int DebugFlags;
+  /* 0x0010 */ unsigned __int64 ConsoleHandle;
+  /* 0x0018 */ unsigned int ConsoleFlags;
+  /* 0x001c */ unsigned int _pad0;
+  /* 0x0020 */ unsigned __int64 StandardInput;
+  /* 0x0028 */ unsigned __int64 StandardOutput;
+  /* 0x0030 */ unsigned __int64 StandardError;
+  /* 0x0038 */ _CURDIR64 CurrentDirectory;
+  /* 0x0050 */ _UNICODE_STRING64 DllPath;
+  /* 0x0060 */ _UNICODE_STRING64 ImagePathName;
+  /* 0x0070 */ _UNICODE_STRING64 CommandLine;
+  /* 0x0080 */ unsigned __int64 Environment;
+} RTL_USER_PROCESS_PARAMETERS64; /* size: 0x0088 */
+
+constexpr std::size_t rtl_user_process_parameters64_alloc_size = 0x448;
+
+static_assert(sizeof(_CURDIR64) == 0x18);
+static_assert(sizeof(_RTL_USER_PROCESS_PARAMETERS64) == 0x88);
+static_assert(offsetof(_RTL_USER_PROCESS_PARAMETERS64, ConsoleHandle) == 0x10);
+static_assert(offsetof(_RTL_USER_PROCESS_PARAMETERS64, StandardInput) == 0x20);
+static_assert(offsetof(_RTL_USER_PROCESS_PARAMETERS64, StandardOutput) == 0x28);
+static_assert(offsetof(_RTL_USER_PROCESS_PARAMETERS64, StandardError) == 0x30);
+static_assert(offsetof(_RTL_USER_PROCESS_PARAMETERS64, CurrentDirectory) == 0x38);
+static_assert(offsetof(_RTL_USER_PROCESS_PARAMETERS64, DllPath) == 0x50);
+static_assert(offsetof(_RTL_USER_PROCESS_PARAMETERS64, ImagePathName) == 0x60);
+static_assert(offsetof(_RTL_USER_PROCESS_PARAMETERS64, CommandLine) == 0x70);
+static_assert(offsetof(_RTL_USER_PROCESS_PARAMETERS64, Environment) == 0x80);
+
 static_assert(sizeof(_UNICODE_STRING64) == 0x10);
 static_assert(sizeof(_LIST_ENTRY64) == 0x10);
 
