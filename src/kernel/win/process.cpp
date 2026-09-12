@@ -26,7 +26,7 @@ std::shared_ptr<thread> win_user_proc::create_thread(vcpu& cpu, const addr_t sta
 		id, std::move(self), mem_, start_addr,
 		stack_base, default_stack_size, cpu);
 
-	emulator_->init_thread_segments(*t, cpu, t->teb().address());
+	emulator_->init_thread_teb(*t, cpu, t->teb().address());
 
 	scheduler_->enqueue(t);
 

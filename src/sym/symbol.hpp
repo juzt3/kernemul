@@ -1,5 +1,6 @@
 #pragma once
 #include "../emu/defs.hpp"
+#include "../util/string.hpp"
 
 #include <format>
 #include <optional>
@@ -35,7 +36,10 @@ struct resolved_symbol
 struct module_symbols
 {
 	std::vector<symbol_info> entries;
-	std::unordered_map<std::string, std::size_t> name_index;
+
+	// Maps to the address rather than an index into entries, because sort()
+	// reorders entries and any stored index would silently go stale.
+	std::unordered_map<std::string, addr_t, string_view_hash, std::equal_to<>> name_index;
 
 	void insert(std::string name, addr_t addr, std::uint32_t size = 0);
 	void sort();

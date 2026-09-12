@@ -1,4 +1,5 @@
 #include "mmu.hpp"
+#include "arch.hpp"
 #include "../emu.hpp"
 #include <stdexcept>
 #include <cstring>

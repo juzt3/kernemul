@@ -1,3 +1,5 @@
+#include "../../../target.hpp"
+#if defined(KERNEMUL_ARCH_X64)
 #include "x64_unwind.hpp"
 #include "../exception.hpp"
 #include "../../process.hpp"
@@ -350,3 +352,5 @@ handler_result x64_unwinder::evaluate_handler(
 }
 
 } // namespace win
+
+#endif // KERNEMUL_ARCH_X64

@@ -40,6 +40,7 @@ namespace x86
 		reg_t pc() const override { return rip; }
 		reg_t sp() const override { return rsp; }
 		addr_t ret_addr(vcpu& cpu) const override;
+		void set_ret_addr(vcpu& cpu, addr_t addr) const override;
 		void init_vcpu(vcpu& cpu) override;
 		std::span<const reg_t> regs() const override;
 		std::size_t reg_size(reg_t r) const override;

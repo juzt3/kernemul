@@ -29,6 +29,23 @@ project(kernemul
 		CXX
 )
 
+# Guest architecture, fixed at build time: the Windows type layouts in
+# kernel/win/types.hpp come from one ntoskrnl PDB and are memcpy'd into guest
+# memory as-is, so two architectures cannot coexist in one binary.
+#
+# This stays raw CMake because cmkr [options] are boolean only, and [variables]
+# emits an uncached set() that would clobber -DKERNEMUL_ARCH. It lives at
+# project level so the value exists before the arch-* conditions below are
+# evaluated.
+set(KERNEMUL_ARCH "x64" CACHE STRING "guest architecture: x64 or arm64")
+set_property(CACHE KERNEMUL_ARCH PROPERTY STRINGS x64 arm64)
+
+if(NOT KERNEMUL_ARCH MATCHES "^(x64|arm64)$")
+	message(FATAL_ERROR "KERNEMUL_ARCH must be x64 or arm64, got: ${KERNEMUL_ARCH}")
+endif()
+
+message(STATUS "kernemul guest architecture: ${KERNEMUL_ARCH}")
+
 # Packages
 find_package(OpenSSL REQUIRED)
 
@@ -77,7 +94,14 @@ set(kernemul_SOURCES
 	cmake.toml
 	"src/emu/addr_space.hpp"
 	"src/emu/arch.hpp"
-	"src/emu/calling_conv.cpp"
+	"src/emu/arm64/addr_space.hpp"
+	"src/emu/arm64/arch.cpp"
+	"src/emu/arm64/arch.hpp"
+	"src/emu/arm64/calling_conv.cpp"
+	"src/emu/arm64/calling_conv.hpp"
+	"src/emu/arm64/mmu.cpp"
+	"src/emu/arm64/mmu.hpp"
+	"src/emu/arm64/unicorn.hpp"
 	"src/emu/calling_conv.hpp"
 	"src/emu/defs.hpp"
 	"src/emu/emu.hpp"
@@ -85,17 +109,23 @@ set(kernemul_SOURCES
 	"src/emu/mmu.hpp"
 	"src/emu/object.hpp"
 	"src/emu/unicorn.hpp"
+	"src/emu/unicorn_base.hpp"
 	"src/emu/x86/addr_space.hpp"
 	"src/emu/x86/arch.cpp"
 	"src/emu/x86/arch.hpp"
+	"src/emu/x86/calling_conv.cpp"
+	"src/emu/x86/calling_conv.hpp"
 	"src/emu/x86/mmu.cpp"
 	"src/emu/x86/mmu.hpp"
+	"src/emu/x86/unicorn.hpp"
 	"src/kernel/kernel.hpp"
 	"src/kernel/map.cpp"
 	"src/kernel/map.hpp"
 	"src/kernel/process.cpp"
 	"src/kernel/process.hpp"
 	"src/kernel/thread_scheduler.hpp"
+	"src/kernel/win/arm64_win.cpp"
+	"src/kernel/win/arm64_win.hpp"
 	"src/kernel/win/defs.hpp"
 	"src/kernel/win/exception.cpp"
 	"src/kernel/win/exception.hpp"
@@ -120,6 +150,10 @@ set(kernemul_SOURCES
 	"src/kernel/win/string.hpp"
 	"src/kernel/win/thread.hpp"
 	"src/kernel/win/types.hpp"
+	"src/kernel/win/types_arm64.hpp"
+	"src/kernel/win/types_x64.hpp"
+	"src/kernel/win/unwind/arm64_unwind.cpp"
+	"src/kernel/win/unwind/arm64_unwind.hpp"
 	"src/kernel/win/unwind/unwind.cpp"
 	"src/kernel/win/unwind/unwind.hpp"
 	"src/kernel/win/unwind/x64_unwind.cpp"
@@ -132,11 +166,13 @@ set(kernemul_SOURCES
 	"src/kernel/win/win_obj_manager.hpp"
 	"src/kernel/win/win_user_mem.cpp"
 	"src/kernel/win/win_user_mem.hpp"
+	"src/kernel/win/x86_win.hpp"
 	"src/main.cpp"
 	"src/sym/pdb.hpp"
 	"src/sym/pdb_server.hpp"
 	"src/sym/symbol.cpp"
 	"src/sym/symbol.hpp"
+	"src/target.hpp"
 	"src/util/file.hpp"
 	"src/util/format.hpp"
 	"src/util/log.hpp"
@@ -147,6 +183,18 @@ add_executable(kernemul)
 
 target_sources(kernemul PRIVATE ${kernemul_SOURCES})
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kernemul_SOURCES})
+
+if(KERNEMUL_ARCH STREQUAL "x64") # arch-x64
+	target_compile_definitions(kernemul PRIVATE
+		KERNEMUL_ARCH_X64=1
+	)
+endif()
+
+if(KERNEMUL_ARCH STREQUAL "arm64") # arch-arm64
+	target_compile_definitions(kernemul PRIVATE
+		KERNEMUL_ARCH_ARM64=1
+	)
+endif()
 
 target_compile_features(kernemul PRIVATE
 	cxx_std_23

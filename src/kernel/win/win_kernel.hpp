@@ -8,8 +8,9 @@
 #include "modules/nt_object_ops.hpp"
 #include "registry.hpp"
 #include "filesystem.hpp"
-#include "segments.hpp"
+#include "../../target.hpp"
 #include <cstring>
+#include <string>
 
 struct win_kernel_state : kernel_state
 {
@@ -29,9 +30,9 @@ struct win_kernel_state : kernel_state
 		processes[sys_proc->id()] = sys_proc;
 		auto& space = *emu->default_addr_space();
 
-		fs.load_dir("fs/", root_dir_narrow);
+		fs.load_dir(target::guest_fs_dir, root_dir_narrow);
 
-		if (const auto ntoskrnl = map_redirect_module(*sys_proc, "fs/ntoskrnl.exe", true))
+		if (const auto ntoskrnl = map_redirect_module(*sys_proc, std::string(target::guest_fs_dir) + "ntoskrnl.exe", true))
 		{
 			modules::register_ntoskrnl(*this, *ntoskrnl);
 			modules::register_ntoskrnl_thread_ops(*this, *ntoskrnl);
@@ -117,30 +118,8 @@ public:
 		return kernel_.sys_proc->create_thread(cpu, start_addr);
 	}
 
-	virtual void init_thread_segments(thread&, vcpu&, addr_t) {}
+	virtual void init_thread_teb(thread&, vcpu&, addr_t) {}
 
 private:
 	win_kernel_state kernel_;
-};
-
-class x86_win_emulator : public windows_emulator
-{
-public:
-	using windows_emulator::windows_emulator;
-
-	std::shared_ptr<vcpu> add_vcpu() override
-	{
-		auto cpu = emu_->add_vcpu();
-		x86_win_seg::init_vcpu(*cpu);
-
-		if (auto nt = kernel().sys_proc->find_module("ntoskrnl.exe"))
-			x86_win_seg::init_idt(*cpu, *nt);
-
-		return cpu;
-	}
-
-	void init_thread_segments(thread& t, vcpu& cpu, addr_t teb_addr) override
-	{
-		t.set_reg_val(cpu, x86::gs, x86_win_seg::make_usermode_gs(teb_addr));
-	}
 };

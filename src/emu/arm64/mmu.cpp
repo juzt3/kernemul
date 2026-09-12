@@ -1,0 +1,338 @@
+#include "mmu.hpp"
+#include "arch.hpp"
+#include "../emu.hpp"
+#include <stdexcept>
+#include <cstring>
+
+namespace arm64
+{
+
+addr_space& mmu::as_arm64(::addr_space& space)
+{
+	auto* p = dynamic_cast<addr_space*>(&space);
+	if (!p) throw std::runtime_error("invalid address space type");
+	return *p;
+}
+
+const addr_space& mmu::as_arm64(const ::addr_space& space)
+{
+	auto* p = dynamic_cast<const addr_space*>(&space);
+	if (!p) throw std::runtime_error("invalid address space type");
+	return *p;
+}
+
+std::shared_ptr<::addr_space> mmu::create_addr_space()
+{
+	auto space = std::make_shared<addr_space>();
+	space->ttbr_pa = alloc_phys(page_size(), prot_rw);
+	space->mmu_ = this;
+	spaces_[space->ttbr_pa] = space;
+	return space;
+}
+
+void mmu::destroy_addr_space(std::shared_ptr<::addr_space> space)
+{
+	auto& s = as_arm64(*space);
+	spaces_.erase(s.ttbr_pa);
+}
+
+std::shared_ptr<::addr_space> mmu::curr_addr_space(vcpu& cpu)
+{
+	// Both TTBRs hold the same table, so either identifies the space. The ASID
+	// lives in bits 63:48 and is always zero here, but mask it off anyway.
+	const addr_t ttbr = cpu.reg<addr_t>(ttbr0_el1) & desc_addr_mask;
+	auto it = spaces_.find(ttbr);
+	if (it == spaces_.end())
+		return nullptr;
+	return it->second;
+}
+
+void mmu::init_vcpu(vcpu& cpu)
+{
+	// Attr0: normal memory, inner/outer write-back non-transient, RW-allocate.
+	// Every page we map uses AttrIndx = 0.
+	cpu.reg(mair_el1, std::uint64_t{0xFF});
+
+	// 4KB granule, 48-bit VA on both halves, inner shareable, write-back
+	// cacheable walks, 40-bit intermediate physical addresses:
+	//   T0SZ=16 IRGN0=1 ORGN0=1 SH0=3 TG0=0 (4KB)
+	//   T1SZ=16 IRGN1=1 ORGN1=1 SH1=3 TG1=2 (4KB)   IPS=2 (40-bit)
+	// TG1 encodes the granule differently to TG0, which is why they differ.
+	constexpr std::uint64_t t0sz = 16, t1sz = 16;
+	const std::uint64_t tcr =
+		  (t0sz <<  0) | (1ull <<  8) | (1ull << 10) | (3ull << 12) | (0ull << 14)
+		| (t1sz << 16) | (1ull << 24) | (1ull << 26) | (3ull << 28) | (2ull << 30)
+		| (2ull << 32);
+	cpu.reg(tcr_el1, tcr);
+
+	// MMU on, data and instruction caches on. Read-modify-write so the RES1
+	// bits Unicorn already set survive.
+	auto sctlr = cpu.reg<std::uint64_t>(sctlr_el1);
+	sctlr |= (1ull << 0)   // M: enable stage 1 translation
+	      |  (1ull << 2)   // C: data accesses cacheable
+	      |  (1ull << 12); // I: instruction accesses cacheable
+	cpu.reg(sctlr_el1, sctlr);
+}
+
+void mmu::switch_to(vcpu& cpu, std::shared_ptr<::addr_space> space)
+{
+	auto& s = as_arm64(*space);
+
+	std::lock_guard lk(mtx_);
+
+	// The single level 0 table backs both halves of the address space; see the
+	// comment on addr_space::ttbr_pa.
+	cpu.reg(ttbr0_el1, s.ttbr_pa);
+	cpu.reg(ttbr1_el1, s.ttbr_pa);
+	cpu.flush_tlb();
+}
+
+void mmu::flush_all_tlb()
+{
+	for (auto& cpu : emu_->cpus())
+		cpu->flush_tlb();
+}
+
+std::uint64_t mmu::page_attrs(const mem_prot prot)
+{
+	// AttrIndx = 0 (normal memory), inner shareable, access flag set so the
+	// first touch does not take an access fault.
+	std::uint64_t attrs = desc_valid | desc_table | desc_af | desc_sh_is;
+
+	// prot_supervisor means EL1 only; otherwise EL0 gets access too.
+	if (!(prot & prot_supervisor))
+		attrs |= desc_ap_el0;
+
+	if (!(prot & prot_write))
+		attrs |= desc_ap_ro;
+
+	// Execution stays enabled at both levels, matching the x86 walker, which
+	// never sets the NX bit. Marking a kernel page PXN would fault the driver
+	// on its own code.
+	return attrs;
+}
+
+addr_t mmu::ensure_table(const addr_t table_pa, const std::size_t index)
+{
+	const auto entry = read_phys<std::uint64_t>(table_pa + index * sizeof(std::uint64_t));
+
+	if (entry & desc_valid)
+		return entry & desc_addr_mask;
+
+	const addr_t child = alloc_phys(page_size(), prot_rw);
+
+	// A table descriptor carries no permissions of its own; leaving the
+	// APTable / xNTable bits clear means "defer to the leaf".
+	write_phys<std::uint64_t>(table_pa + index * sizeof(std::uint64_t),
+		(child & desc_addr_mask) | desc_valid | desc_table);
+
+	return child;
+}
+
+void mmu::map_page(addr_space& space, const addr_t va, const addr_t pa, const mem_prot prot)
+{
+	const virt_addr v{ .val = page_align(va) };
+
+	const addr_t l1 = ensure_table(space.ttbr_pa, v.l0);
+	const addr_t l2 = ensure_table(l1, v.l1);
+	const addr_t l3 = ensure_table(l2, v.l2);
+
+	write_phys<std::uint64_t>(l3 + v.l3 * sizeof(std::uint64_t),
+		(pa & desc_addr_mask) | page_attrs(prot));
+
+	space.shadow[v.val] = pa;
+}
+
+addr_t mmu::walk_to_l3(const addr_space& space, const addr_t va)
+{
+	const virt_addr v{ .val = page_align(va) };
+
+	auto step = [this](const addr_t table, const std::size_t idx) -> addr_t
+	{
+		const auto e = read_phys<std::uint64_t>(table + idx * sizeof(std::uint64_t));
+		return (e & desc_valid) ? (e & desc_addr_mask) : 0;
+	};
+
+	const addr_t l1 = step(space.ttbr_pa, v.l0);
+	if (!l1) return 0;
+	const addr_t l2 = step(l1, v.l1);
+	if (!l2) return 0;
+	return step(l2, v.l2);
+}
+
+void mmu::unmap_page(addr_space& space, const addr_t va)
+{
+	const virt_addr v{ .val = page_align(va) };
+
+	if (const addr_t l3 = walk_to_l3(space, va))
+		write_phys<std::uint64_t>(l3 + v.l3 * sizeof(std::uint64_t), 0);
+
+	space.shadow.erase(v.val);
+}
+
+void mmu::map_virt(::addr_space& space, const addr_t va, const std::size_t size, const mem_prot prot)
+{
+	auto& s = as_arm64(space);
+	std::lock_guard lk(mtx_);
+
+	const auto phys_prot = prot & ~prot_supervisor;
+
+	const addr_t start = page_align(va);
+	const std::size_t aligned = size_align(size);
+
+	const addr_t pa_block = alloc_phys(aligned, phys_prot);
+
+	// Mapped writable and narrowed later by prot_virt, the way the x86 walker
+	// does it -- krnl::map_img writes the image through the MMU before it
+	// applies the section protections.
+	for (std::size_t off = 0; off < aligned; off += page_size())
+		map_page(s, start + off, pa_block + off, prot | prot_write);
+
+	flush_all_tlb();
+}
+
+void mmu::map_virt_phys(::addr_space& space, const addr_t va, const addr_t pa, const std::size_t size, const mem_prot prot)
+{
+	auto& s = as_arm64(space);
+	std::lock_guard lk(mtx_);
+
+	const addr_t start = page_align(va);
+	const addr_t pa_start = page_align(pa);
+	const std::size_t aligned = size_align(size);
+
+	for (std::size_t off = 0; off < aligned; off += page_size())
+		map_page(s, start + off, pa_start + off, prot | prot_write);
+
+	flush_all_tlb();
+}
+
+void mmu::unmap_virt(::addr_space& space, const addr_t va, const std::size_t size)
+{
+	auto& s = as_arm64(space);
+	std::lock_guard lk(mtx_);
+
+	const addr_t start = page_align(va);
+	const std::size_t aligned = size_align(size);
+
+	for (std::size_t off = 0; off < aligned; off += page_size())
+		unmap_page(s, start + off);
+
+	flush_all_tlb();
+}
+
+void mmu::copy_virt(const addr_space& space, const addr_t va, void* buf, const std::size_t size, const bool write)
+{
+	auto* bytes = static_cast<std::uint8_t*>(buf);
+	std::size_t done = 0;
+
+	while (done < size)
+	{
+		const addr_t cur_va = va + done;
+		const addr_t page = page_align(cur_va);
+		const std::size_t page_off = cur_va - page;
+		const std::size_t chunk = std::min(size - done, page_size() - page_off);
+
+		const auto it = space.shadow.find(page);
+		if (it == space.shadow.end())
+			throw std::runtime_error("unmapped virtual address");
+
+		const addr_t pa = it->second + page_off;
+
+		if (write)
+			write_phys(pa, bytes + done, chunk);
+		else
+			read_phys(pa, bytes + done, chunk);
+
+		done += chunk;
+	}
+}
+
+void mmu::read_virt(const ::addr_space& space, const addr_t va, void* buf, const std::size_t size)
+{
+	auto& s = as_arm64(space);
+	std::lock_guard lk(mtx_);
+	copy_virt(s, va, buf, size, false);
+}
+
+void mmu::write_virt(const ::addr_space& space, const addr_t va, const void* buf, const std::size_t size)
+{
+	auto& s = as_arm64(space);
+	std::lock_guard lk(mtx_);
+	copy_virt(s, va, const_cast<void*>(buf), size, true);
+}
+
+void mmu::prot_virt(::addr_space& space, const addr_t va, const std::size_t size, const mem_prot prot)
+{
+	auto& s = as_arm64(space);
+	std::lock_guard lk(mtx_);
+
+	const addr_t start = page_align(va);
+	const std::size_t aligned = size_align(size);
+
+	for (std::size_t off = 0; off < aligned; off += page_size())
+	{
+		const virt_addr v{ .val = start + off };
+
+		const addr_t l3 = walk_to_l3(s, v.val);
+		if (!l3) continue;
+
+		const auto slot = l3 + v.l3 * sizeof(std::uint64_t);
+		const auto entry = read_phys<std::uint64_t>(slot);
+		if (!(entry & desc_valid)) continue;
+
+		// Keep the EL0 accessibility map_page derived from prot_supervisor;
+		// only the read/write half is being changed here.
+		auto attrs = page_attrs(prot);
+		attrs &= ~desc_ap_el0;
+		attrs |= entry & desc_ap_el0;
+
+		write_phys<std::uint64_t>(slot, (entry & desc_addr_mask) | attrs);
+	}
+
+	flush_all_tlb();
+}
+
+std::optional<addr_t> mmu::virt_to_phys(const ::addr_space& space, const addr_t va)
+{
+	auto& s = as_arm64(space);
+	std::lock_guard lk(mtx_);
+
+	const addr_t page = page_align(va);
+	const auto it = s.shadow.find(page);
+	if (it == s.shadow.end())
+		return std::nullopt;
+
+	return it->second + (va - page);
+}
+
+std::optional<addr_t> mmu::phys_to_virt(const ::addr_space& space, const addr_t pa)
+{
+	auto& s = as_arm64(space);
+	std::lock_guard lk(mtx_);
+
+	const addr_t pa_page = pa & ~(page_size() - 1);
+	const addr_t offset = pa - pa_page;
+
+	for (auto& [va_page, mapped_pa] : s.shadow)
+	{
+		if (mapped_pa == pa_page)
+			return va_page + offset;
+	}
+
+	return std::nullopt;
+}
+
+addr_t addr_space::alloc(const std::size_t size, const mem_prot prot)
+{
+	constexpr std::size_t page = 0x1000;
+	const auto aligned = (size + page - 1) & ~(page - 1);
+
+	addr_t& cursor = (prot & prot_supervisor) ? kernel_next_ : user_next_;
+	const addr_t va = cursor;
+	cursor += aligned;
+
+	mmu_->map_virt(*this, va, aligned, prot);
+	return va;
+}
+
+}

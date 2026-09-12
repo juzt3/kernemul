@@ -34,39 +34,6 @@ protected:
 	virtual void ret_write(vcpu& cpu, const void* buf, std::size_t size) const = 0;
 };
 
-struct x86_win_conv : calling_conv
-{
-	void set_arg(vcpu& cpu, thread& t, std::size_t index, std::uint64_t value) const override;
-
-	void write_arg(vcpu& cpu, std::size_t index, std::uint64_t value) const override
-	{
-		static constexpr reg_t regs[] = { x86::rcx, x86::rdx, x86::r8, x86::r9 };
-		if (index < 4)
-			cpu.reg(regs[index], value);
-	}
-
-	std::uint64_t read_ret(vcpu& cpu) const override
-	{
-		return cpu.reg(x86::rax);
-	}
-
-protected:
-	void arg_read(vcpu& cpu, std::size_t index, void* buf, std::size_t size) const override
-	{
-		static constexpr reg_t regs[] = { x86::rcx, x86::rdx, x86::r8, x86::r9 };
-
-		if (index < 4)
-			cpu.reg_read(regs[index], buf, size);
-		else
-			cpu.read_virt_mem(cpu.sp() + 0x08 * (index + 1), buf, size);
-	}
-
-	void ret_write(vcpu& cpu, const void* buf, std::size_t size) const override
-	{
-		cpu.reg_write(x86::rax, buf, size);
-	}
-};
-
 template <typename T>
 struct arg_reader
 {

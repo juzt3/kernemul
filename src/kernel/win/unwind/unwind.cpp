@@ -1,5 +1,12 @@
 #include "unwind.hpp"
-#include "x64_unwind.hpp"
+#include "../../../target.hpp"
+#include "../../../util/log.hpp"
+
+#if defined(KERNEMUL_ARCH_ARM64)
+	#include "arm64_unwind.hpp"
+#else
+	#include "x64_unwind.hpp"
+#endif
 #include "../../process.hpp"
 
 namespace win {
@@ -10,9 +17,15 @@ std::unique_ptr<win_unwinder> make_unwinder(const proc_module& mod)
 	if (!img)
 		return nullptr;
 
+#if defined(KERNEMUL_ARCH_ARM64)
+	if (img->is_arm64())
+		return std::make_unique<arm64_unwinder>();
+#else
 	if (img->is_x64())
 		return std::make_unique<x64_unwinder>();
+#endif
 
+	LOG_ERR("{} was built for another architecture than this emulator", mod.name);
 	return nullptr;
 }
 

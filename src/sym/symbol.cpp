@@ -9,7 +9,7 @@ void module_symbols::insert(std::string name, const addr_t addr, const std::uint
 	if (name_index.contains(name))
 		return;
 
-	name_index[name] = entries.size();
+	name_index[name] = addr;
 	entries.push_back({ std::move(name), addr, size });
 }
 
@@ -40,12 +40,12 @@ std::optional<resolved_symbol> module_symbols::resolve(const addr_t addr) const
 
 std::optional<addr_t> module_symbols::lookup(const std::string_view name) const
 {
-	const auto it = name_index.find(std::string(name));
+	const auto it = name_index.find(name);
 
 	if (it == name_index.end())
 		return std::nullopt;
 
-	return entries[it->second].addr;
+	return it->second;
 }
 
 void export_symbols::load(proc_module& mod)

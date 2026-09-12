@@ -1,23 +1,48 @@
+#include "target.hpp"
 #include "kernel/win/win_kernel.hpp"
-#include "emu/unicorn.hpp"
 #include "emu/calling_conv.hpp"
-#include "emu/x86/mmu.hpp"
-#include "emu/x86/arch.hpp"
 #include "util/log.hpp"
+
+#include "emu/unicorn.hpp"
+
+#if defined(KERNEMUL_ARCH_ARM64)
+	#include "kernel/win/arm64_win.hpp"
+	#include "emu/arm64/mmu.hpp"
+	#include "emu/arm64/calling_conv.hpp"
+
+	namespace guest
+	{
+		using mmu          = arm64::mmu;
+		using calling_conv = arm64_win_conv;
+		using win_emulator = arm64_win_emulator;
+	}
+#else
+	#include "kernel/win/x86_win.hpp"
+	#include "emu/x86/mmu.hpp"
+	#include "emu/x86/calling_conv.hpp"
+
+	namespace guest
+	{
+		using mmu          = x86::mmu;
+		using calling_conv = x86_win_conv;
+		using win_emulator = x86_win_emulator;
+	}
+#endif
 
 int main()
 {
-	auto arch = std::make_shared<x86::arch>();
-	auto mem = std::make_shared<x86::mmu>();
-	auto conv = std::make_shared<x86_win_conv>();
-	auto e = std::make_shared<unicorn_emu>(arch, mem, conv);
+	LOG_INFO("kernemul targeting {}", target::name);
 
-	x86_win_emulator win(e);
+	auto mem = std::make_shared<guest::mmu>();
+	auto conv = std::make_shared<guest::calling_conv>();
+	auto e = std::make_shared<unicorn_emu>(mem, conv);
+
+	guest::win_emulator win(e);
 
 	auto& kernel = win.kernel();
 	auto& proc = *kernel.sys_proc;
 
-	auto driver = krnl::map_img(proc, "fs/test_driver.sys", true);
+	auto driver = krnl::map_img(proc, std::string(target::guest_fs_dir) + "test_driver.sys", true);
 
 	if (!driver)
 	{
@@ -37,18 +62,19 @@ int main()
 	e->hook_code(sentinel_page, sentinel_page + 0xFFF,
 		[](vcpu& cpu, addr_t, std::size_t) { cpu.stop(); });
 
-	auto rsp = cpu->sp();
-	rsp -= 8;
-	space->write_mem(rsp, sentinel_page);
-	cpu->set_sp(rsp);
+	// Hand DriverEntry a return address the emulator can catch. On x86 that
+	// means pushing it; on AArch64 it goes in the link register.
+	e->arch()->set_ret_addr(*cpu, sentinel_page);
 
-	cpu->reg(x86::rcx, addr_t{0});
-	cpu->reg(x86::rdx, addr_t{0});
+	// DriverEntry(DriverObject, RegistryPath)
+	conv->write_arg(*cpu, 0, 0);
+	conv->write_arg(*cpu, 1, 0);
 
 	cpu->set_pc(driver->entry_point);
 
 	cpu->run();
-	LOG_INFO("driver returned, rax=0x{:X}", cpu->reg(x86::rax));
+
+	LOG_INFO("driver returned, status=0x{:X}", conv->read_ret(*cpu));
 
 	return 0;
 }

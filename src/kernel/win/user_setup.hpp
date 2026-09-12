@@ -1,7 +1,19 @@
 #pragma once
 #include "../../emu/object.hpp"
 #include "process_params.hpp"
+#include "../../target.hpp"
 #include <cwchar>
+
+namespace win_target
+{
+#if defined(KERNEMUL_ARCH_ARM64)
+	inline constexpr std::uint16_t image_machine          = 0xAA64; // ARM64
+	inline constexpr std::uint16_t processor_architecture = 12;     // ARM64
+#else
+	inline constexpr std::uint16_t image_machine          = 0x8664; // AMD64
+	inline constexpr std::uint16_t processor_architecture = 9;      // AMD64
+#endif
+}
 
 constexpr std::uint64_t kuser_shared_data_user_va   = 0x7FFE0000;
 constexpr std::uint64_t kuser_shared_data_kernel_va  = 0xFFFFF78000000000;
@@ -15,9 +27,9 @@ inline _KUSER_SHARED_DATA make_default_kuser_shared_data()
 	sd.NtBuildNumber = 19045;
 	sd.NtProductType = NtProductWinNt;
 	sd.ProductTypeIsValid = 1;
-	sd.NativeProcessorArchitecture = 9;
-	sd.ImageNumberLow = 0x8664;
-	sd.ImageNumberHigh = 0x8664;
+	sd.NativeProcessorArchitecture = win_target::processor_architecture;
+	sd.ImageNumberLow = win_target::image_machine;
+	sd.ImageNumberHigh = win_target::image_machine;
 	sd.ActiveProcessorCount = 1;
 	sd.ActiveGroupCount = 1;
 	sd.NumberOfPhysicalPages = 0x100000;

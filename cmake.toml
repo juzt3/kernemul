@@ -1,9 +1,29 @@
 [project]
 name = "kernemul"
 languages = ["CXX"]
+cmake-after = """
+# Guest architecture, fixed at build time: the Windows type layouts in
+# kernel/win/types.hpp come from one ntoskrnl PDB and are memcpy'd into guest
+# memory as-is, so two architectures cannot coexist in one binary.
+#
+# This stays raw CMake because cmkr [options] are boolean only, and [variables]
+# emits an uncached set() that would clobber -DKERNEMUL_ARCH. It lives at
+# project level so the value exists before the arch-* conditions below are
+# evaluated.
+set(KERNEMUL_ARCH "x64" CACHE STRING "guest architecture: x64 or arm64")
+set_property(CACHE KERNEMUL_ARCH PROPERTY STRINGS x64 arm64)
+
+if(NOT KERNEMUL_ARCH MATCHES "^(x64|arm64)$")
+	message(FATAL_ERROR "KERNEMUL_ARCH must be x64 or arm64, got: ${KERNEMUL_ARCH}")
+endif()
+
+message(STATUS "kernemul guest architecture: ${KERNEMUL_ARCH}")
+"""
 
 [conditions]
 windows = "WIN32"
+arch-x64 = "KERNEMUL_ARCH STREQUAL \"x64\""
+arch-arm64 = "KERNEMUL_ARCH STREQUAL \"arm64\""
 
 [fetch-content.spdlog]
 git = "https://github.com/gabime/spdlog"
@@ -31,3 +51,5 @@ compile-features = ["cxx_std_23"]
 link-libraries = ["spdlog::spdlog", "unicorn", "raw_pdb", "Boost::beast", "OpenSSL::SSL", "OpenSSL::Crypto"]
 windows.link-libraries = ["ws2_32"]
 compile-options = ["-Wno-changes-meaning"]
+arch-x64.compile-definitions = ["KERNEMUL_ARCH_X64=1"]
+arch-arm64.compile-definitions = ["KERNEMUL_ARCH_ARM64=1"]

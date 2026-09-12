@@ -11,6 +11,13 @@ addr_t arch::ret_addr(vcpu& cpu) const
 	return ret;
 }
 
+void arch::set_ret_addr(vcpu& cpu, const addr_t addr) const
+{
+	const auto rsp = cpu.reg(x86::rsp) - sizeof(addr_t);
+	cpu.write_virt_mem(rsp, addr);
+	cpu.reg(x86::rsp, rsp);
+}
+
 std::span<const reg_t> arch::regs() const
 {
 	static constexpr reg_t regs[] = {
