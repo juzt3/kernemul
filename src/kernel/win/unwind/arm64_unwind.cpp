@@ -26,9 +26,22 @@ struct xdata_header
 	std::uint32_t code_words;
 	bool exception_data;
 	bool epilog_in_header;
+	const std::uint32_t* epilog_scopes;   // epilog_count entries, unless E is set
 	const std::uint8_t* codes;
 	const std::uint32_t* after_codes;
 };
+
+// Byte length of one unwind code. Every code describes exactly one instruction,
+// which is what lets a pc inside an epilogue be mapped to a code index.
+constexpr std::size_t code_len(const std::uint8_t b0)
+{
+	if ((b0 & 0x80) == 0x00) return 1;   // alloc_s, save_r19r20_x, save_fplr
+	if ((b0 & 0xC0) == 0x80) return 1;   // save_fplr_x
+	if (b0 == 0xE0)          return 4;   // alloc_l
+	if (b0 == 0xE2)          return 2;   // add_fp
+	if (b0 >= 0xE1)          return 1;   // set_fp, nop, end, save_next, ...
+	return 2;                            // the 0xC0-0xDF two-byte group
+}
 
 // Layout of an .xdata record: one header word, optionally an extension word
 // when both counts overflow their fields, the epilog scope words, the unwind
@@ -62,8 +75,9 @@ std::optional<xdata_header> parse_xdata(const std::uint8_t* img_base, const std:
 		h.code_words   = (w1 >> 16) & 0xFF;
 	}
 
-	// With E set, the single epilog scope is packed into the header instead of
-	// getting its own word.
+	// With E set there are no scope words: the header's epilog_count field
+	// holds the start index of the function's single epilogue instead.
+	h.epilog_scopes = h.epilog_in_header ? nullptr : (words + next);
 	if (!h.epilog_in_header)
 		next += h.epilog_count;
 
@@ -152,22 +166,31 @@ public:
 				load_reg(reg_lr, off + 8);
 				i += 2;
 			}
-			else if ((b0 & 0xFE) == 0xD8        // save_fregp    1101100x
-			      || (b0 & 0xFE) == 0xDC)       // save_freg     1101110x
+			else if ((b0 & 0xFE) == 0xD8)       // save_fregp  1101100x xxzzzzzz
 			{
-				// d8-d15 are not modelled in unwind_context; only sp matters
-				// and these forms do not change it.
-				mark_pair(0, 0, true);
+				const int x = ((b0 & 0x01) << 2) | (b1() >> 6);
+				const auto off = (b1() & 0x3F) * 8ull;
+				mark_pair(x, off, true);
+				load_fp_pair(x, off);
 				i += 2;
 			}
 			else if ((b0 & 0xFE) == 0xDA)       // save_fregp_x  1101101x xxzzzzzz
 			{
+				const int x = ((b0 & 0x01) << 2) | (b1() >> 6);
+				mark_pair(x, 0, true);
+				load_fp_pair(x, 0);
 				ctx_.sp += ((b1() & 0x3F) + 1) * 8ull;
-				mark_pair(0, 0, true);
+				i += 2;
+			}
+			else if ((b0 & 0xFE) == 0xDC)       // save_freg  1101110x xxzzzzzz
+			{
+				const int x = ((b0 & 0x01) << 2) | (b1() >> 6);
+				load_fp(x, (b1() & 0x3F) * 8ull);
 				i += 2;
 			}
 			else if (b0 == 0xDE)                // save_freg_x  11011110 xxxzzzzz
 			{
+				load_fp(b1() >> 5, 0);
 				ctx_.sp += ((b1() & 0x1F) + 1) * 8ull;
 				i += 2;
 			}
@@ -200,12 +223,16 @@ public:
 			}
 			else if (b0 == 0xE6)                // save_next
 			{
-				if (!last_pair_fp_)
-				{
-					last_pair_reg_ += 2;
-					last_pair_off_ += 16;
+				// Continues whichever run the previous save_*regp started, at
+				// the next 16-byte slot.
+				last_pair_reg_ += 2;
+				last_pair_off_ += 16;
+
+				if (last_pair_fp_)
+					load_fp_pair(last_pair_reg_, last_pair_off_);
+				else
 					load_pair(last_pair_reg_, last_pair_off_);
-				}
+
 				i += 1;
 			}
 			else if (b0 == 0xFC)                // pac_sign_lr
@@ -238,6 +265,19 @@ private:
 		load_reg(reg == reg_fp ? reg_lr : reg + 1, off + 8);
 	}
 
+	// n indexes d8-d15, so n == 0 is d8.
+	void load_fp(const int n, const std::uint64_t off)
+	{
+		if (n < unwind_context::max_fp)
+			ctx_.fp_regs[n] = mem_.read_mem<addr_t>(ctx_.sp + off);
+	}
+
+	void load_fp_pair(const int n, const std::uint64_t off)
+	{
+		load_fp(n, off);
+		load_fp(n + 1, off + 8);
+	}
+
 	void mark_pair(const int reg, const std::uint64_t off, const bool is_fp)
 	{
 		last_pair_reg_ = reg;
@@ -253,8 +293,73 @@ private:
 	bool last_pair_fp_ = false;
 };
 
-// Packed .pdata carries no exception handler, so this only ever runs while
-// walking through an intermediate frame -- the tested path goes through xdata.
+// If rva sits inside an epilogue, returns {code index where that epilogue's
+// codes begin, how many of its instructions have already run}.
+std::optional<std::pair<std::size_t, std::uint32_t>> find_epilog(
+	const xdata_header& hdr, const std::uint32_t rva, const std::size_t total)
+{
+	// Number of instructions the codes from `at` describe, up to and including
+	// the terminating end / end_c.
+	auto extent = [&](std::size_t at) -> std::uint32_t
+	{
+		std::uint32_t insns = 0;
+		while (at < total)
+		{
+			const std::uint8_t b0 = hdr.codes[at];
+			++insns;
+			if (b0 == 0xE4 || b0 == 0xE5)
+				break;
+			at += code_len(b0);
+		}
+		return insns;
+	};
+
+	if (hdr.epilog_in_header)
+	{
+		// One epilogue, its codes starting at the index stored in the
+		// epilog_count field, ending at the end of the function.
+		const std::size_t at = hdr.epilog_count;
+		if (at >= total)
+			return std::nullopt;
+
+		const auto insns = extent(at);
+		const std::uint32_t begin = hdr.function_length - insns * 4;
+		if (rva >= begin && rva < hdr.function_length)
+			return std::make_pair(at, (rva - begin) / 4);
+
+		return std::nullopt;
+	}
+
+	for (std::uint32_t i = 0; i < hdr.epilog_count; ++i)
+	{
+		const std::uint32_t word = hdr.epilog_scopes[i];
+		const std::uint32_t begin = (word & 0x3FFFF) * 4;
+		const std::size_t at = (word >> 22) & 0x3FF;
+
+		if (at >= total)
+			continue;
+
+		const auto insns = extent(at);
+		if (rva >= begin && rva < begin + insns * 4)
+			return std::make_pair(at, (rva - begin) / 4);
+	}
+
+	return std::nullopt;
+}
+
+// Unwinds a frame described by packed .pdata.
+//
+// The layout below was derived from what MSVC actually emits and cross-checked
+// against dumpbin's own reading of the packed word. The saved-register area
+// sits at the *top* of the frame, and within it: integer registers x19 upward
+// first, then LR, then d8 upward. A chained frame instead puts the {fp, lr}
+// pair at the bottom of the frame, with everything else above it.
+//
+//   RegI=0 RegF=0 CR=1 size=0x20 -> lr at +0x10   (0x10 of locals below)
+//   RegI=0 RegF=3 CR=1 size=0x30 -> lr at +0,    d8 at +8
+//   RegI=2 RegF=2 CR=1 size=0x30 -> x19 +0, lr +0x10, d8 +0x18
+//   RegI=5 RegF=0 CR=1 size=0x30 -> x19 +0, lr +0x28
+//   RegI=2 RegF=0 CR=3 size=0x20 -> fp +0, lr +8, x19 +0x10
 bool apply_packed(addr_space& mem, const std::uint32_t packed, unwind_context& ctx)
 {
 	const std::uint32_t reg_f      = (packed >> 13) & 0x07;
@@ -263,32 +368,50 @@ bool apply_packed(addr_space& mem, const std::uint32_t packed, unwind_context& c
 	const std::uint32_t cr         = (packed >> 21) & 0x03;
 	const std::uint64_t frame_size = ((packed >> 23) & 0x1FF) * 16ull;
 
-	if (cr == 3)
+	const std::uint32_t fp_count = reg_f ? reg_f + 1 : 0;
+	const bool chained = (cr == 0b10 || cr == 0b11);
+	const bool lr_saved = (cr == 0b01);
+
+	auto load = [&](const addr_t off) { return mem.read_mem<addr_t>(ctx.sp + off); };
+
+	addr_t area;
+
+	if (chained)
 	{
-		// Chained: the {x29, lr} pair sits at the bottom of the frame.
-		ctx.gp[reg_fp] = mem.read_mem<addr_t>(ctx.sp);
-		ctx.gp[reg_lr] = mem.read_mem<addr_t>(ctx.sp + 8);
-		ctx.sp += frame_size;
-		return true;
+		// {fp, lr} at the bottom; the rest of the saved area follows it.
+		ctx.gp[reg_fp] = load(0);
+		ctx.gp[reg_lr] = load(8);
+		area = 0x10;
+	}
+	else
+	{
+		// Saved area is top-aligned within the frame.
+		std::uint64_t saved = 8ull * (reg_i + (lr_saved ? 1 : 0) + fp_count) + (h ? 64ull : 0ull);
+		saved = (saved + 15) & ~std::uint64_t{15};
+
+		if (saved > frame_size)
+		{
+			LOG_WARN("arm64 packed unwind: saved area 0x{:X} exceeds frame 0x{:X}", saved, frame_size);
+			return false;
+		}
+
+		area = frame_size - saved;
 	}
 
-	// Unchained. The callee-saved area sits at the top of the frame, with the
-	// home parameter block (when H is set) above it and LR just below that.
-	const std::uint64_t home = h ? 64ull : 0ull;
+	for (std::uint32_t k = 0; k < reg_i; ++k)
+		ctx.gp[19 + k] = load(area + 8ull * k);
 
-	if (cr == 1 || cr == 2)
-		ctx.gp[reg_lr] = mem.read_mem<addr_t>(ctx.sp + frame_size - home - 8);
+	if (lr_saved)
+		ctx.gp[reg_lr] = load(area + 8ull * reg_i);
 
-	std::uint64_t off = frame_size - home - ((cr == 1 || cr == 2) ? 8 : 0) - reg_i * 8ull;
-	for (std::uint32_t n = 0; n < reg_i; ++n, off += 8)
-		ctx.gp[19 + n] = mem.read_mem<addr_t>(ctx.sp + off);
-
-	(void)reg_f; // d8-d15 are not modelled in unwind_context
+	const addr_t fp_at = area + 8ull * (reg_i + (lr_saved ? 1 : 0));
+	for (std::uint32_t k = 0; k < fp_count && k < unwind_context::max_fp; ++k)
+		ctx.fp_regs[k] = load(fp_at + 8ull * k);
 
 	ctx.sp += frame_size;
 
-	// cr == 0 means LR was never spilled, so whatever is in x30 is still the
-	// return address.
+	// cr == 0b00 is a leaf that never spilled LR, so x30 still holds the
+	// return address and needs no recovery.
 	return true;
 }
 
@@ -400,11 +523,24 @@ bool arm64_unwinder::unwind_frame(
 	if (!hdr)
 		return false;
 
-	// Unwinding from the body of the function, so the whole prologue has to be
-	// undone. A pc inside an epilog scope would need to start partway through
-	// the codes at that scope's index instead.
+	// Where in the code stream to start replaying, and how many of those codes
+	// have already taken effect.
+	const auto rva_in_func = static_cast<std::uint32_t>(ctx.pc - mod.addr) - func->begin_rva;
+	const std::size_t total = hdr->code_words * 4;
+	std::size_t start = 0;
+
+	if (const auto epi = find_epilog(*hdr, rva_in_func, total))
+	{
+		// pc sits inside an epilogue, so part of the frame is already torn
+		// down. Each unwind code describes one instruction, so skip as many
+		// codes as the epilogue has already executed and replay the rest.
+		start = epi->first;
+		for (std::uint32_t k = 0; k < epi->second && start < total; ++k)
+			start += code_len(hdr->codes[start]);
+	}
+
 	code_replayer replayer(mem, ctx);
-	if (!replayer.run(hdr->codes, hdr->code_words * 4))
+	if (!replayer.run(hdr->codes + start, total - start))
 		return false;
 
 	if (hdr->exception_data)

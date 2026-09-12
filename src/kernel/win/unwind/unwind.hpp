@@ -17,6 +17,12 @@ struct unwind_context
 	addr_t sp;
 	static constexpr int max_gp = 31;
 	addr_t gp[max_gp];
+
+	// d8-d15, the callee-saved half of the FP/SIMD registers. Only the low 64
+	// bits are ever spilled by a prologue, so that is all that is tracked.
+	// AArch64 only; the x64 unwinder ignores its save_xmm128 codes.
+	static constexpr int max_fp = 8;
+	addr_t fp_regs[max_fp];
 };
 
 struct unwind_result

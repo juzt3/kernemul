@@ -77,6 +77,14 @@ bool win_exception::handle(vcpu& cpu, const cpu_exception ex)
 
 	for (std::size_t depth = 0; depth < 64; ++depth)
 	{
+		// Only the faulting frame's pc is an instruction address. Every frame
+		// above it holds a return address, which points at the instruction
+		// *after* the call -- outside the try scope that was active, and
+		// potentially past the end of the function entirely. Step back into the
+		// call before looking up the function or its scopes.
+		if (depth > 0)
+			uw_ctx.pc -= 1;
+
 		mod = proc.find_module_by_addr(uw_ctx.pc);
 		if (!mod)
 			break;
