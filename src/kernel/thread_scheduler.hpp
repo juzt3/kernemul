@@ -172,18 +172,14 @@ public:
 				break;
 
 			cpu.run();
-			curr->save(cpu);
 
+			// Anything that stops a cpu without ending its thread is the
+			// quantum running out: curr stays put, and the next schedule()
+			// banks it and puts it back on the queue.
 			if (!curr->is_finished())
-			{
-				// A hook halted the cpu -- an unimplemented function, say.
-				// Nothing else can stop a thread short of its start routine
-				// returning, and rescheduling would spin on the same address.
-				LOG_ERR("cpu {} halted at 0x{:X} in thread {}", cpu.id(), cpu.pc(), curr->id());
-				stop();
-				break;
-			}
+				continue;
 
+			curr->save(cpu);
 			release(cpu);
 			curr->proc()->terminate_thread(curr->id());
 			curr = nullptr;
@@ -201,6 +197,7 @@ public:
 		if (prev)
 		{
 			prev->save(cpu);
+			cpu.set_thread(nullptr);
 			ready_queue_.push_back(std::move(prev));
 			cv_.notify_one();
 		}

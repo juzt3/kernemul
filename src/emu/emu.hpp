@@ -23,6 +23,10 @@ public:
 
 	virtual void run() = 0;
 	virtual void stop() = 0;
+
+	// Stop the cpu only if it is somewhere it can be stopped from the outside.
+	// A backend that cannot tell just stops.
+	virtual void try_stop() { stop(); }
 	virtual void flush_tlb() = 0;
 
 	virtual void reg_read(reg_t reg, void* value, std::size_t size) = 0;

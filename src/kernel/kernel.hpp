@@ -6,6 +6,8 @@
 #include "../emu/emu.hpp"
 #include "../emu/calling_conv.hpp"
 #include "../util/log.hpp"
+#include <atomic>
+#include <chrono>
 #include <functional>
 #include <filesystem>
 #include <map>
@@ -60,15 +62,35 @@ public:
 		return emu_->cpus();
 	}
 
+	// How long a thread may hold a cpu before it is made to give it up.
+	static constexpr auto default_thread_runtime = std::chrono::milliseconds(300);
+
 	// Give every cpu a host thread of its own and let the scheduler spread the
-	// guest's threads over them. Returns once they have all run out of work.
-	void run_all()
+	// guest's threads over them. This thread has nothing to do but wait for
+	// them, so it keeps time: once a thread has had its run it asks the cpu to
+	// reschedule, or a thread that never returns would own its cpu forever.
+	void run_all(const std::chrono::milliseconds runtime = default_thread_runtime)
 	{
+		std::atomic<std::size_t> live{cpus().size()};
 		std::vector<std::thread> hosts;
 		hosts.reserve(cpus().size());
 
 		for (const auto& cpu : cpus())
-			hosts.emplace_back([this, cpu] { scheduler_.run(*cpu); });
+		{
+			hosts.emplace_back([this, cpu, &live]
+			{
+				scheduler_.run(*cpu);
+				--live;
+			});
+		}
+
+		while (live.load())
+		{
+			std::this_thread::sleep_for(runtime);
+
+			for (const auto& cpu : cpus())
+				cpu->try_stop();
+		}
 
 		for (auto& host : hosts)
 			host.join();
@@ -131,6 +153,12 @@ struct kernel_state
 					LOG_ERR("unimplemented function {}!{}", m->name, sym->format());
 				else
 					LOG_ERR("unimplemented function at {}+0x{:X}", m->name, addr - m->addr);
+
+				// There is nothing to go on to, so the thread ends here. Left
+				// running it would be rescheduled onto this address forever.
+				if (const auto t = cpu.thread())
+					t->finish();
+
 				cpu.stop();
 			});
 	}

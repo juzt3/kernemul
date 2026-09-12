@@ -58,19 +58,18 @@ public:
 
 	void run() override
 	{
-		const bool nested = running_.load();
+		const bool nested = running_.load() != 0;
 		for (;;)
 		{
-			if (!nested) running_ = true;
 			auto pc = reg<addr_t>(arch_->pc());
 
 			// A nested run executes guest code, so for its duration this cpu is
 			// not at a hook's safe point, whatever the hook around it says.
 			const auto hooks = in_hook_.exchange(0);
+			++running_;
 			uc_emu_start(uc_, pc, 0, 0, 0);
+			--running_;
 			in_hook_ = hooks;
-
-			if (!nested) running_ = false;
 
 			if (redirect_.exchange(false))
 			{
@@ -99,6 +98,15 @@ public:
 		uc_emu_stop(uc_);
 	}
 
+	void try_stop() override
+	{
+		// Only the outermost run can be taken away. A nested one ends at a
+		// trampoline its caller installed, and stopping it anywhere else hands
+		// that caller a result that was never produced.
+		if (running_.load() == 1)
+			stop();
+	}
+
 	void flush_tlb() override
 	{
 		uc_ctl_flush_tlb(uc_);
@@ -120,7 +128,10 @@ public:
 	}
 
 	uc_engine* uc_;
-	std::atomic<bool> running_{false};
+
+	// uc_emu_start nesting: 0 is not executing, 1 is the outermost run, more
+	// than that is a hook that started its own.
+	std::atomic<int> running_{0};
 	std::atomic<int> in_hook_{0};
 	std::atomic<bool> pending_pause_{false};
 	std::atomic<bool> redirect_{false};
