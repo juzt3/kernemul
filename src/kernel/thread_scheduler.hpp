@@ -59,6 +59,16 @@ public:
 		}
 	}
 
+	[[nodiscard]] std::uint64_t get_reg(vcpu& cpu, const reg_t r) const
+	{
+		const auto regs = cpu.arch()->regs();
+		for (std::size_t i = 0; i < regs.size(); ++i)
+		{
+			if (regs[i] == r) return values_[i].gp;
+		}
+		return 0;
+	}
+
 	template <typename T>
 	void set_reg_val(vcpu& cpu, const reg_t r, const T& value)
 	{

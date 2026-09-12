@@ -25,6 +25,9 @@ struct arm64_win_conv : calling_conv
 		return cpu.reg(arm64::x0);
 	}
 
+	void set_ret_addr(vcpu& cpu, thread& t, addr_t addr) const override;
+	std::uint64_t read_ret(vcpu& cpu, const thread& t) const override;
+
 protected:
 	void arg_read(vcpu& cpu, const std::size_t index, void* buf, const std::size_t size) const override
 	{

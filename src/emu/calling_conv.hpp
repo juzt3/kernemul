@@ -29,6 +29,12 @@ struct calling_conv
 	virtual void write_arg(vcpu& cpu, std::size_t index, std::uint64_t value) const = 0;
 	virtual std::uint64_t read_ret(vcpu& cpu) const = 0;
 
+	// Against a thread's saved context rather than the live cpu: a thread that
+	// has not been scheduled yet, or one that has already run to completion,
+	// holds its state itself.
+	virtual void set_ret_addr(vcpu& cpu, thread& t, addr_t addr) const = 0;
+	virtual std::uint64_t read_ret(vcpu& cpu, const thread& t) const = 0;
+
 protected:
 	virtual void arg_read(vcpu& cpu, std::size_t index, void* buf, std::size_t size) const = 0;
 	virtual void ret_write(vcpu& cpu, const void* buf, std::size_t size) const = 0;
