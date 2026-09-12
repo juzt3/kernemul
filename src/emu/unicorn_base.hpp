@@ -37,6 +37,24 @@ public:
 		if (uc_) uc_close(uc_);
 	}
 
+	// Held for as long as a hook callback runs on this cpu. A cpu inside a hook
+	// is not executing guest code, so an engine-wide operation neither has to
+	// stop it nor wait for it -- it only has to keep it from resuming, which is
+	// what the wait on the way out does.
+	struct hook_guard
+	{
+		explicit hook_guard(vcpu& cpu)
+			: cpu_(static_cast<unicorn_vcpu_base&>(cpu)) { ++cpu_.in_hook_; }
+
+		~hook_guard()
+		{
+			while (cpu_.pending_pause_.load()) {}
+			--cpu_.in_hook_;
+		}
+
+		unicorn_vcpu_base& cpu_;
+	};
+
 	void run() override
 	{
 		const bool nested = running_.load();
@@ -44,7 +62,13 @@ public:
 		{
 			if (!nested) running_ = true;
 			auto pc = reg<addr_t>(arch_->pc());
+
+			// A nested run executes guest code, so for its duration this cpu is
+			// not at a hook's safe point, whatever the hook around it says.
+			const auto hooks = in_hook_.exchange(0);
 			uc_emu_start(uc_, pc, 0, 0, 0);
+			in_hook_ = hooks;
+
 			if (!nested) running_ = false;
 
 			if (redirect_.exchange(false))
@@ -58,7 +82,11 @@ public:
 				continue;
 			}
 
-			if (nested || !pending_pause_.load())
+			// Stopped for an engine-wide operation rather than by a hook that
+			// meant it: wait for it to finish and carry on from the same pc. A
+			// nested run has to resume too, or its caller is handed a result
+			// that was never produced.
+			if (!pending_pause_.load())
 				break;
 
 			while (pending_pause_.load()) {}
@@ -92,6 +120,7 @@ public:
 
 	uc_engine* uc_;
 	std::atomic<bool> running_{false};
+	std::atomic<int> in_hook_{0};
 	std::atomic<bool> pending_pause_{false};
 	std::atomic<bool> redirect_{false};
 	addr_t redirect_pc_{0};
@@ -105,6 +134,8 @@ public:
 
 	void map_phys_mem(addr_t addr, std::size_t size, mem_prot prot) override
 	{
+		std::unique_lock mem_lk(mem_mtx_);
+
 		auto it = mem_.find(addr);
 		std::size_t old_size = (it != mem_.end()) ? it->second.size() : 0;
 
@@ -123,6 +154,8 @@ public:
 
 	void unmap_phys_mem(addr_t addr, std::size_t size, mem_prot) override
 	{
+		std::lock_guard mem_lk(mem_mtx_);
+
 		run_on_all([&] {
 			for (auto& cpu : cpus_)
 				uc_mem_unmap(engine(cpu), addr, size);
@@ -133,6 +166,8 @@ public:
 
 	void read_phys_mem(addr_t addr, void* buf, std::size_t size) override
 	{
+		std::lock_guard mem_lk(mem_mtx_);
+
 		auto [src, avail] = find_backing(addr);
 		if (src)
 			std::memcpy(buf, src, std::min(size, avail));
@@ -140,6 +175,8 @@ public:
 
 	void write_phys_mem(addr_t addr, const void* buf, std::size_t size) override
 	{
+		std::lock_guard mem_lk(mem_mtx_);
+
 		auto [dst, avail] = find_backing(addr);
 		if (dst)
 			std::memcpy(dst, buf, std::min(size, avail));
@@ -263,6 +300,7 @@ private:
 		{
 			if (engine(cpu) == uc)
 			{
+				unicorn_vcpu_base::hook_guard guard(*cpu);
 				cb(*cpu, addr, static_cast<std::size_t>(size), uc_type_to_prot(type));
 				return;
 			}
@@ -279,6 +317,8 @@ private:
 		{
 			if (engine(cpu) == uc)
 			{
+				unicorn_vcpu_base::hook_guard guard(*cpu);
+
 				if (cb(*cpu))
 				{
 					static_cast<unicorn_vcpu_base*>(cpu.get())->request_redirect();
@@ -318,6 +358,8 @@ private:
 
 			cpu->set_pc(insn_pc);
 
+			unicorn_vcpu_base::hook_guard guard(*cpu);
+
 			if (cb(*cpu))
 			{
 				static_cast<unicorn_vcpu_base*>(cpu.get())->request_redirect();
@@ -342,6 +384,7 @@ private:
 		{
 			if (engine(cpu) == uc)
 			{
+				unicorn_vcpu_base::hook_guard guard(*cpu);
 				cb(*cpu, addr, static_cast<std::size_t>(size));
 				return;
 			}
@@ -358,7 +401,10 @@ private:
 		for (auto& cpu : self->cpus_)
 		{
 			if (engine(cpu) == uc)
+			{
+				unicorn_vcpu_base::hook_guard guard(*cpu);
 				return cb(*cpu, addr, static_cast<std::size_t>(size), uc_type_to_prot(type));
+			}
 		}
 
 		return false;
@@ -374,6 +420,8 @@ private:
 		{
 			if (engine(cpu) == uc)
 			{
+				unicorn_vcpu_base::hook_guard guard(*cpu);
+
 				auto ex = cpu->arch()->intr_to_excp(static_cast<int>(intno));
 				if (cb(*cpu, ex))
 				{
@@ -455,17 +503,34 @@ private:
 		return { nullptr, 0 };
 	}
 
+	// Runs fn with no cpu executing guest code. A cpu inside a hook already
+	// qualifies: it is asked to pause, which its hook waits on before returning,
+	// and it is neither stopped nor waited for. That is what lets a hook itself
+	// call in here -- stopping it would end the run it is in the middle of, and
+	// waiting for it would be waiting on the caller.
 	void run_on_all(std::function<void()> fn)
 	{
 		std::lock_guard lk(op_mtx_);
+
+		for (auto& cpu : cpus_)
+			static_cast<unicorn_vcpu_base*>(cpu.get())->pending_pause_ = true;
+
 		for (auto& cpu : cpus_)
 		{
 			auto* uc = static_cast<unicorn_vcpu_base*>(cpu.get());
-			uc->pending_pause_ = true;
-			uc->stop();
+
+			if (!uc->in_hook_.load())
+				uc->stop();
 		}
+
+		// in_hook_ is re-read every time round: a cpu that was executing when
+		// it was stopped can still enter a hook before it gets there, and would
+		// then be parked on the way out with running_ never clearing.
 		for (auto& cpu : cpus_)
-			while (static_cast<unicorn_vcpu_base*>(cpu.get())->running_.load()) {}
+		{
+			auto* uc = static_cast<unicorn_vcpu_base*>(cpu.get());
+			while (uc->running_.load() && !uc->in_hook_.load()) {}
+		}
 
 		fn();
 
@@ -476,4 +541,8 @@ private:
 	std::unordered_map<addr_t, std::vector<std::uint8_t>> mem_;
 	std::list<unicorn_hook> hooks_;
 	std::mutex op_mtx_;
+
+	// mem_ is host state. Pausing the engines says nothing about the other host
+	// threads walking page tables through read_phys_mem and write_phys_mem.
+	std::recursive_mutex mem_mtx_;
 };
