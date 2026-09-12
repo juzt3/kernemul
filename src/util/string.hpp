@@ -73,8 +73,10 @@ inline void write_wstring_buffer(addr_space& space, addr_t addr, std::size_t buf
 	write_basic_string_buffer<wchar_t>(space, addr, buf_count, str);
 }
 
-template <typename T>
-addr_t allocate_basic_string(addr_space& space, std::basic_string_view<T> str, bool terminate = true)
+// Space is anything exposing addr_space's alloc/write_mem interface, so guest strings
+// can be placed either by the raw address space or by a tracking allocator
+template <typename T, typename Space>
+addr_t allocate_basic_string(Space& space, std::basic_string_view<T> str, bool terminate = true)
 {
 	const std::size_t byte_size = str.size() * sizeof(T) + (terminate ? sizeof(T) : 0);
 	const auto addr = space.alloc(byte_size, prot_rw);
@@ -82,17 +84,19 @@ addr_t allocate_basic_string(addr_space& space, std::basic_string_view<T> str, b
 	if (terminate)
 	{
 		constexpr T terminator{};
-		space.write_mem<T>(addr + str.size() * sizeof(T), terminator);
+		space.template write_mem<T>(addr + str.size() * sizeof(T), terminator);
 	}
 	return addr;
 }
 
-inline addr_t allocate_string(addr_space& space, std::string_view str, bool terminate = true)
+template <typename Space>
+addr_t allocate_string(Space& space, std::string_view str, bool terminate = true)
 {
 	return allocate_basic_string<char>(space, str, terminate);
 }
 
-inline addr_t allocate_wstring(addr_space& space, std::wstring_view str, bool terminate = true)
+template <typename Space>
+addr_t allocate_wstring(Space& space, std::wstring_view str, bool terminate = true)
 {
 	return allocate_basic_string<wchar_t>(space, str, terminate);
 }

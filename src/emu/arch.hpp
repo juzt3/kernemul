@@ -27,6 +27,7 @@ struct arch
 	virtual std::span<const reg_t> regs() const = 0;
 	virtual std::size_t reg_size(reg_t r) const = 0;
 	virtual cpu_exception intr_to_excp(int vector) const = 0;
+	virtual addr_t fault_addr(vcpu& cpu) const = 0;
 
 	void set_emu(emu* e) { emu_ = e; }
 

@@ -2,6 +2,7 @@
 #include "../process.hpp"
 #include "../map.hpp"
 #include "win_handle_table.hpp"
+#include "win_user_mem.hpp"
 #include "user_setup.hpp"
 #include "ldr.hpp"
 #include "process_params.hpp"
@@ -40,7 +41,7 @@ public:
 	win_user_proc(id_type id, std::shared_ptr<struct addr_space> space,
 		win_obj_manager& objs, const win_filesystem& fs,
 		addr_t shared_data_pa, std::string_view image_path)
-		:	windows_process(id, std::move(space), objs, fs)
+		:	windows_process(id, std::move(space), objs, fs), mem_(addr_space_)
 	{
 		auto& sp = *addr_space_;
 
@@ -48,23 +49,25 @@ public:
 		const auto wide_dir = win::dir_from_path(wide_path);
 		current_dir_ = narrow_wstring(wide_dir);
 
-		const auto peb_addr = sp.alloc(peb64_alloc_size, prot_rw);
+		const auto peb_addr = mem_.alloc(peb64_alloc_size, prot_rw);
 		peb_ = emu_object<_PEB64>(sp, peb_addr);
 		peb_.write(make_default_peb());
 
-		const auto ldr_addr = sp.alloc(peb_ldr_data64_alloc_size, prot_rw);
-		ldr_ = ldr_module_list(sp, ldr_addr);
+		const auto ldr_addr = mem_.alloc(peb_ldr_data64_alloc_size, prot_rw);
+		ldr_ = ldr_module_list(mem_, ldr_addr);
 
-		params_ = win::init_process_parameters(sp, wide_path);
+		params_ = win::init_process_parameters(mem_, wide_path);
 
 		sp.mmu_->map_virt_phys(sp, kuser_shared_data_user_va, shared_data_pa,
 			sizeof(_KUSER_SHARED_DATA), prot_read);
+		mem_.register_mapped(kuser_shared_data_user_va, sizeof(_KUSER_SHARED_DATA),
+			win::page_readonly);
 
 		auto peb = peb_.read();
 		peb.Ldr = ldr_addr;
 		peb.ProcessParameters = params_.address();
-		peb.ApiSetMap = win::init_api_set_map(sp, fs);
-		peb.GdiSharedHandleTable = sp.alloc(0x1000, prot_rw);
+		peb.ApiSetMap = win::init_api_set_map(mem_, fs);
+		peb.GdiSharedHandleTable = mem_.alloc(0x1000, prot_rw);
 		peb_.write(peb);
 	}
 
@@ -74,7 +77,11 @@ public:
 
 	std::shared_ptr<thread> create_thread(vcpu& cpu, addr_t start_addr) override;
 
+	win_user_mem& mem() { return mem_; }
+	const win_user_mem& mem() const { return mem_; }
+
 private:
+	win_user_mem mem_;
 	ldr_module_list ldr_;
 	emu_object<_RTL_USER_PROCESS_PARAMETERS64> params_;
 	std::string current_dir_;

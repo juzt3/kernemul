@@ -81,6 +81,8 @@ struct win_exception final : os_exception
 	bool handle(vcpu& cpu, cpu_exception ex) override;
 
 private:
+	bool handle_page_fault(vcpu& cpu);
+
 	win_kernel_state& kernel_;
 	std::unique_ptr<win_unwinder> unwinder_;
 };

@@ -115,6 +115,7 @@ enum class cpu_exception : std::uint8_t
 	debug,
 	breakpoint,
 	illegal_instruction,
+	page_fault,
 	other,
 };
 

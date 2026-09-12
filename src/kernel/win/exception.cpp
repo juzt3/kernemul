@@ -23,8 +23,28 @@ std::uint32_t exception_to_status(const cpu_exception ex)
 win_exception::win_exception(win_kernel_state& kernel)
 	: kernel_(kernel) { }
 
+bool win_exception::handle_page_fault(vcpu& cpu)
+{
+	const auto t = cpu.thread();
+
+	if (!t)
+		return false;
+
+	auto* const proc = dynamic_cast<win_user_proc*>(t->proc().get());
+
+	if (!proc)
+		return false;
+
+	// guard pages and lazily committed pages are resolved here, everything else
+	// falls through and gets dispatched as an access violation
+	return proc->mem().handle_fault(cpu.arch()->fault_addr(cpu));
+}
+
 bool win_exception::handle(vcpu& cpu, const cpu_exception ex)
 {
+	if (ex == cpu_exception::page_fault && handle_page_fault(cpu))
+		return true;
+
 	auto& proc = *kernel_.sys_proc;
 	const auto original_pc = cpu.pc();
 	const auto code = exception_to_status(ex);

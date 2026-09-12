@@ -20,11 +20,10 @@ std::shared_ptr<thread> win_user_proc::create_thread(vcpu& cpu, const addr_t sta
 {
 	const auto id = static_cast<thread_id_type>(objs_.allocate_id());
 
-	auto space = addr_space();
-	const addr_t stack_base = space->alloc(default_stack_size, prot_rw);
+	const addr_t stack_base = mem_.alloc(default_stack_size, prot_rw);
 	auto self = std::static_pointer_cast<windows_process>(shared_from_this());
 	auto t = std::make_shared<win_user_thread>(
-		id, std::move(self), start_addr,
+		id, std::move(self), mem_, start_addr,
 		stack_base, default_stack_size, cpu);
 
 	emulator_->init_thread_segments(*t, cpu, t->teb().address());
@@ -57,7 +56,9 @@ std::shared_ptr<proc_module> win_user_proc::load_module(const std::string_view n
 
 void win_user_proc::module_add_cb(proc_module& mod)
 {
-	ldr_.add_module(*addr_space_, mod.addr, mod.entry_point,
+	mem_.register_image(mod.addr, mod.size);
+
+	ldr_.add_module(mem_, mod.addr, mod.entry_point,
 		mod.size, mod.name, true);
 }
 

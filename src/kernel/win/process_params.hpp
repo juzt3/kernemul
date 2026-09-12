@@ -13,7 +13,7 @@ constexpr std::wstring_view system32_dir = L"C:\\Windows\\System32\\";
 namespace win
 {
 
-inline addr_t allocate_environment_block(addr_space& space)
+inline addr_t allocate_environment_block(win_user_mem& mem)
 {
 	std::wstring env;
 	env += L"PATH=";
@@ -27,8 +27,8 @@ inline addr_t allocate_environment_block(addr_space& space)
 	env += L'\0';
 
 	const auto size = env.size() * sizeof(wchar_t);
-	const auto addr = space.alloc(size, prot_rw);
-	space.write_mem(addr, env.data(), size);
+	const auto addr = mem.alloc(size, prot_rw);
+	mem.write_mem(addr, env.data(), size);
 	return addr;
 }
 
@@ -39,9 +39,9 @@ inline std::wstring_view dir_from_path(std::wstring_view path)
 }
 
 inline emu_object<_RTL_USER_PROCESS_PARAMETERS64> init_process_parameters(
-	addr_space& space, std::wstring_view image_path)
+	win_user_mem& mem, std::wstring_view image_path)
 {
-	const auto addr = space.alloc(rtl_user_process_parameters64_alloc_size, prot_rw);
+	const auto addr = mem.alloc(rtl_user_process_parameters64_alloc_size, prot_rw);
 	const auto current_dir = dir_from_path(image_path);
 
 	_RTL_USER_PROCESS_PARAMETERS64 params{};
@@ -50,18 +50,18 @@ inline emu_object<_RTL_USER_PROCESS_PARAMETERS64> init_process_parameters(
 	params.Flags = 0x6001;
 	params.ConsoleHandle = ~0ULL;
 
-	params.CurrentDirectory.DosPath = init_unicode_string64(space, current_dir);
-	params.DllPath = init_unicode_string64(space, system32_dir);
-	params.ImagePathName = init_unicode_string64(space, image_path);
-	params.CommandLine = init_unicode_string64(space, image_path);
-	params.Environment = allocate_environment_block(space);
+	params.CurrentDirectory.DosPath = init_unicode_string64(mem, current_dir);
+	params.DllPath = init_unicode_string64(mem, system32_dir);
+	params.ImagePathName = init_unicode_string64(mem, image_path);
+	params.CommandLine = init_unicode_string64(mem, image_path);
+	params.Environment = allocate_environment_block(mem);
 
-	auto obj = emu_object<_RTL_USER_PROCESS_PARAMETERS64>(space, addr);
+	auto obj = emu_object<_RTL_USER_PROCESS_PARAMETERS64>(mem.space(), addr);
 	obj.write(params);
 	return obj;
 }
 
-inline addr_t load_api_set_from_pe(addr_space& space, std::span<const std::uint8_t> data)
+inline addr_t load_api_set_from_pe(win_user_mem& mem, std::span<const std::uint8_t> data)
 {
 	if (data.size() < sizeof(pe::dos_header))
 		return 0;
@@ -83,19 +83,19 @@ inline addr_t load_api_set_from_pe(addr_space& space, std::span<const std::uint8
 		if (offset + size > data.size())
 			break;
 
-		const auto addr = space.alloc(size, prot_rw);
-		space.write_mem(addr, data.data() + offset, size);
+		const auto addr = mem.alloc(size, prot_rw);
+		mem.write_mem(addr, data.data() + offset, size);
 		return addr;
 	}
 
 	return 0;
 }
 
-inline addr_t init_api_set_map(addr_space& space, const win_filesystem& fs)
+inline addr_t init_api_set_map(win_user_mem& mem, const win_filesystem& fs)
 {
 	if (const auto file = fs.open(std::string(system32_dir_narrow) + "apisetschema.dll"))
 	{
-		if (const auto addr = load_api_set_from_pe(space, file->data()))
+		if (const auto addr = load_api_set_from_pe(mem, file->data()))
 			return addr;
 	}
 
@@ -109,8 +109,8 @@ inline addr_t init_api_set_map(addr_space& space, const win_filesystem& fs)
 		.HashFactor = 0,
 	};
 
-	const auto addr = space.alloc(sizeof(ns), prot_rw);
-	space.write_mem(addr, &ns, sizeof(ns));
+	const auto addr = mem.alloc(sizeof(ns), prot_rw);
+	mem.write_mem(addr, &ns, sizeof(ns));
 	return addr;
 }
 

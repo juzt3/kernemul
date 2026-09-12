@@ -8,8 +8,8 @@ class ldr_module_list
 public:
 	ldr_module_list() = default;
 
-	ldr_module_list(addr_space& space, addr_t ldr_addr)
-		:	ldr_(space, ldr_addr)
+	ldr_module_list(win_user_mem& mem, addr_t ldr_addr)
+		:	ldr_(mem.space(), ldr_addr)
 	{
 		_PEB_LDR_DATA64 data{};
 		data.Length = sizeof(_PEB_LDR_DATA64);
@@ -26,10 +26,10 @@ public:
 		ldr_.write(data);
 	}
 
-	void add_module(addr_space& space, addr_t base, addr_t entry_point,
+	void add_module(win_user_mem& mem, addr_t base, addr_t entry_point,
 		std::uint32_t size, const std::string& name, bool in_init_order)
 	{
-		const auto entry_addr = space.alloc(ldr_data_table_entry64_alloc_size, prot_rw);
+		const auto entry_addr = mem.alloc(ldr_data_table_entry64_alloc_size, prot_rw);
 
 		const auto wide_name = widen_string(name);
 		const auto full_path = std::wstring(system32_dir) + wide_name;
@@ -41,8 +41,8 @@ public:
 		entry.Flags = 0x001C4004;
 		entry.ObsoleteLoadCount = 0xFFFF;
 
-		entry.FullDllName = win::init_unicode_string64(space, full_path);
-		entry.BaseDllName = win::init_unicode_string64(space, wide_name);
+		entry.FullDllName = win::init_unicode_string64(mem, full_path);
+		entry.BaseDllName = win::init_unicode_string64(mem, wide_name);
 
 		entry.HashLinks = {
 			entry_addr + offsetof(_LDR_DATA_TABLE_ENTRY64, HashLinks),
@@ -51,22 +51,22 @@ public:
 
 		const auto ldr_addr = ldr_.address();
 
-		insert_tail(space, entry.InLoadOrderLinks,
+		insert_tail(mem.space(), entry.InLoadOrderLinks,
 			ldr_addr + offsetof(_PEB_LDR_DATA64, InLoadOrderModuleList),
 			entry_addr + offsetof(_LDR_DATA_TABLE_ENTRY64, InLoadOrderLinks));
 
-		insert_tail(space, entry.InMemoryOrderLinks,
+		insert_tail(mem.space(), entry.InMemoryOrderLinks,
 			ldr_addr + offsetof(_PEB_LDR_DATA64, InMemoryOrderModuleList),
 			entry_addr + offsetof(_LDR_DATA_TABLE_ENTRY64, InMemoryOrderLinks));
 
 		if (in_init_order)
 		{
-			insert_tail(space, entry.InInitializationOrderLinks,
+			insert_tail(mem.space(), entry.InInitializationOrderLinks,
 				ldr_addr + offsetof(_PEB_LDR_DATA64, InInitializationOrderModuleList),
 				entry_addr + offsetof(_LDR_DATA_TABLE_ENTRY64, InInitializationOrderLinks));
 		}
 
-		space.write_mem(entry_addr, &entry, sizeof(entry));
+		mem.write_mem(entry_addr, &entry, sizeof(entry));
 	}
 
 	addr_t address() const { return ldr_.address(); }

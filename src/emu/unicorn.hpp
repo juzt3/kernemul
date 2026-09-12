@@ -168,6 +168,7 @@ public:
 		case x86::rip:    return UC_X86_REG_RIP;
 		case x86::rflags: return UC_X86_REG_RFLAGS;
 		case x86::cr0:    return UC_X86_REG_CR0;
+		case x86::cr2:    return UC_X86_REG_CR2;
 		case x86::cr3:    return UC_X86_REG_CR3;
 		case x86::cr4:    return UC_X86_REG_CR4;
 		case x86::cs:     return UC_X86_REG_CS;

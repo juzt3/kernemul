@@ -43,8 +43,14 @@ cpu_exception arch::intr_to_excp(int vector) const
 	case 1:  return cpu_exception::debug;
 	case 3:  return cpu_exception::breakpoint;
 	case 6:  return cpu_exception::illegal_instruction;
+	case 14: return cpu_exception::page_fault;
 	default: return cpu_exception::other;
 	}
+}
+
+addr_t arch::fault_addr(vcpu& cpu) const
+{
+	return cpu.reg(cr2);
 }
 
 }
