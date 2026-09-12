@@ -63,6 +63,7 @@ public:
 	using thread_id_type = std::uint32_t;
 
 	static constexpr std::size_t default_stack_size = 0x10000;
+	static constexpr std::size_t stack_reserve = 0x100;
 
 	process(const id_type id, std::shared_ptr<struct addr_space> space)
 		:	id_(id), addr_space_(std::move(space)) { }

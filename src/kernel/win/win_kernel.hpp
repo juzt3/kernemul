@@ -58,11 +58,14 @@ struct win_kernel_state : kernel_state
 		}
 	}
 
+	void set_emulator(windows_emulator* e) { emulator_ = e; }
+
 	std::shared_ptr<process> create_process(const std::string_view name) override
 	{
 		std::scoped_lock lock(proc_mtx_);
 		const auto id = objs.allocate_id();
 		auto proc = std::make_shared<win_user_proc>(id, emu_->mem()->create_addr_space(), objs);
+		proc->set_emulator(emulator_);
 		processes[id] = proc;
 
 		if (active_process_list.address())
@@ -72,6 +75,7 @@ struct win_kernel_state : kernel_state
 	}
 
 private:
+	windows_emulator* emulator_ = nullptr;
 	emu_object<_EPROCESS> insert_process(addr_space& space, process::id_type id,
 		std::string_view name, addr_t peb_address = 0)
 	{
@@ -91,6 +95,8 @@ public:
 		: os_emulator(std::move(emu)), kernel_(emu_)
 	{
 		kernel_.sys_proc->set_scheduler(&scheduler_);
+		kernel_.sys_proc->set_emulator(this);
+		kernel_.set_emulator(this);
 		excp_ = std::make_shared<win::win_exception>(kernel_);
 	}
 
@@ -100,6 +106,8 @@ public:
 	{
 		return kernel_.sys_proc->create_thread(cpu, start_addr);
 	}
+
+	virtual void init_thread_segments(thread&, vcpu&, addr_t) {}
 
 private:
 	win_kernel_state kernel_;
@@ -119,5 +127,10 @@ public:
 			x86_win_seg::init_idt(*cpu, *nt);
 
 		return cpu;
+	}
+
+	void init_thread_segments(thread& t, vcpu& cpu, addr_t teb_addr) override
+	{
+		t.set_reg_val(cpu, x86::gs, x86_win_seg::make_usermode_gs(teb_addr));
 	}
 };

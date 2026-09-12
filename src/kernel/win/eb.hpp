@@ -24,3 +24,19 @@ inline _PEB64 make_default_peb()
 
 	return peb;
 }
+
+inline _TEB64 make_default_teb(addr_t teb_addr, addr_t stack_base,
+	std::size_t stack_size, std::uint64_t process_id,
+	std::uint32_t thread_id, addr_t peb_address)
+{
+	_TEB64 teb{};
+
+	teb.NtTib.StackBase = stack_base + stack_size;
+	teb.NtTib.StackLimit = stack_base;
+	teb.NtTib.Self = teb_addr;
+	teb.ClientId.UniqueProcess = process_id;
+	teb.ClientId.UniqueThread = thread_id;
+	teb.ProcessEnvironmentBlock = peb_address;
+
+	return teb;
+}

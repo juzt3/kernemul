@@ -19,6 +19,8 @@ namespace x86_win_seg
 	void set_kernel_gs(vcpu& cpu, std::uint64_t base);
 	void set_usermode_gs(vcpu& cpu, std::uint64_t teb_addr);
 
+	x86::seg_reg make_usermode_gs(std::uint64_t teb_addr);
+
 	void swap_to_kernel_segments(vcpu& cpu);
 	void swap_to_usermode_segments(vcpu& cpu);
 }

@@ -1,9 +1,10 @@
 #pragma once
 #include "../process.hpp"
 #include "win_handle_table.hpp"
-#include "peb.hpp"
+#include "eb.hpp"
 
 struct win_kernel_state;
+class windows_emulator;
 
 class windows_process : public process
 {
@@ -17,10 +18,13 @@ public:
 
 	const emu_object<_PEB64>& peb() const { return peb_; }
 
+	void set_emulator(windows_emulator* e) { emulator_ = e; }
+
 protected:
 	win_obj_manager& objs_;
 	win_handle_table handle_table_;
 	emu_object<_PEB64> peb_;
+	windows_emulator* emulator_ = nullptr;
 };
 
 class win_user_proc : public windows_process
@@ -33,6 +37,8 @@ public:
 		peb_ = emu_object<_PEB64>(*addr_space_, addr);
 		peb_.write(make_default_peb());
 	}
+
+	std::shared_ptr<thread> create_thread(vcpu& cpu, addr_t start_addr) override;
 };
 
 class win_kernel_proc : public windows_process

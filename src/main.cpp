@@ -4,6 +4,7 @@
 #include "emu/x86/mmu.hpp"
 #include "emu/x86/arch.hpp"
 #include "util/log.hpp"
+
 int main()
 {
 	auto arch = std::make_shared<x86::arch>();
@@ -12,8 +13,6 @@ int main()
 	auto e = std::make_shared<unicorn_emu>(arch, mem, conv);
 
 	x86_win_emulator win(e);
-
-	LOG_INFO("windows emulator initialized");
 
 	auto& kernel = win.kernel();
 	auto& proc = *kernel.sys_proc;
@@ -25,8 +24,6 @@ int main()
 		LOG_ERR("failed to map test driver");
 		return 1;
 	}
-
-	LOG_INFO("driver mapped at 0x{:X}, entry=0x{:X}", driver->addr, driver->entry_point);
 
 	auto cpu = win.add_vcpu();
 	auto space = cpu->curr_addr_space();
@@ -50,9 +47,8 @@ int main()
 
 	cpu->set_pc(driver->entry_point);
 
-	LOG_INFO("running driver at 0x{:X}", driver->entry_point);
 	cpu->run();
-	LOG_INFO("driver returned");
+	LOG_INFO("driver returned, rax=0x{:X}", cpu->reg(x86::rax));
 
 	return 0;
 }

@@ -3,6 +3,7 @@
 #include "process.hpp"
 #include <algorithm>
 #include <chrono>
+#include <cstring>
 #include <deque>
 #include <memory>
 #include <mutex>
@@ -31,6 +32,8 @@ public:
 		}
 	}
 
+	virtual ~thread() = default;
+
 	void save(vcpu& cpu)
 	{
 		const auto a = cpu.arch();
@@ -56,6 +59,16 @@ public:
 		}
 	}
 
+	template <typename T>
+	void set_reg_val(vcpu& cpu, const reg_t r, const T& value)
+	{
+		const auto regs = cpu.arch()->regs();
+		for (std::size_t i = 0; i < regs.size(); ++i)
+		{
+			if (regs[i] == r) { std::memcpy(&values_[i], &value, sizeof(T)); return; }
+		}
+	}
+
 	void sleep_for(std::chrono::milliseconds ms) { sleep_until_ = clock::now() + ms; }
 	bool is_sleeping() const { return clock::now() < sleep_until_; }
 	auto sleep_until() const { return sleep_until_; }
@@ -66,12 +79,14 @@ public:
 	[[nodiscard]] id_type id() const noexcept { return id_; }
 	[[nodiscard]] std::shared_ptr<process> proc() const noexcept { return process_; }
 
-private:
-	using clock = std::chrono::steady_clock;
-
+protected:
 	id_type id_;
 	std::shared_ptr<class process> process_;
 	std::vector<reg_val> values_;
+
+private:
+	using clock = std::chrono::steady_clock;
+
 	clock::time_point sleep_until_{};
 	bool finished_{false};
 };
@@ -86,12 +101,18 @@ public:
 	{
 		auto space = proc->addr_space();
 		const addr_t stack_base = space->alloc(process::default_stack_size, prot_rw | prot_supervisor);
-		const addr_t stack_top = stack_base + process::default_stack_size - 0x100;
+		const addr_t stack_top = stack_base + process::default_stack_size - process::stack_reserve;
 		auto t = std::make_shared<thread>(id, std::move(proc), start_addr, stack_top, cpu);
 
 		std::scoped_lock lock(mtx_);
 		ready_queue_.push_back(t);
 		return t;
+	}
+
+	void enqueue(std::shared_ptr<thread> t)
+	{
+		std::scoped_lock lock(mtx_);
+		ready_queue_.push_back(std::move(t));
 	}
 
 	void remove(const thread::id_type id)

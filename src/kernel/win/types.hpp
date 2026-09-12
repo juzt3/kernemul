@@ -1142,6 +1142,43 @@ typedef struct _PEB64
 
 constexpr std::size_t peb64_alloc_size = 0x800;
 
+typedef struct _NT_TIB64
+{
+  /* 0x0000 */ unsigned __int64 ExceptionList;
+  /* 0x0008 */ unsigned __int64 StackBase;
+  /* 0x0010 */ unsigned __int64 StackLimit;
+  /* 0x0018 */ unsigned __int64 SubSystemTib;
+  /* 0x0020 */ unsigned __int64 FiberData;
+  /* 0x0028 */ unsigned __int64 ArbitraryUserPointer;
+  /* 0x0030 */ unsigned __int64 Self;
+} NT_TIB64; /* size: 0x0038 */
+
+typedef struct _CLIENT_ID64
+{
+  /* 0x0000 */ unsigned __int64 UniqueProcess;
+  /* 0x0008 */ unsigned __int64 UniqueThread;
+} CLIENT_ID64; /* size: 0x0010 */
+
+typedef struct _TEB64
+{
+  /* 0x0000 */ _NT_TIB64 NtTib;
+  /* 0x0038 */ unsigned __int64 EnvironmentPointer;
+  /* 0x0040 */ _CLIENT_ID64 ClientId;
+  /* 0x0050 */ unsigned __int64 ActiveRpcHandle;
+  /* 0x0058 */ unsigned __int64 ThreadLocalStoragePointer;
+  /* 0x0060 */ unsigned __int64 ProcessEnvironmentBlock;
+} TEB64, *PTEB64; /* size: 0x0068 */
+
+constexpr std::size_t teb64_alloc_size = 0x2000;
+
+static_assert(sizeof(_NT_TIB64) == 0x38);
+static_assert(offsetof(_NT_TIB64, StackBase) == 0x08);
+static_assert(offsetof(_NT_TIB64, StackLimit) == 0x10);
+static_assert(offsetof(_NT_TIB64, Self) == 0x30);
+static_assert(offsetof(_TEB64, ClientId.UniqueProcess) == 0x40);
+static_assert(offsetof(_TEB64, ClientId.UniqueThread) == 0x48);
+static_assert(offsetof(_TEB64, ProcessEnvironmentBlock) == 0x60);
+
 static_assert(offsetof(_PEB64, BeingDebugged) == 0x02);
 static_assert(offsetof(_PEB64, ImageBaseAddress) == 0x10);
 static_assert(offsetof(_PEB64, Ldr) == 0x18);

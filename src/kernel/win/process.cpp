@@ -1,4 +1,5 @@
 #include "process.hpp"
+#include "thread.hpp"
 #include "win_kernel.hpp"
 #include "../thread_scheduler.hpp"
 
@@ -9,6 +10,26 @@ std::shared_ptr<thread> windows_process::create_thread(vcpu& cpu, const addr_t s
 {
 	const auto id = static_cast<thread_id_type>(objs_.allocate_id());
 	auto t = scheduler_->create_thread(cpu, start_addr, shared_from_this(), id);
+
+	std::scoped_lock lock(thread_mtx_);
+	threads_[t->id()] = t;
+	return t;
+}
+
+std::shared_ptr<thread> win_user_proc::create_thread(vcpu& cpu, const addr_t start_addr)
+{
+	const auto id = static_cast<thread_id_type>(objs_.allocate_id());
+
+	auto space = addr_space();
+	const addr_t stack_base = space->alloc(default_stack_size, prot_rw);
+	auto self = std::static_pointer_cast<windows_process>(shared_from_this());
+	auto t = std::make_shared<win_user_thread>(
+		id, std::move(self), start_addr,
+		stack_base, default_stack_size, cpu);
+
+	emulator_->init_thread_segments(*t, cpu, t->teb().address());
+
+	scheduler_->enqueue(t);
 
 	std::scoped_lock lock(thread_mtx_);
 	threads_[t->id()] = t;

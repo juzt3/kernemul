@@ -117,9 +117,14 @@ void set_kernel_gs(vcpu& cpu, const std::uint64_t base)
 	cpu.reg(x86::gs, make_data_sr(kernel_ds, 0, base));
 }
 
+x86::seg_reg make_usermode_gs(const std::uint64_t teb_addr)
+{
+	return make_data_sr(user_ds, 3, teb_addr);
+}
+
 void set_usermode_gs(vcpu& cpu, const std::uint64_t teb_addr)
 {
-	cpu.reg(x86::gs, make_data_sr(user_ds, 3, teb_addr));
+	cpu.reg(x86::gs, make_usermode_gs(teb_addr));
 }
 
 void swap_to_kernel_segments(vcpu& cpu)
