@@ -186,6 +186,8 @@ set(kernemul_SOURCES
 	"src/kernel/win/modules/nt_irql_ops.hpp"
 	"src/kernel/win/modules/nt_object_ops.cpp"
 	"src/kernel/win/modules/nt_object_ops.hpp"
+	"src/kernel/win/modules/nt_string_ops.cpp"
+	"src/kernel/win/modules/nt_string_ops.hpp"
 	"src/kernel/win/modules/nt_thread_ops.cpp"
 	"src/kernel/win/modules/nt_thread_ops.hpp"
 	"src/kernel/win/modules/ntoskrnl.cpp"
