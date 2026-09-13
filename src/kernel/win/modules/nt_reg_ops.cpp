@@ -656,24 +656,15 @@ void modules::register_ntoskrnl_reg_ops(win_kernel_state& state, proc_module& mo
 
 	// Nt and Zw are one function at one address for all of these, so both names
 	// are bound to the same handler.
-	state.redirect(mod, "NtCreateKey", create_key);
-	state.redirect(mod, "ZwCreateKey", create_key);
-	state.redirect(mod, "NtOpenKey", open_key);
-	state.redirect(mod, "ZwOpenKey", open_key);
-	state.redirect(mod, "NtQueryKey", query_key);
-	state.redirect(mod, "ZwQueryKey", query_key);
-	state.redirect(mod, "NtEnumerateKey", enumerate_key);
-	state.redirect(mod, "ZwEnumerateKey", enumerate_key);
-	state.redirect(mod, "NtQueryValueKey", query_value_key);
-	state.redirect(mod, "ZwQueryValueKey", query_value_key);
-	state.redirect(mod, "NtEnumerateValueKey", enumerate_value_key);
-	state.redirect(mod, "ZwEnumerateValueKey", enumerate_value_key);
-	state.redirect(mod, "NtSetValueKey", set_value_key);
-	state.redirect(mod, "ZwSetValueKey", set_value_key);
-	state.redirect(mod, "NtDeleteValueKey", delete_value_key);
-	state.redirect(mod, "ZwDeleteValueKey", delete_value_key);
-	state.redirect(mod, "NtDeleteKey", delete_key);
-	state.redirect(mod, "ZwDeleteKey", delete_key);
+	state.redirect_ntzw(mod, "CreateKey", create_key);
+	state.redirect_ntzw(mod, "OpenKey", open_key);
+	state.redirect_ntzw(mod, "QueryKey", query_key);
+	state.redirect_ntzw(mod, "EnumerateKey", enumerate_key);
+	state.redirect_ntzw(mod, "QueryValueKey", query_value_key);
+	state.redirect_ntzw(mod, "EnumerateValueKey", enumerate_value_key);
+	state.redirect_ntzw(mod, "SetValueKey", set_value_key);
+	state.redirect_ntzw(mod, "DeleteValueKey", delete_value_key);
+	state.redirect_ntzw(mod, "DeleteKey", delete_key);
 	state.redirect(mod, "ZwFlushKey", flush_key);
 
 	// The Rtl forms name a key by path and a root rather than by handle, and do
