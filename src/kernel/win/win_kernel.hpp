@@ -4,31 +4,20 @@
 #include "exception.hpp"
 #include "defs.hpp"
 #include "modules/ntoskrnl.hpp"
-#include "modules/nt_thread_ops.hpp"
-#include "modules/nt_object_ops.hpp"
 #include "registry.hpp"
 #include "filesystem.hpp"
 #include "ethread.hpp"
 #include "driver.hpp"
 #include "per_cpu.hpp"
-#include "modules/nt_irql_ops.hpp"
-#include "modules/nt_string_ops.hpp"
-#include "modules/nt_sync_ops.hpp"
-#include "modules/nt_info_ops.hpp"
-#include "modules/nt_crt_ops.hpp"
-#include "modules/nt_pool_ops.hpp"
-#include "modules/nt_process_ops.hpp"
-#include "modules/nt_lock_ops.hpp"
-#include "modules/nt_mem_ops.hpp"
-#include "modules/nt_ex_ops.hpp"
 #include "objects.hpp"
-#include "modules/nt_misc_ops.hpp"
-#include "modules/nt_reg_ops.hpp"
-#include "modules/nt_io_ops.hpp"
-#include "modules/nt_timer_ops.hpp"
+#include "modules/fltmgr.hpp"
+#include "modules/cng.hpp"
+#include "modules/ci.hpp"
+#include "modules/ndis.hpp"
 #include "pool.hpp"
 #include "../../target.hpp"
 #include <cstring>
+#include <filesystem>
 #include <deque>
 #include <string>
 #include <unordered_map>
@@ -48,6 +37,10 @@ struct win_kernel_state : kernel_state
 	// how much to take down. Small and touched only by the two handlers that
 	// map and unmap, so it rides with the rest of the kernel state.
 	std::unordered_map<addr_t, std::uint64_t> views;
+
+	// When the kernel came up, which is what a caller asking how long the
+	// machine has been running measures against.
+	std::int64_t boot_time = static_cast<std::int64_t>(win_system_time());
 
 	// Every list the guest keeps lives in guest memory, and a push rewrites the
 	// head and the old tail, so a module load or a thread starting at the same
