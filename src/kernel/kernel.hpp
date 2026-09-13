@@ -188,6 +188,12 @@ struct kernel_state
 							name_at(*m, addr), e.what());
 					}
 
+					// A handler that has not finished -- a wait whose object
+					// is not signalled yet -- asks to be entered again. The pc
+					// is put back on the function rather than left there:
+					// stopping the cpu moves it on some architectures. The
+					// stack is untouched, because ret_addr is what consumes the
+					// return address on the ones that push it.
 					// Either way the thread leaves the function: the result is
 					// whatever the handler had written before it faulted, but a
 					// pc left where it was would land here again for ever.

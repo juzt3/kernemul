@@ -1,4 +1,6 @@
 #pragma once
+#include <optional>
+#include <utility>
 #include "arch.hpp"
 #include "defs.hpp"
 #include "mmu.hpp"
