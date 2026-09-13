@@ -4,6 +4,7 @@
 #include "../thread.hpp"
 #include "../types.hpp"
 #include "../../../util/log.hpp"
+#include <string_view>
 
 namespace
 {
@@ -21,7 +22,7 @@ std::int32_t mutex_count(const emu_object<_FAST_MUTEX>& mutex)
 // the same reason nothing contends a spin lock -- the acquiring cpu is stopped
 // inside the handler -- so a mutex found already held means the guest reached
 // it down a path the missing KeWaitForSingleObject would have blocked.
-void take_mutex(const emu_object<_FAST_MUTEX>& mutex, const char* who)
+void take_mutex(const emu_object<_FAST_MUTEX>& mutex, const std::string_view who)
 {
 	const auto count = mutex_count(mutex);
 
@@ -50,7 +51,7 @@ void own_mutex(const emu_object<_FAST_MUTEX>& mutex, vcpu& cpu)
 // Put the lock bit back. Nothing ever queues behind the mutex, but the guest
 // owns Count and a release of one that was never taken is a driver bug worth
 // the same report the dispatcher objects give it.
-void give_mutex(const emu_object<_FAST_MUTEX>& mutex, const char* who)
+void give_mutex(const emu_object<_FAST_MUTEX>& mutex, const std::string_view who)
 {
 	const auto count = mutex_count(mutex);
 
