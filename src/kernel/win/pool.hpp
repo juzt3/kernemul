@@ -50,3 +50,13 @@ private:
 };
 
 [[nodiscard]] std::string pool_tag_name(std::uint32_t tag);
+
+// The inverse: 'Abcd' packed low byte first, which is how a tag is stored and
+// how pool_tag_name reads it back.
+constexpr std::uint32_t pool_tag(const char (&name)[5])
+{
+	return static_cast<std::uint32_t>(static_cast<unsigned char>(name[0]))
+		| static_cast<std::uint32_t>(static_cast<unsigned char>(name[1])) << 8
+		| static_cast<std::uint32_t>(static_cast<unsigned char>(name[2])) << 16
+		| static_cast<std::uint32_t>(static_cast<unsigned char>(name[3])) << 24;
+}
