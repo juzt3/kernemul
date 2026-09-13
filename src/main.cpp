@@ -50,6 +50,10 @@ int main()
 		return 1;
 	}
 
+	// What Windows hands a driver: the object it hangs everything it exposes
+	// off, and the service key it was started from.
+	auto args = kernel.create_driver(*driver, L"test_driver");
+
 	constexpr std::size_t vcpu_count = 4;
 	win.create_vcpus(vcpu_count);
 
@@ -60,8 +64,8 @@ int main()
 	const auto entry = win.create_kernel_thread(*cpu, driver->entry_point);
 
 	// DriverEntry(DriverObject, RegistryPath)
-	conv->set_arg(*cpu, *entry, 0, 0);
-	conv->set_arg(*cpu, *entry, 1, 0);
+	conv->set_arg(*cpu, *entry, 0, args.driver_object.address());
+	conv->set_arg(*cpu, *entry, 1, args.registry_path.address());
 
 	win.run_all();
 

@@ -14,10 +14,19 @@ struct arm64_win_conv : calling_conv
 
 	void set_arg(vcpu& cpu, thread& t, std::size_t index, std::uint64_t value) const override;
 
+	// AAPCS64 reserves no home space, so the ninth argument is the first thing
+	// on the stack and sits right at the stack pointer on entry to the callee.
+	static constexpr addr_t stack_arg_off(const std::size_t index)
+	{
+		return (index - std::size(arg_regs)) * sizeof(addr_t);
+	}
+
 	void write_arg(vcpu& cpu, const std::size_t index, const std::uint64_t value) const override
 	{
 		if (index < std::size(arg_regs))
 			cpu.reg(arg_regs[index], value);
+		else
+			cpu.write_virt_mem(cpu.sp() + stack_arg_off(index), value);
 	}
 
 	std::uint64_t read_ret(vcpu& cpu) const override
@@ -34,7 +43,7 @@ protected:
 		if (index < std::size(arg_regs))
 			cpu.reg_read(arg_regs[index], buf, size);
 		else
-			cpu.read_virt_mem(cpu.sp() + 0x08 * (index - std::size(arg_regs)), buf, size);
+			cpu.read_virt_mem(cpu.sp() + stack_arg_off(index), buf, size);
 	}
 
 	void ret_write(vcpu& cpu, const void* buf, const std::size_t size) const override

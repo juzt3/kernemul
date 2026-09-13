@@ -4,7 +4,19 @@
 void x86_win_conv::set_arg(vcpu& cpu, thread& t, const std::size_t index, const std::uint64_t value) const
 {
 	if (index < std::size(arg_regs))
+	{
 		t.set_reg(cpu, arg_regs[index], value);
+		return;
+	}
+
+	// Past the fourth the argument goes on the thread's stack rather than in a
+	// register. The thread has not run yet, so its saved stack pointer is where
+	// its stack pointer will be on entry -- at the return address enqueue()
+	// pushed, which is what stack_arg_off measures from. That push has to have
+	// happened already, and it has: a thread is admitted before anything is in
+	// a position to set its arguments.
+	const auto sp = t.get_reg(cpu, x86::rsp);
+	t.proc()->addr_space()->write_mem(sp + stack_arg_off(index), value);
 }
 
 void x86_win_conv::set_ret_addr(vcpu& cpu, thread& t, const addr_t addr) const

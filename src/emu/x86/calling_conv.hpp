@@ -11,10 +11,25 @@ struct x86_win_conv : calling_conv
 
 	void set_arg(vcpu& cpu, thread& t, std::size_t index, std::uint64_t value) const override;
 
+	// The caller reserves 32 bytes above the return address for the first four
+	// arguments whether or not it uses them, so the fifth is the first that
+	// actually lives on the stack.
+	static constexpr addr_t home_space_size = 0x20;
+
+	// Where argument `index` sits relative to a stack pointer that is pointing
+	// at the return address, which is where it points on entry to the callee.
+	static constexpr addr_t stack_arg_off(const std::size_t index)
+	{
+		return sizeof(addr_t) + home_space_size
+			+ (index - std::size(arg_regs)) * sizeof(addr_t);
+	}
+
 	void write_arg(vcpu& cpu, const std::size_t index, const std::uint64_t value) const override
 	{
 		if (index < std::size(arg_regs))
 			cpu.reg(arg_regs[index], value);
+		else
+			cpu.write_virt_mem(cpu.sp() + stack_arg_off(index), value);
 	}
 
 	std::uint64_t read_ret(vcpu& cpu) const override
@@ -31,7 +46,7 @@ protected:
 		if (index < std::size(arg_regs))
 			cpu.reg_read(arg_regs[index], buf, size);
 		else
-			cpu.read_virt_mem(cpu.sp() + 0x08 * (index + 1), buf, size);
+			cpu.read_virt_mem(cpu.sp() + stack_arg_off(index), buf, size);
 	}
 
 	void ret_write(vcpu& cpu, const void* buf, const std::size_t size) const override
