@@ -31,6 +31,14 @@ public:
 
 	void set_emulator(windows_emulator* e) { emulator_ = e; }
 
+	// The count KeEnterCriticalRegion drives down and KeLeaveCriticalRegion
+	// back up. Kernel APCs are disabled for this thread while it is negative,
+	// and the guest checks it directly as well as through KeAreAllApcsDisabled.
+	[[nodiscard]] auto kernel_apc_disable() const
+	{
+		return ethread_.field(&_ETHREAD::Tcb).field(&_KTHREAD::KernelApcDisable);
+	}
+
 	// The stack as Windows names it: the limit is its low end, the base the
 	// first byte past its top.
 	[[nodiscard]] addr_t stack_limit() const { return stack_low_; }
