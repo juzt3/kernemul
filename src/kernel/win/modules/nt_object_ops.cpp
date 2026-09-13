@@ -93,8 +93,7 @@ void modules::register_ntoskrnl_object_ops(win_kernel_state& state, proc_module&
 		return STATUS_SUCCESS;
 	};
 
-	state.redirect(mod, "NtClose", close_fn);
-	state.redirect(mod, "ZwClose", close_fn);
+	state.redirect_ntzw(mod, "Close", close_fn);
 
 	// An object callback is told before and after a handle is opened or
 	// duplicated. Nothing here opens a handle through the object manager path

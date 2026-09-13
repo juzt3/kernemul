@@ -64,7 +64,7 @@ void modules::register_ntoskrnl_sysinfo_ops(win_kernel_state& state, proc_module
 {
 	auto* st = &state;
 
-	state.redirect_syscall(mod, "QuerySystemTime",
+	state.redirect_ntzw(mod, "QuerySystemTime",
 		[](vcpu&, emu_object<std::int64_t> system_time) -> NTSTATUS
 		{
 			if (!system_time)
@@ -80,7 +80,7 @@ void modules::register_ntoskrnl_sysinfo_ops(win_kernel_state& state, proc_module
 
 	// The same steady clock KeQueryPerformanceCounter reads, so the two agree
 	// about how much time passed between them.
-	state.redirect_syscall(mod, "QueryPerformanceCounter",
+	state.redirect_ntzw(mod, "QueryPerformanceCounter",
 		[](vcpu&, emu_object<std::int64_t> performance_counter,
 			emu_object<std::int64_t> performance_frequency) -> NTSTATUS
 		{
@@ -197,7 +197,7 @@ void modules::register_ntoskrnl_sysinfo_ops(win_kernel_state& state, proc_module
 		return STATUS_SUCCESS;
 	};
 
-	state.redirect_syscall(mod, "QueryDefaultLocale",
+	state.redirect_ntzw(mod, "QueryDefaultLocale",
 		[query_langid](vcpu& cpu, const bool user_profile,
 			emu_object<std::uint32_t> default_locale_id) -> NTSTATUS
 		{
@@ -205,13 +205,13 @@ void modules::register_ntoskrnl_sysinfo_ops(win_kernel_state& state, proc_module
 			return query_langid(cpu, default_locale_id, "NtQueryDefaultLocale");
 		});
 
-	state.redirect_syscall(mod, "QueryDefaultUILanguage",
+	state.redirect_ntzw(mod, "QueryDefaultUILanguage",
 		[query_langid](vcpu& cpu, emu_object<std::uint32_t> default_ui_language) -> NTSTATUS
 		{
 			return query_langid(cpu, default_ui_language, "NtQueryDefaultUILanguage");
 		});
 
-	state.redirect_syscall(mod, "QueryInstallUILanguage",
+	state.redirect_ntzw(mod, "QueryInstallUILanguage",
 		[query_langid](vcpu& cpu, emu_object<std::uint32_t> install_ui_language) -> NTSTATUS
 		{
 			return query_langid(cpu, install_ui_language, "NtQueryInstallUILanguage");
@@ -219,7 +219,7 @@ void modules::register_ntoskrnl_sysinfo_ops(win_kernel_state& state, proc_module
 
 	// Nothing here sleeps or dims a display, so the request is recorded and the
 	// previous state handed back is the one nothing ever changed it from.
-	state.redirect_syscall(mod, "SetThreadExecutionState",
+	state.redirect_ntzw(mod, "SetThreadExecutionState",
 		[](vcpu&, const std::uint32_t new_flags,
 			emu_object<std::uint32_t> previous_flags) -> NTSTATUS
 		{
@@ -235,7 +235,7 @@ void modules::register_ntoskrnl_sysinfo_ops(win_kernel_state& state, proc_module
 
 	// The emulator fetches from the same memory the guest writes, so an icache
 	// that could go stale does not exist and there is nothing to flush.
-	state.redirect_syscall(mod, "FlushInstructionCache",
+	state.redirect_ntzw(mod, "FlushInstructionCache",
 		[](vcpu&, const std::uint64_t process_handle, const addr_t base_address,
 			const std::uint64_t length) -> NTSTATUS
 		{
@@ -247,7 +247,7 @@ void modules::register_ntoskrnl_sysinfo_ops(win_kernel_state& state, proc_module
 
 	// A full barrier across every processor. Every cpu here shares one host
 	// memory model already, so the barrier is implicit.
-	state.redirect_syscall(mod, "FlushProcessWriteBuffers", [](vcpu&)
+	state.redirect_ntzw(mod, "FlushProcessWriteBuffers", [](vcpu&)
 	{
 		THREAD_LOG_INFO("NtFlushProcessWriteBuffers()");
 	});
@@ -255,7 +255,7 @@ void modules::register_ntoskrnl_sysinfo_ops(win_kernel_state& state, proc_module
 	// One handle table, so a duplicate is a second handle onto the same object.
 	// DUPLICATE_CLOSE_SOURCE closes the one it came from, which is the whole of
 	// what the options decide here.
-	state.redirect_syscall(mod, "DuplicateObject",
+	state.redirect_ntzw(mod, "DuplicateObject",
 		[st](vcpu&, const std::uint64_t source_process_handle,
 			const std::uint64_t source_handle, const std::uint64_t target_process_handle,
 			emu_object<std::uint64_t> target_handle, const std::uint32_t desired_access,
@@ -309,8 +309,8 @@ void modules::register_ntoskrnl_sysinfo_ops(win_kernel_state& state, proc_module
 		return STATUS_SUCCESS;
 	};
 
-	state.redirect_syscall(mod, "MakeTemporaryObject", make_temporary);
+	state.redirect_ntzw(mod, "MakeTemporaryObject", make_temporary);
 
-	state.redirect_syscall(mod, "QuerySystemInformation", query_system_information);
-	state.redirect_syscall(mod, "QuerySystemInformationEx", query_system_information_ex);
+	state.redirect_ntzw(mod, "QuerySystemInformation", query_system_information);
+	state.redirect_ntzw(mod, "QuerySystemInformationEx", query_system_information_ex);
 }
