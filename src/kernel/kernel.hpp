@@ -208,17 +208,24 @@ struct kernel_state
 			});
 	}
 
-	void redirect(proc_module& mod, const std::string_view name, redirect_fn fn)
+	// Whether the symbol was there, without saying anything about it: the
+	// syscall pairing below binds two names knowing one of them may not exist.
+	bool try_redirect(proc_module& mod, const std::string_view name, redirect_fn fn)
 	{
 		const auto addr = mod.find_symbol(name);
 
 		if (!addr)
-		{
-			LOG_ERR("symbol '{}' not found in {}", name, mod.name);
-			return;
-		}
+			return false;
 
 		redirections_[*addr] = std::move(fn);
+
+		return true;
+	}
+
+	void redirect(proc_module& mod, const std::string_view name, redirect_fn fn)
+	{
+		if (!try_redirect(mod, name, std::move(fn)))
+			LOG_ERR("symbol '{}' not found in {}", name, mod.name);
 	}
 
 	template <typename F>
