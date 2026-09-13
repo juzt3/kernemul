@@ -508,6 +508,19 @@ bool arm64_unwinder::unwind_frame(
 
 	result.establisher_frame = ctx.sp;
 
+	// At the function's first instruction none of the prologue has executed, so
+	// there is no frame to undo and the return address is still in the link
+	// register. This is the case every redirect handler creates -- the hook
+	// fires before the first instruction runs -- and replaying the prologue
+	// codes against a frame that was never built restores a meaningless sp and
+	// lr instead. A pc further into a prologue needs the codes counted off
+	// instruction by instruction, which is not done here.
+	if (ctx.pc == mod.addr + func->begin_rva)
+	{
+		ctx.pc = ctx.gp[reg_lr];
+		return ctx.pc != 0;
+	}
+
 	if (func->packed)
 	{
 		if (!apply_packed(mem, func->unwind_data, ctx))
