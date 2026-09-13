@@ -63,6 +63,22 @@ void modules::register_ntoskrnl_info_ops(win_kernel_state& state, proc_module& m
 		return clock_increment_100ns;
 	});
 
+	// The wall clock, which is what a driver stamps its own records with. The
+	// precise form reads the same clock as KUSER_SHARED_DATA rather than the
+	// value cached there, so the two never disagree by more than a tick.
+	auto system_time = [](vcpu&, emu_object<std::int64_t> current_time)
+	{
+		if (!current_time)
+			return;
+
+		const auto now = static_cast<std::int64_t>(win_system_time());
+		current_time.write(now);
+
+		THREAD_LOG_INFO("KeQuerySystemTime() -> {}", now);
+	};
+
+	state.redirect(mod, "KeQuerySystemTimePrecise", system_time);
+
 	// Every cpu the emulator made is active -- none of them can be taken
 	// offline -- so the active count is just how many there are.
 	state.redirect(mod, "KeQueryActiveProcessorCount",
