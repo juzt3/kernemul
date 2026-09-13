@@ -9,6 +9,7 @@
 #include "../../../util/log.hpp"
 #include <memory>
 #include <set>
+#include <string_view>
 
 namespace
 {
@@ -30,7 +31,7 @@ constexpr std::size_t max_thread_notify_routines = 64;
 constexpr std::size_t max_image_notify_routines = 8;
 
 NTSTATUS add_notify(std::set<addr_t>& routines, const std::size_t limit,
-	const char* who, const addr_t routine)
+	const std::string_view who, const addr_t routine)
 {
 	if (!routine)
 		return STATUS_INVALID_PARAMETER;
@@ -56,7 +57,7 @@ NTSTATUS add_notify(std::set<addr_t>& routines, const std::size_t limit,
 	return STATUS_SUCCESS;
 }
 
-NTSTATUS remove_notify(std::set<addr_t>& routines, const char* who, const addr_t routine)
+NTSTATUS remove_notify(std::set<addr_t>& routines, const std::string_view who, const addr_t routine)
 {
 	if (!routines.erase(routine))
 	{

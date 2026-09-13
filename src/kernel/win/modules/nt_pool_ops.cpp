@@ -3,6 +3,7 @@
 #include "../pool.hpp"
 #include "../types.hpp"
 #include "../../../util/log.hpp"
+#include <string_view>
 
 namespace
 {
@@ -87,7 +88,7 @@ bool flags_are_valid(const std::uint64_t flags, const std::uint32_t tag)
 		&& tag != 0;
 }
 
-addr_t allocate(win_kernel_state& state, const char* who, const std::uint64_t flags,
+addr_t allocate(win_kernel_state& state, const std::string_view who, const std::uint64_t flags,
 	const std::uint64_t size, const std::uint32_t tag)
 {
 	if (!flags_are_valid(flags, tag))
@@ -119,7 +120,7 @@ addr_t allocate(win_kernel_state& state, const char* who, const std::uint64_t fl
 	return addr;
 }
 
-void release(win_kernel_state& state, const char* who, const addr_t address,
+void release(win_kernel_state& state, const std::string_view who, const addr_t address,
 	const std::uint32_t tag)
 {
 	if (!address)
