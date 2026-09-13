@@ -1,9 +1,9 @@
 #include "ntoskrnl.hpp"
-#include "../../kernel.hpp"
+#include "../win_kernel.hpp"
 #include "../status.hpp"
 #include "../../../util/format.hpp"
 
-void modules::register_ntoskrnl(kernel_state& state, proc_module& mod)
+void modules::register_ntoskrnl(win_kernel_state& state, proc_module& mod)
 {
 	state.redirect(mod, "DbgPrint",
 		[](vcpu& cpu, std::string format) -> std::uint32_t
@@ -62,8 +62,7 @@ void modules::register_ntoskrnl(kernel_state& state, proc_module& mod)
 	};
 
 	state.redirect(mod, "KdSystemDebugControl", system_debug_control);
-	state.redirect(mod, "NtSystemDebugControl", system_debug_control);
-	state.redirect(mod, "ZwSystemDebugControl", system_debug_control);
+	state.redirect_ntzw(mod, "SystemDebugControl", system_debug_control);
 
 	// The callback would be handed every line DbgPrint produces. Everything
 	// DbgPrint produces goes to the emulator log instead, so a driver that
