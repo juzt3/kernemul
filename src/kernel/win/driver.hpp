@@ -18,6 +18,20 @@
 inline constexpr short io_type_driver = 4;
 inline constexpr short io_type_device = 3;
 
+// DEVICE_OBJECT::Flags. DO_DEVICE_INITIALIZING is the one a driver has to
+// clear itself; the io manager sets the rest.
+enum device_flags : std::uint32_t
+{
+	do_exclusive           = 0x00000008,
+	do_device_initializing = 0x00000080,
+	do_shutdown_registered = 0x00000800,
+};
+
+constexpr device_flags operator|(device_flags a, device_flags b)
+{
+	return static_cast<device_flags>(static_cast<std::uint32_t>(a) | static_cast<std::uint32_t>(b));
+}
+
 struct driver_object_params
 {
 	// The driver's name in the object namespace, already built in guest memory.
