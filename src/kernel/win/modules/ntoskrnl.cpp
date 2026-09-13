@@ -15,7 +15,7 @@ void modules::register_ntoskrnl(kernel_state& state, proc_module& mod)
 				return conv.arg<std::uint64_t>(cpu, arg_idx++);
 			});
 
-			LOG_INFO("DbgPrint: {}", msg);
+			THREAD_LOG_INFO("DbgPrint: {}", msg);
 			return 0;
 		});
 
@@ -30,7 +30,7 @@ void modules::register_ntoskrnl(kernel_state& state, proc_module& mod)
 				return conv.arg<std::uint64_t>(cpu, arg_idx++);
 			});
 
-			LOG_INFO("DbgPrintEx (component={}, level={}) : {}", component_id, level, msg);
+			THREAD_LOG_INFO("DbgPrintEx (component={}, level={}) : {}", component_id, level, msg);
 			return 0;
 		});
 }

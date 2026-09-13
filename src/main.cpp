@@ -59,6 +59,10 @@ int main()
 
 	auto cpu = win.cpus().front();
 
+	// This thread drives that cpu until run_all hands it to one of its own, so
+	// anything reached while the machine is still being built says where from.
+	set_log_cpu(cpu.get());
+
 	// DriverEntry runs as a system thread like any other, so the scheduler owns
 	// its stack and the return address that says it is done.
 	const auto entry = win.create_kernel_thread(*cpu, driver->entry_point);

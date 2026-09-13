@@ -8,6 +8,8 @@
 #include "../util/log.hpp"
 #include <atomic>
 #include <chrono>
+#include <exception>
+#include <format>
 #include <functional>
 #include <filesystem>
 #include <map>
@@ -79,6 +81,11 @@ public:
 		{
 			hosts.emplace_back([this, cpu, &live]
 			{
+				// This host thread drives this one cpu for as long as it runs,
+				// which is what lets a handler say where it is running without
+				// being handed the cpu to say it with.
+				set_log_cpu(cpu.get());
+
 				scheduler_.run(*cpu);
 				--live;
 			});
@@ -127,6 +134,16 @@ struct kernel_state
 		return mod;
 	}
 
+	// What to call an address in a module: its symbol if the module brought one,
+	// and an offset if it did not.
+	static std::string name_at(const proc_module& mod, const addr_t addr)
+	{
+		if (const auto sym = mod.symbols.resolve(addr))
+			return sym->format();
+
+		return std::format("+0x{:X}", addr - mod.addr);
+	}
+
 	void hook_module_redirects(proc_module& mod)
 	{
 		auto* redirections = &redirections_;
@@ -140,19 +157,31 @@ struct kernel_state
 
 				if (it != redirections->end())
 				{
-					it->second(cpu);
+					// A handler reaches into guest memory on the guest's word,
+					// and a driver that got a pointer wrong is a thing to
+					// report rather than to die of. The throw would otherwise
+					// unwind through the emulator's own C frames, which is not
+					// something it can be asked to survive.
+					try
+					{
+						it->second(cpu);
+					}
+					catch (const std::exception& e)
+					{
+						THREAD_LOG_ERR("{}!{} faulted: {}", m->name,
+							name_at(*m, addr), e.what());
+					}
 
+					// Either way the thread leaves the function: the result is
+					// whatever the handler had written before it faulted, but a
+					// pc left where it was would land here again for ever.
 					if (cpu.pc() == addr)
 						cpu.set_pc(a->ret_addr(cpu));
 
 					return;
 				}
 
-				const auto sym = m->symbols.resolve(addr);
-				if (sym)
-					LOG_ERR("unimplemented function {}!{}", m->name, sym->format());
-				else
-					LOG_ERR("unimplemented function at {}+0x{:X}", m->name, addr - m->addr);
+				THREAD_LOG_ERR("unimplemented function {}!{}", m->name, name_at(*m, addr));
 
 				// There is nothing to go on to, so the thread ends here. Left
 				// running it would be rescheduled onto this address forever.

@@ -28,7 +28,7 @@ void modules::register_ntoskrnl_thread_ops(win_kernel_state& state, proc_module&
 			[[maybe_unused]] emu_object<void> object_attributes, [[maybe_unused]] std::uint64_t process_handle,
 			emu_object<CLIENT_ID> client_id_out, addr_t start_routine, addr_t start_context) -> NTSTATUS
 		{
-			LOG_INFO("PsCreateSystemThread(handle_out=0x{:X}, start=0x{:X}, ctx=0x{:X})",
+			THREAD_LOG_INFO("PsCreateSystemThread(handle_out=0x{:X}, start=0x{:X}, ctx=0x{:X})",
 				thread_handle_out.address(), start_routine, start_context);
 
 			auto t = sys_proc->create_thread(cpu, start_routine);
@@ -40,7 +40,7 @@ void modules::register_ntoskrnl_thread_ops(win_kernel_state& state, proc_module&
 
 			if (!ethread)
 			{
-				LOG_ERR("PsCreateSystemThread: tid={} has no ETHREAD", t->id());
+				THREAD_LOG_ERR("PsCreateSystemThread: tid={} has no ETHREAD", t->id());
 				return STATUS_NO_MEMORY;
 			}
 
@@ -57,7 +57,7 @@ void modules::register_ntoskrnl_thread_ops(win_kernel_state& state, proc_module&
 				client_id_out.write(cid);
 			}
 
-			LOG_INFO("PsCreateSystemThread: created tid={}, handle=0x{:X}", t->id(), handle);
+			THREAD_LOG_INFO("PsCreateSystemThread: created tid={}, handle=0x{:X}", t->id(), handle);
 			return STATUS_SUCCESS;
 		});
 
@@ -71,7 +71,7 @@ void modules::register_ntoskrnl_thread_ops(win_kernel_state& state, proc_module&
 		{
 			if (!interval)
 			{
-				LOG_ERR("KeDelayExecutionThread: null interval");
+				THREAD_LOG_ERR("KeDelayExecutionThread: null interval");
 				return STATUS_INVALID_PARAMETER;
 			}
 
@@ -79,7 +79,7 @@ void modules::register_ntoskrnl_thread_ops(win_kernel_state& state, proc_module&
 			const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
 				win_ticks(ticks < 0 ? -ticks : ticks - win_system_time()));
 
-			LOG_INFO("KeDelayExecutionThread(wait_mode={}, alertable={}, interval={}): {}ms",
+			THREAD_LOG_INFO("KeDelayExecutionThread(wait_mode={}, alertable={}, interval={}): {}ms",
 				wait_mode, alertable, ticks, ms.count());
 
 			// An absolute time already past, or a delay too short to name in

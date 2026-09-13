@@ -83,7 +83,7 @@ void modules::register_ntoskrnl_irql_ops(win_kernel_state& state, proc_module& m
 	state.redirect(mod, "KeAcquireSpinLockRaiseToDpc",
 		[st](vcpu& cpu, const addr_t spin_lock) -> irql_t
 		{
-			LOG_INFO("KeAcquireSpinLockRaiseToDpc(lock=0x{:X})", spin_lock);
+			THREAD_LOG_INFO("KeAcquireSpinLockRaiseToDpc(lock=0x{:X})", spin_lock);
 			return raise_to(*st, cpu, dispatch_level);
 		});
 
@@ -91,7 +91,7 @@ void modules::register_ntoskrnl_irql_ops(win_kernel_state& state, proc_module& m
 	state.redirect(mod, "KeReleaseSpinLock",
 		[st](vcpu& cpu, const addr_t spin_lock, const irql_t new_irql)
 		{
-			LOG_INFO("KeReleaseSpinLock(lock=0x{:X}, new_irql={})", spin_lock, new_irql);
+			THREAD_LOG_INFO("KeReleaseSpinLock(lock=0x{:X}, new_irql={})", spin_lock, new_irql);
 			raise_to(*st, cpu, new_irql);
 		});
 
@@ -99,12 +99,12 @@ void modules::register_ntoskrnl_irql_ops(win_kernel_state& state, proc_module& m
 	// and saying so is the whole of what separates them from the pair above.
 	state.redirect(mod, "KeAcquireSpinLockAtDpcLevel", [](vcpu&, const addr_t spin_lock)
 	{
-		LOG_INFO("KeAcquireSpinLockAtDpcLevel(lock=0x{:X})", spin_lock);
+		THREAD_LOG_INFO("KeAcquireSpinLockAtDpcLevel(lock=0x{:X})", spin_lock);
 	});
 
 	state.redirect(mod, "KeReleaseSpinLockFromDpcLevel", [](vcpu&, const addr_t spin_lock)
 	{
-		LOG_INFO("KeReleaseSpinLockFromDpcLevel(lock=0x{:X})", spin_lock);
+		THREAD_LOG_INFO("KeReleaseSpinLockFromDpcLevel(lock=0x{:X})", spin_lock);
 	});
 
 	// The executive's reader/writer spin locks. Shared and exclusive differ
@@ -112,38 +112,38 @@ void modules::register_ntoskrnl_irql_ops(win_kernel_state& state, proc_module& m
 	state.redirect(mod, "ExAcquireSpinLockShared",
 		[st](vcpu& cpu, const addr_t spin_lock) -> irql_t
 		{
-			LOG_INFO("ExAcquireSpinLockShared(lock=0x{:X})", spin_lock);
+			THREAD_LOG_INFO("ExAcquireSpinLockShared(lock=0x{:X})", spin_lock);
 			return raise_to(*st, cpu, dispatch_level);
 		});
 
 	state.redirect(mod, "ExAcquireSpinLockExclusive",
 		[st](vcpu& cpu, const addr_t spin_lock) -> irql_t
 		{
-			LOG_INFO("ExAcquireSpinLockExclusive(lock=0x{:X})", spin_lock);
+			THREAD_LOG_INFO("ExAcquireSpinLockExclusive(lock=0x{:X})", spin_lock);
 			return raise_to(*st, cpu, dispatch_level);
 		});
 
 	state.redirect(mod, "ExReleaseSpinLockShared",
 		[st](vcpu& cpu, const addr_t spin_lock, const irql_t old_irql)
 		{
-			LOG_INFO("ExReleaseSpinLockShared(lock=0x{:X}, old_irql={})", spin_lock, old_irql);
+			THREAD_LOG_INFO("ExReleaseSpinLockShared(lock=0x{:X}, old_irql={})", spin_lock, old_irql);
 			raise_to(*st, cpu, old_irql);
 		});
 
 	state.redirect(mod, "ExReleaseSpinLockExclusive",
 		[st](vcpu& cpu, const addr_t spin_lock, const irql_t old_irql)
 		{
-			LOG_INFO("ExReleaseSpinLockExclusive(lock=0x{:X}, old_irql={})", spin_lock, old_irql);
+			THREAD_LOG_INFO("ExReleaseSpinLockExclusive(lock=0x{:X}, old_irql={})", spin_lock, old_irql);
 			raise_to(*st, cpu, old_irql);
 		});
 
 	state.redirect(mod, "ExAcquireSpinLockExclusiveAtDpcLevel", [](vcpu&, const addr_t spin_lock)
 	{
-		LOG_INFO("ExAcquireSpinLockExclusiveAtDpcLevel(lock=0x{:X})", spin_lock);
+		THREAD_LOG_INFO("ExAcquireSpinLockExclusiveAtDpcLevel(lock=0x{:X})", spin_lock);
 	});
 
 	state.redirect(mod, "ExReleaseSpinLockExclusiveFromDpcLevel", [](vcpu&, const addr_t spin_lock)
 	{
-		LOG_INFO("ExReleaseSpinLockExclusiveFromDpcLevel(lock=0x{:X})", spin_lock);
+		THREAD_LOG_INFO("ExReleaseSpinLockExclusiveFromDpcLevel(lock=0x{:X})", spin_lock);
 	});
 }

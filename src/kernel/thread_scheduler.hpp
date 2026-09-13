@@ -97,6 +97,11 @@ public:
 	void finish() { finished_ = true; }
 	[[nodiscard]] bool is_finished() const { return finished_; }
 
+	// Which side of the kernel the thread runs on. Nothing in the scheduler
+	// cares, but what a thread is doing reads differently depending on it, so
+	// an OS layer that has the distinction says so -- see win_thread.
+	[[nodiscard]] virtual bool is_user_mode() const { return false; }
+
 	[[nodiscard]] id_type id() const noexcept { return id_; }
 	[[nodiscard]] std::shared_ptr<process> proc() const noexcept { return process_; }
 

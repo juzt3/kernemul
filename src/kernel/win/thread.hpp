@@ -41,6 +41,8 @@ public:
 	[[nodiscard]] const emu_object<_TEB64>& teb() const { return teb_; }
 	[[nodiscard]] bool is_system_thread() const { return !teb_; }
 
+	[[nodiscard]] bool is_user_mode() const override { return !is_system_thread(); }
+
 protected:
 	addr_t stack_low_;
 	std::size_t stack_size_;

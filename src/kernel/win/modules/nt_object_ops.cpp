@@ -13,13 +13,13 @@ void modules::register_ntoskrnl_object_ops(win_kernel_state& state, proc_module&
 			[[maybe_unused]] emu_object<void> object_type, [[maybe_unused]] std::uint8_t access_mode,
 			emu_object<std::uint64_t> object_out) -> NTSTATUS
 		{
-			LOG_INFO("ObReferenceObjectByHandle(handle=0x{:X}, object_out=0x{:X})",
+			THREAD_LOG_INFO("ObReferenceObjectByHandle(handle=0x{:X}, object_out=0x{:X})",
 				handle, object_out.address());
 
 			const auto entry = sys_proc->handle_table().lookup_handle(handle);
 			if (!entry)
 			{
-				LOG_WARN("ObReferenceObjectByHandle: invalid handle 0x{:X}", handle);
+				THREAD_LOG_WARN("ObReferenceObjectByHandle: invalid handle 0x{:X}", handle);
 				return STATUS_INVALID_HANDLE;
 			}
 
@@ -34,13 +34,13 @@ void modules::register_ntoskrnl_object_ops(win_kernel_state& state, proc_module&
 	state.redirect(mod, "ObfReferenceObject",
 		[&objs = state.objs](vcpu&, addr_t object) -> void
 		{
-			LOG_INFO("ObfReferenceObject(object=0x{:X})", object);
+			THREAD_LOG_INFO("ObfReferenceObject(object=0x{:X})", object);
 			objs.reference_object(object);
 		});
 
 	auto deref = [&objs = state.objs](vcpu&, addr_t object) -> void
 	{
-		LOG_INFO("ObfDereferenceObject(object=0x{:X})", object);
+		THREAD_LOG_INFO("ObfDereferenceObject(object=0x{:X})", object);
 		objs.dereference_object(object);
 	};
 
@@ -49,11 +49,11 @@ void modules::register_ntoskrnl_object_ops(win_kernel_state& state, proc_module&
 
 	auto close_fn = [sys_proc](vcpu&, std::uint64_t handle) -> NTSTATUS
 	{
-		LOG_INFO("NtClose(handle=0x{:X})", handle);
+		THREAD_LOG_INFO("NtClose(handle=0x{:X})", handle);
 
 		if (!sys_proc->handle_table().close_handle(handle))
 		{
-			LOG_WARN("NtClose: invalid handle 0x{:X}", handle);
+			THREAD_LOG_WARN("NtClose: invalid handle 0x{:X}", handle);
 			return STATUS_INVALID_HANDLE;
 		}
 
