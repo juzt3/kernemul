@@ -196,6 +196,8 @@ set(kernemul_SOURCES
 	"src/kernel/win/modules/nt_lock_ops.hpp"
 	"src/kernel/win/modules/nt_mem_ops.cpp"
 	"src/kernel/win/modules/nt_mem_ops.hpp"
+	"src/kernel/win/modules/nt_misc_ops.cpp"
+	"src/kernel/win/modules/nt_misc_ops.hpp"
 	"src/kernel/win/modules/nt_object_ops.cpp"
 	"src/kernel/win/modules/nt_object_ops.hpp"
 	"src/kernel/win/modules/nt_pool_ops.cpp"

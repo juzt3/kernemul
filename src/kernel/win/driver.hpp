@@ -16,6 +16,7 @@
 // the io type, not the object manager's type index -- a driver object has both
 // and they are unrelated.
 inline constexpr short io_type_driver = 4;
+inline constexpr short io_type_device = 3;
 
 struct driver_object_params
 {
