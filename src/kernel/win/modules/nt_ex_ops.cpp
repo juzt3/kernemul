@@ -57,8 +57,8 @@ void modules::register_ntoskrnl_ex_ops(win_kernel_state& state, proc_module& mod
 				return;
 			}
 
-			auto t = st->sys_proc->create_thread(cpu, routine);
-			cpu.emu()->call_conv()->set_arg(cpu, *t, 0, parameter);
+			const std::uint64_t args[] = { parameter };
+			auto t = st->sys_proc->create_thread(cpu, routine, args);
 
 			THREAD_LOG_INFO("ExQueueWorkItem(item=0x{:X}, queue={}): routine 0x{:X}(0x{:X}) "
 				"runs as tid={}", work_item.address(), queue_type, routine, parameter, t->id());
