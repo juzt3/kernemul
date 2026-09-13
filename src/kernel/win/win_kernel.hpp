@@ -67,25 +67,16 @@ struct win_kernel_state : kernel_state
 
 		fs.load_dir(target::guest_fs_dir, root_dir_narrow);
 
-		if (const auto ntoskrnl = map_redirect_module(*sys_proc, std::string(target::guest_fs_dir) + "ntoskrnl.exe", true))
+		const auto ntoskrnl = map_redirect_module("ntoskrnl.exe", modules::register_ntoskrnl);
+
+		if (ntoskrnl)
 		{
-			modules::register_ntoskrnl(*this, *ntoskrnl);
-			modules::register_ntoskrnl_thread_ops(*this, *ntoskrnl);
-			modules::register_ntoskrnl_object_ops(*this, *ntoskrnl);
-			modules::register_ntoskrnl_irql_ops(*this, *ntoskrnl);
-			modules::register_ntoskrnl_string_ops(*this, *ntoskrnl);
-			modules::register_ntoskrnl_sync_ops(*this, *ntoskrnl);
-			modules::register_ntoskrnl_info_ops(*this, *ntoskrnl);
-			modules::register_ntoskrnl_crt_ops(*this, *ntoskrnl);
-			modules::register_ntoskrnl_pool_ops(*this, *ntoskrnl);
-			modules::register_ntoskrnl_process_ops(*this, *ntoskrnl);
-			modules::register_ntoskrnl_lock_ops(*this, *ntoskrnl);
-			modules::register_ntoskrnl_mem_ops(*this, *ntoskrnl);
-			modules::register_ntoskrnl_ex_ops(*this, *ntoskrnl);
-			modules::register_ntoskrnl_misc_ops(*this, *ntoskrnl);
-			modules::register_ntoskrnl_reg_ops(*this, *ntoskrnl);
-			modules::register_ntoskrnl_io_ops(*this, *ntoskrnl);
-			modules::register_ntoskrnl_timer_ops(*this, *ntoskrnl);
+			// The modules beside it, each mapped only so a driver importing
+			// from it can be told what its exports do.
+			map_redirect_module("fltmgr.sys", modules::register_fltmgr);
+			map_redirect_module("cng.sys", modules::register_cng);
+			map_redirect_module("ci.dll", modules::register_ci);
+			map_redirect_module("ndis.sys", modules::register_ndis);
 
 			if (const auto ps_list = ntoskrnl->find_export("PsLoadedModuleList"))
 			{
@@ -117,6 +108,39 @@ struct win_kernel_state : kernel_state
 			sizeof(_KUSER_SHARED_DATA), prot_rw | prot_supervisor);
 		kuser_shared_data = emu_object<_KUSER_SHARED_DATA>(space, kuser_shared_data_kernel_va);
 		kuser_shared_data.write(make_default_kuser_shared_data());
+	}
+
+	// One of the kernel's own modules, mapped out of the guest filesystem with
+	// the handlers that stand in for its exports. Nothing in a mapped module is
+	// ever executed -- it is there so its exports have addresses to redirect --
+	// which is why the imports are not resolved either.
+	//
+	// A module that is not in the guest filesystem is skipped rather than
+	// fatal: a driver importing from it fails to map and says so, and one that
+	// does not is unaffected.
+	template <typename F>
+	std::shared_ptr<proc_module> map_redirect_module(const std::string_view name, F&& registrar)
+	{
+		const auto path = std::string(target::guest_fs_dir) + std::string(name);
+
+		if (!std::filesystem::exists(path))
+		{
+			LOG_WARN("{} is not in {}, so nothing importing from it will map",
+				name, target::guest_fs_dir);
+			return nullptr;
+		}
+
+		const auto mod = kernel_state::map_redirect_module(*sys_proc, path, true);
+
+		if (!mod)
+		{
+			LOG_ERR("failed to map {}", name);
+			return nullptr;
+		}
+
+		registrar(*this, *mod);
+
+		return mod;
 	}
 
 	// Nt and Zw name one function at one address. Which of the two ntoskrnl
