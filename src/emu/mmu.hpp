@@ -1,4 +1,5 @@
 #pragma once
+#include <utility>
 #include "defs.hpp"
 #include "addr_space.hpp"
 #include <memory>
@@ -55,6 +56,16 @@ public:
 	void set_emu(emu* backend) { emu_ = backend; }
 	[[nodiscard]] class emu* emu() const noexcept { return emu_; }
 
+	// The physical memory handed out so far. Allocation bumps a cursor from a
+	// fixed base, so everything that exists is one run.
+	[[nodiscard]] std::pair<addr_t, std::size_t> phys_range() const
+	{
+		std::shared_lock lock(mtx_);
+		return { phys_base, phys_next_ - phys_base };
+	}
+
+	static constexpr addr_t phys_base = 0x10000;
+
 protected:
 	// The same, for callers that already hold mtx_ -- the table walkers do,
 	// and they allocate the tables they are missing as they go.
@@ -64,7 +75,7 @@ protected:
 	std::size_t size_align(std::size_t size) const { return (size + page_size() - 1) & ~(page_size() - 1); }
 
 	class emu* emu_ = nullptr;
-	addr_t phys_next_ = 0x10000;
+	addr_t phys_next_ = phys_base;
 	// Walks read the tables, mapping rewrites them. Reads are by far the more
 	// common: every guest memory access from the host side is one.
 	mutable std::shared_mutex mtx_;
