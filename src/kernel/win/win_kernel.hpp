@@ -21,7 +21,11 @@
 #include "modules/nt_lock_ops.hpp"
 #include "modules/nt_mem_ops.hpp"
 #include "modules/nt_ex_ops.hpp"
+#include "objects.hpp"
 #include "modules/nt_misc_ops.hpp"
+#include "modules/nt_reg_ops.hpp"
+#include "modules/nt_io_ops.hpp"
+#include "modules/nt_timer_ops.hpp"
 #include "pool.hpp"
 #include "../../target.hpp"
 #include <cstring>
@@ -39,6 +43,11 @@ struct win_kernel_state : kernel_state
 	loaded_module_list_t loaded_module_list;
 	active_process_list_t active_process_list;
 	emu_object<_KUSER_SHARED_DATA> kuser_shared_data;
+
+	// Views mapped into system space, by base address, so unmapping one knows
+	// how much to take down. Small and touched only by the two handlers that
+	// map and unmap, so it rides with the rest of the kernel state.
+	std::unordered_map<addr_t, std::uint64_t> views;
 
 	// Every list the guest keeps lives in guest memory, and a push rewrites the
 	// head and the old tail, so a module load or a thread starting at the same
@@ -74,6 +83,9 @@ struct win_kernel_state : kernel_state
 			modules::register_ntoskrnl_mem_ops(*this, *ntoskrnl);
 			modules::register_ntoskrnl_ex_ops(*this, *ntoskrnl);
 			modules::register_ntoskrnl_misc_ops(*this, *ntoskrnl);
+			modules::register_ntoskrnl_reg_ops(*this, *ntoskrnl);
+			modules::register_ntoskrnl_io_ops(*this, *ntoskrnl);
+			modules::register_ntoskrnl_timer_ops(*this, *ntoskrnl);
 
 			if (const auto ps_list = ntoskrnl->find_export("PsLoadedModuleList"))
 			{

@@ -5,6 +5,7 @@
 #include "../status.hpp"
 #include "../types.hpp"
 #include "../../../util/log.hpp"
+#include <string_view>
 
 namespace
 {
@@ -47,7 +48,7 @@ addr_t current_ethread(vcpu& cpu)
 // guest is locking against is not running. A lock found already held means the
 // guest reached it down a path a real wait would have blocked.
 void take_push_lock(emu_object<std::uint64_t> push_lock, const std::uint32_t flags,
-	const bool shared, const char* who)
+	const bool shared, const std::string_view who)
 {
 	if (flags & ~push_lock_known_flags)
 		THREAD_LOG_ERR("{}: flags 0x{:X} are not a push lock's", who, flags);
@@ -77,7 +78,7 @@ void take_push_lock(emu_object<std::uint64_t> push_lock, const std::uint32_t fla
 // kinds: a share decrement, collapsing to nothing once the last share -- or the
 // single exclusive hold, whose value is below one share -- goes.
 void give_push_lock(emu_object<std::uint64_t> push_lock, const std::uint32_t flags,
-	const char* who)
+	const std::string_view who)
 {
 	if (flags & ~push_lock_known_flags)
 		THREAD_LOG_ERR("{}: flags 0x{:X} are not a push lock's", who, flags);
@@ -125,7 +126,7 @@ void set_owner(const emu_object<_ERESOURCE>& resource, const addr_t owner_thread
 }
 
 bool take_resource(const emu_object<_ERESOURCE>& resource, vcpu& cpu,
-	const bool exclusive, const std::uint8_t wait, const char* who)
+	const bool exclusive, const std::uint8_t wait, const std::string_view who)
 {
 	const auto owner = current_ethread(cpu);
 	const auto entries = resource.field(&_ERESOURCE::ActiveEntries).read();
