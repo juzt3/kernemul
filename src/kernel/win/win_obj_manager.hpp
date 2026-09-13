@@ -49,6 +49,13 @@ public:
 
 	[[nodiscard]] bool has_object(addr_t body_addr) const;
 
+	// The header sits directly in front of the body, which is all a caller
+	// holding an object pointer needs to know to reach it.
+	[[nodiscard]] emu_object<_OBJECT_HEADER> header_of(addr_t body_addr) const
+	{
+		return emu_object<_OBJECT_HEADER>(space_, body_addr - sizeof(_OBJECT_HEADER));
+	}
+
 	void reference_object(addr_t body_addr);
 	void dereference_object(addr_t body_addr);
 	void increment_handle_count(addr_t body_addr);
