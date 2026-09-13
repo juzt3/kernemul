@@ -183,6 +183,8 @@ set(kernemul_SOURCES
 	"src/kernel/win/filesystem.hpp"
 	"src/kernel/win/ldr.hpp"
 	"src/kernel/win/linked_list.hpp"
+	"src/kernel/win/modules/nt_crt_ops.cpp"
+	"src/kernel/win/modules/nt_crt_ops.hpp"
 	"src/kernel/win/modules/nt_info_ops.cpp"
 	"src/kernel/win/modules/nt_info_ops.hpp"
 	"src/kernel/win/modules/nt_irql_ops.cpp"

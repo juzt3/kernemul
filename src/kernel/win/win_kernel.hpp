@@ -15,6 +15,7 @@
 #include "modules/nt_string_ops.hpp"
 #include "modules/nt_sync_ops.hpp"
 #include "modules/nt_info_ops.hpp"
+#include "modules/nt_crt_ops.hpp"
 #include "../../target.hpp"
 #include <cstring>
 #include <deque>
@@ -57,6 +58,7 @@ struct win_kernel_state : kernel_state
 			modules::register_ntoskrnl_string_ops(*this, *ntoskrnl);
 			modules::register_ntoskrnl_sync_ops(*this, *ntoskrnl);
 			modules::register_ntoskrnl_info_ops(*this, *ntoskrnl);
+			modules::register_ntoskrnl_crt_ops(*this, *ntoskrnl);
 
 			if (const auto ps_list = ntoskrnl->find_export("PsLoadedModuleList"))
 			{

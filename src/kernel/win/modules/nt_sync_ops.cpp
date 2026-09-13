@@ -176,6 +176,21 @@ void modules::register_ntoskrnl_sync_ops(win_kernel_state& state, proc_module& m
 		return updated;
 	};
 
+	// An interlocked singly-linked list head. Nothing pushes or pops one yet --
+	// those are the Ex*SList routines -- but a driver initialises it up front
+	// and the guest reads the head back, so an uninitialised one is a list that
+	// looks like it already has entries.
+	state.redirect(mod, "InitializeSListHead",
+		[](vcpu&, emu_object<_SLIST_HEADER> slist_head)
+		{
+			if (!slist_head)
+				return;
+
+			slist_head.write(_SLIST_HEADER{});
+
+			THREAD_LOG_INFO("InitializeSListHead(0x{:X})", slist_head.address());
+		});
+
 	state.redirect(mod, "KeEnterCriticalRegion", [apc_disable](vcpu& cpu)
 	{
 		THREAD_LOG_INFO("KeEnterCriticalRegion: apc disable count now {}",

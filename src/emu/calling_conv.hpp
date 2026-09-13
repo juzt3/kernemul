@@ -159,6 +159,20 @@ void call_with_conv(vcpu& cpu, const calling_conv& conv, F& fn, std::index_seque
 
 }
 
+// A source of successive arguments for a variadic routine, starting at `index`.
+// guest::vsprintf walks a format string and asks for one argument at a time
+// without knowing where they live, which is the other half of this.
+//
+// For a routine taking `...`; one handed a va_list gets its arguments out of
+// guest memory instead -- see guest::va_list_args.
+inline auto varargs(vcpu& cpu, const std::size_t index)
+{
+	return [&cpu, i = index]() mutable -> std::uint64_t
+	{
+		return cpu.emu()->call_conv()->arg<std::uint64_t>(cpu, i++);
+	};
+}
+
 template <typename F>
 std::function<void(vcpu&)> make_redirect(std::shared_ptr<const calling_conv> conv, F&& fn)
 {

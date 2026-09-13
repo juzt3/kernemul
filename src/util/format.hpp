@@ -195,4 +195,19 @@ std::wstring vswprintf(addr_space& space, std::wstring_view fmt, NextArg next_ar
 	return vformat<wchar_t>(space, fmt, std::move(next_arg));
 }
 
+// The arguments behind a va_list the guest passed in, for the routines that
+// take one rather than `...`. A va_list is a pointer to consecutive 8-byte
+// slots on both architectures -- ARM64's variadic convention puts every
+// argument on the stack, and x64's spills the register ones into the same
+// area -- so walking it is the same either way.
+inline auto va_list_args(addr_space& space, const addr_t va_list)
+{
+	return [&space, addr = va_list]() mutable -> std::uint64_t
+	{
+		const auto value = space.read_mem<std::uint64_t>(addr);
+		addr += sizeof(std::uint64_t);
+		return value;
+	};
+}
+
 }

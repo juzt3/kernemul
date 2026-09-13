@@ -7,6 +7,7 @@
 #include "../../../util/log.hpp"
 #include "../../../util/string.hpp"
 #include <chrono>
+#include <random>
 
 namespace
 {
@@ -243,5 +244,60 @@ void modules::register_ntoskrnl_info_ops(win_kernel_state& state, proc_module& m
 			THREAD_LOG_INFO("MmGetSystemRoutineAddress('{}') -> 0x{:X}", name, addr.value_or(0));
 
 			return addr.value_or(0);
+		});
+
+	// The documented seeded generator is gone from this build: it draws from
+	// ExGenRandom and writes the result back over the caller's seed, so the
+	// sequence is not reproducible from the seed the caller chose. Matching
+	// that rather than the documentation, because a driver checking its own
+	// seed afterwards sees what the real one left.
+	state.redirect(mod, "RtlRandomEx",
+		[](vcpu&, emu_object<std::uint32_t> seed) -> std::uint32_t
+		{
+			static std::mt19937 engine{std::random_device{}()};
+
+			const auto value = engine() & 0x7FFFFFFF;
+
+			if (seed)
+				seed.write(value);
+
+			THREAD_LOG_INFO("RtlRandomEx(seed=0x{:X}) -> {}", seed.address(), value);
+
+			return value;
+		});
+
+	// A guest timestamp is 100ns ticks from 1601; std::chrono counts days from
+	// 1970 and already knows how to break one into a calendar date, so the leap
+	// year rules are its problem rather than this one's.
+	state.redirect(mod, "RtlTimeToTimeFields",
+		[](vcpu&, emu_object<std::int64_t> time, emu_object<_TIME_FIELDS> time_fields)
+		{
+			if (!time || !time_fields)
+				return;
+
+			namespace chrono = std::chrono;
+
+			const auto since_1970 = win_ticks(time.read() - win_epoch_delta_100ns);
+			const auto point = chrono::sys_time<win_ticks>(since_1970);
+			const auto day = chrono::floor<chrono::days>(point);
+
+			const chrono::year_month_day date(day);
+			const chrono::hh_mm_ss clock(chrono::floor<chrono::milliseconds>(point - day));
+
+			_TIME_FIELDS out{};
+			out.Year = static_cast<short>(static_cast<int>(date.year()));
+			out.Month = static_cast<short>(static_cast<unsigned>(date.month()));
+			out.Day = static_cast<short>(static_cast<unsigned>(date.day()));
+			out.Hour = static_cast<short>(clock.hours().count());
+			out.Minute = static_cast<short>(clock.minutes().count());
+			out.Second = static_cast<short>(clock.seconds().count());
+			out.Milliseconds = static_cast<short>(clock.subseconds().count());
+			out.Weekday = static_cast<short>(chrono::weekday(day).c_encoding());
+
+			time_fields.write(out);
+
+			THREAD_LOG_INFO("RtlTimeToTimeFields({}) -> {}-{:02}-{:02} {:02}:{:02}:{:02}.{:03}",
+				time.read(), out.Year, out.Month, out.Day, out.Hour, out.Minute,
+				out.Second, out.Milliseconds);
 		});
 }
