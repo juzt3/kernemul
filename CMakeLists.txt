@@ -46,6 +46,22 @@ endif()
 
 message(STATUS "kernemul guest architecture: ${KERNEMUL_ARCH}")
 
+# Emulator backend, fixed at build time the same way. Unicorn interprets and
+# builds anywhere; whp runs the guest on the host cpu in a Hyper-V partition,
+# which needs the host to be the guest's own architecture.
+set(KERNEMUL_BACKEND "unicorn" CACHE STRING "emulator backend: unicorn or whp")
+set_property(CACHE KERNEMUL_BACKEND PROPERTY STRINGS unicorn whp)
+
+if(NOT KERNEMUL_BACKEND MATCHES "^(unicorn|whp)$")
+	message(FATAL_ERROR "KERNEMUL_BACKEND must be unicorn or whp, got: ${KERNEMUL_BACKEND}")
+endif()
+
+if(KERNEMUL_BACKEND STREQUAL "whp" AND NOT (WIN32 AND KERNEMUL_ARCH STREQUAL "x64"))
+	message(FATAL_ERROR "KERNEMUL_BACKEND=whp needs Windows and KERNEMUL_ARCH=x64")
+endif()
+
+message(STATUS "kernemul backend: ${KERNEMUL_BACKEND}")
+
 # Unicorn is declared here rather than in [fetch-content] because it needs a
 # PATCH_COMMAND, which cmkr has no key for.
 #
@@ -66,6 +82,22 @@ FetchContent_Declare(unicorn
 		-P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/apply_patch.cmake"
 )
 FetchContent_MakeAvailable(unicorn)
+
+# Zydis is only needed by the WHP backend, which decodes the instruction behind
+# a memory exit to work out which address it touched. Declared here rather than
+# in [fetch-content] so the tools and examples can be turned off before it is
+# made available.
+if(KERNEMUL_BACKEND STREQUAL "whp")
+	set(ZYDIS_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+	set(ZYDIS_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+
+	message(STATUS "Fetching zydis...")
+	FetchContent_Declare(zydis
+		GIT_REPOSITORY "https://github.com/zyantific/zydis"
+		GIT_TAG v4.1.0
+	)
+	FetchContent_MakeAvailable(zydis)
+endif()
 
 # Packages
 find_package(OpenSSL REQUIRED)
@@ -130,7 +162,10 @@ set(kernemul_SOURCES
 	"src/emu/x86/mmu.cpp"
 	"src/emu/x86/mmu.hpp"
 	"src/emu/x86/unicorn.hpp"
+	"src/emu/x86/whp.cpp"
+	"src/emu/x86/whp.hpp"
 	"src/kernel/kernel.hpp"
+	"src/kernel/log.cpp"
 	"src/kernel/map.cpp"
 	"src/kernel/map.hpp"
 	"src/kernel/process.cpp"
@@ -139,6 +174,7 @@ set(kernemul_SOURCES
 	"src/kernel/win/arm64_win.cpp"
 	"src/kernel/win/arm64_win.hpp"
 	"src/kernel/win/defs.hpp"
+	"src/kernel/win/driver.hpp"
 	"src/kernel/win/ethread.hpp"
 	"src/kernel/win/exception.cpp"
 	"src/kernel/win/exception.hpp"
@@ -146,6 +182,8 @@ set(kernemul_SOURCES
 	"src/kernel/win/filesystem.hpp"
 	"src/kernel/win/ldr.hpp"
 	"src/kernel/win/linked_list.hpp"
+	"src/kernel/win/modules/nt_irql_ops.cpp"
+	"src/kernel/win/modules/nt_irql_ops.hpp"
 	"src/kernel/win/modules/nt_object_ops.cpp"
 	"src/kernel/win/modules/nt_object_ops.hpp"
 	"src/kernel/win/modules/nt_thread_ops.cpp"
@@ -194,6 +232,28 @@ set(kernemul_SOURCES
 	"src/util/string.hpp"
 )
 
+if(KERNEMUL_BACKEND STREQUAL "whp") # whp
+	list(APPEND kernemul_SOURCES
+		"vendor/hypermulator/src/arch/decoder.cpp"
+		"vendor/hypermulator/src/arch/decoder.hpp"
+		"vendor/hypermulator/src/arch/instruction.hpp"
+		"vendor/hypermulator/src/arch/register.cpp"
+		"vendor/hypermulator/src/arch/register.hpp"
+		"vendor/hypermulator/src/emulator/emulator.cpp"
+		"vendor/hypermulator/src/emulator/emulator.hpp"
+		"vendor/hypermulator/src/emulator/emulator_hook.cpp"
+		"vendor/hypermulator/src/emulator/mode_setup.cpp"
+		"vendor/hypermulator/src/guest/guest_memory.hpp"
+		"vendor/hypermulator/src/guest/guest_partition.cpp"
+		"vendor/hypermulator/src/guest/guest_partition.hpp"
+		"vendor/hypermulator/src/guest/guest_register.hpp"
+		"vendor/hypermulator/src/guest/guest_virtual_processor.cpp"
+		"vendor/hypermulator/src/guest/guest_virtual_processor.hpp"
+		"vendor/hypermulator/src/guest/guest_vmexit.cpp"
+		"vendor/hypermulator/src/guest/guest_vmexit.hpp"
+	)
+endif()
+
 add_executable(kernemul)
 
 target_sources(kernemul PRIVATE ${kernemul_SOURCES})
@@ -211,6 +271,12 @@ if(KERNEMUL_ARCH STREQUAL "arm64") # arch-arm64
 	)
 endif()
 
+if(KERNEMUL_BACKEND STREQUAL "whp") # whp
+	target_compile_definitions(kernemul PRIVATE
+		KERNEMUL_HAS_WHP=1
+	)
+endif()
+
 target_compile_features(kernemul PRIVATE
 	cxx_std_23
 )
@@ -225,6 +291,12 @@ target_include_directories(kernemul PRIVATE
 	"vendor/ia32-doc/out"
 )
 
+if(KERNEMUL_BACKEND STREQUAL "whp") # whp
+	target_include_directories(kernemul PRIVATE
+		"vendor/hypermulator/src"
+	)
+endif()
+
 target_link_libraries(kernemul PRIVATE
 	spdlog::spdlog
 	unicorn
@@ -237,6 +309,13 @@ target_link_libraries(kernemul PRIVATE
 if(WIN32) # windows
 	target_link_libraries(kernemul PRIVATE
 		ws2_32
+	)
+endif()
+
+if(KERNEMUL_BACKEND STREQUAL "whp") # whp
+	target_link_libraries(kernemul PRIVATE
+		Zydis
+		WinHvPlatform
 	)
 endif()
 

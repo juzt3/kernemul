@@ -19,6 +19,22 @@ endif()
 
 message(STATUS "kernemul guest architecture: ${KERNEMUL_ARCH}")
 
+# Emulator backend, fixed at build time the same way. Unicorn interprets and
+# builds anywhere; whp runs the guest on the host cpu in a Hyper-V partition,
+# which needs the host to be the guest's own architecture.
+set(KERNEMUL_BACKEND "unicorn" CACHE STRING "emulator backend: unicorn or whp")
+set_property(CACHE KERNEMUL_BACKEND PROPERTY STRINGS unicorn whp)
+
+if(NOT KERNEMUL_BACKEND MATCHES "^(unicorn|whp)$")
+	message(FATAL_ERROR "KERNEMUL_BACKEND must be unicorn or whp, got: ${KERNEMUL_BACKEND}")
+endif()
+
+if(KERNEMUL_BACKEND STREQUAL "whp" AND NOT (WIN32 AND KERNEMUL_ARCH STREQUAL "x64"))
+	message(FATAL_ERROR "KERNEMUL_BACKEND=whp needs Windows and KERNEMUL_ARCH=x64")
+endif()
+
+message(STATUS "kernemul backend: ${KERNEMUL_BACKEND}")
+
 # Unicorn is declared here rather than in [fetch-content] because it needs a
 # PATCH_COMMAND, which cmkr has no key for.
 #
@@ -39,12 +55,29 @@ FetchContent_Declare(unicorn
 		-P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/apply_patch.cmake"
 )
 FetchContent_MakeAvailable(unicorn)
+
+# Zydis is only needed by the WHP backend, which decodes the instruction behind
+# a memory exit to work out which address it touched. Declared here rather than
+# in [fetch-content] so the tools and examples can be turned off before it is
+# made available.
+if(KERNEMUL_BACKEND STREQUAL "whp")
+	set(ZYDIS_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+	set(ZYDIS_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+
+	message(STATUS "Fetching zydis...")
+	FetchContent_Declare(zydis
+		GIT_REPOSITORY "https://github.com/zyantific/zydis"
+		GIT_TAG v4.1.0
+	)
+	FetchContent_MakeAvailable(zydis)
+endif()
 """
 
 [conditions]
 windows = "WIN32"
 arch-x64 = "KERNEMUL_ARCH STREQUAL \"x64\""
 arch-arm64 = "KERNEMUL_ARCH STREQUAL \"arm64\""
+whp = "KERNEMUL_BACKEND STREQUAL \"whp\""
 
 [fetch-content.spdlog]
 git = "https://github.com/gabime/spdlog"
@@ -70,3 +103,7 @@ windows.link-libraries = ["ws2_32"]
 compile-options = ["-Wno-changes-meaning"]
 arch-x64.compile-definitions = ["KERNEMUL_ARCH_X64=1"]
 arch-arm64.compile-definitions = ["KERNEMUL_ARCH_ARM64=1"]
+whp.sources = ["vendor/hypermulator/src/**.cpp", "vendor/hypermulator/src/**.hpp"]
+whp.include-directories = ["vendor/hypermulator/src"]
+whp.link-libraries = ["Zydis", "WinHvPlatform"]
+whp.compile-definitions = ["KERNEMUL_HAS_WHP=1"]

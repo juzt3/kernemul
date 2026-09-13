@@ -3,7 +3,22 @@
 #include "emu/calling_conv.hpp"
 #include "util/log.hpp"
 
-#include "emu/unicorn.hpp"
+// The backend the guest runs on, picked at build time with KERNEMUL_BACKEND.
+// Unicorn interprets; whp runs the guest on the host cpu in a Hyper-V
+// partition, which is one cpu rather than four -- its hook and step state is
+// per partition, so a second cpu stepping over a hooked access would unprotect
+// the pages under the first.
+#if defined(KERNEMUL_HAS_WHP)
+	#include "emu/x86/whp.hpp"
+
+	using guest_emu = x86_whp_emu;
+	inline constexpr std::size_t vcpu_count = 1;
+#else
+	#include "emu/unicorn.hpp"
+
+	using guest_emu = unicorn_emu;
+	inline constexpr std::size_t vcpu_count = 4;
+#endif
 
 #if defined(KERNEMUL_ARCH_ARM64)
 	#include "kernel/win/arm64_win.hpp"
@@ -35,7 +50,7 @@ int main()
 
 	auto mem = std::make_shared<guest::mmu>();
 	auto conv = std::make_shared<guest::calling_conv>();
-	auto e = std::make_shared<unicorn_emu>(mem, conv);
+	auto e = std::make_shared<guest_emu>(mem, conv);
 
 	guest::win_emulator win(e);
 
@@ -54,7 +69,6 @@ int main()
 	// off, and the service key it was started from.
 	auto args = kernel.create_driver(*driver, L"test_driver");
 
-	constexpr std::size_t vcpu_count = 4;
 	win.create_vcpus(vcpu_count);
 
 	auto cpu = win.cpus().front();
