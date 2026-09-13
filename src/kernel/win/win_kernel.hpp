@@ -119,8 +119,49 @@ struct win_kernel_state : kernel_state
 		kuser_shared_data.write(make_default_kuser_shared_data());
 	}
 
+	// Nt and Zw name one function at one address. Which of the two ntoskrnl
+	// exports varies from one function to the next -- and a driver can only
+	// import a name that is exported -- so a handler is bound to both spellings,
+	// and only a pair where neither resolves is worth reporting.
+	template <typename F>
+	void redirect_ntzw(proc_module& mod, const std::string_view base, F&& fn)
+	{
+		const auto nt = "Nt" + std::string(base);
+		const auto zw = "Zw" + std::string(base);
+		const auto conv = emu_->call_conv();
+
+		const bool bound_nt = try_redirect(mod, nt, make_redirect(conv, fn));
+		const bool bound_zw = try_redirect(mod, zw, make_redirect(conv, fn));
+
+		if (!bound_nt && !bound_zw)
+			LOG_ERR("neither {} nor {} is in {}", nt, zw, mod.name);
+	}
+
 	void set_emulator(windows_emulator* e) { emulator_ = e; }
 	[[nodiscard]] windows_emulator* emulator() const noexcept { return emulator_; }
+
+	// A thread handle names the ETHREAD rather than the thread, so this is how
+	// a handle gets back to the thread it belongs to.
+	[[nodiscard]] std::shared_ptr<win_thread> find_win_thread_by_ethread(const addr_t ethread)
+	{
+		if (!ethread)
+			return {};
+
+		std::shared_lock lock(proc_mtx_);
+
+		for (const auto& [id, proc] : processes)
+		{
+			const auto win_proc = std::dynamic_pointer_cast<windows_process>(proc);
+
+			if (!win_proc)
+				continue;
+
+			if (auto t = win_proc->find_thread_by_ethread(ethread))
+				return t;
+		}
+
+		return {};
+	}
 
 	// A module's entry in PsLoadedModuleList, by the address it was mapped at.
 	// Only the driver object needs one, and only to point DriverSection at it,
