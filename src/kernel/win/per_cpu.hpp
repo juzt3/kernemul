@@ -95,7 +95,8 @@ public:
 	// in it is the cpu's, not the thread's.
 	void set_current_thread(const addr_t kthread) const
 	{
-		kpcr_.space()->write_mem<addr_t>(prcb() + offsetof(_KPRCB, CurrentThread), kthread);
+		kpcr_.field(&_KPCR::Prcb).field(&_KPRCB::CurrentThread)
+			.write(reinterpret_cast<_KTHREAD*>(static_cast<std::uintptr_t>(kthread)));
 	}
 
 	// The guest's own view of this cpu's IRQL. A driver reads it straight out
@@ -103,14 +104,15 @@ public:
 	// it is kept rather than beside it on the host.
 	void set_irql(const irql_t irql) const
 	{
-		kpcr_.space()->write_mem<irql_t>(kpcr_.address() + kpcr_irql_off, irql);
+		kpcr_.field_at<irql_t>(kpcr_irql_off).write(irql);
 	}
 
 	[[nodiscard]] irql_t irql() const
 	{
-		return kpcr_.space()->read_mem<irql_t>(kpcr_.address() + kpcr_irql_off);
+		return kpcr_.field_at<irql_t>(kpcr_irql_off).read();
 	}
 
+	[[nodiscard]] const emu_object<_KPCR>& object() const noexcept { return kpcr_; }
 	[[nodiscard]] addr_t address() const noexcept { return kpcr_.address(); }
 	[[nodiscard]] addr_t prcb() const noexcept { return kpcr_.address() + offsetof(_KPCR, Prcb); }
 	[[nodiscard]] addr_space* space() const noexcept { return kpcr_.space(); }

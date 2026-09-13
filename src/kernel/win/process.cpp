@@ -111,8 +111,8 @@ void windows_process::setup_ethread(const std::shared_ptr<win_thread>& t, const 
 	kprocess_thread_list(espace, eprocess_.address()).push_back(obj);
 	eprocess_thread_list(espace, eprocess_.address()).push_back(obj);
 
-	const auto active_at = eprocess_.address() + offsetof(_EPROCESS, ActiveThreads);
-	espace.write_mem<std::uint32_t>(active_at, espace.read_mem<std::uint32_t>(active_at) + 1);
+	auto active = eprocess_.field(&_EPROCESS::ActiveThreads);
+	active.write(active.read() + 1);
 }
 
 void windows_process::destroy_ethread(const win_thread& t)
@@ -135,10 +135,10 @@ void windows_process::destroy_ethread(const win_thread& t)
 	kprocess_thread_list(espace, eprocess_.address()).remove(et.address());
 	eprocess_thread_list(espace, eprocess_.address()).remove(et.address());
 
-	const auto active_at = eprocess_.address() + offsetof(_EPROCESS, ActiveThreads);
+	auto active = eprocess_.field(&_EPROCESS::ActiveThreads);
 
-	if (const auto active = espace.read_mem<std::uint32_t>(active_at); active > 0)
-		espace.write_mem<std::uint32_t>(active_at, active - 1);
+	if (const auto count = active.read(); count > 0)
+		active.write(count - 1);
 }
 
 void windows_process::terminate_thread(const thread_id_type id)

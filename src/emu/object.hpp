@@ -49,7 +49,7 @@ public:
 	}
 
 	template <class C, class M>
-		requires std::is_base_of_v<C, T>
+		requires std::is_same_v<C, T> || std::is_base_of_v<C, T>
 	[[nodiscard]] emu_object<std::remove_extent_t<M>> field(M C::* const member) const
 	{
 		return emu_object<std::remove_extent_t<M>>(*space_, addr_ + member_offset(member));

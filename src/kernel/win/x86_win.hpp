@@ -25,11 +25,13 @@ public:
 			// After the tables, because the KPCR carries the pointers to them
 			// and the guest reads its own descriptor tables back out of it.
 			const auto& pcpu = kernel().init_per_cpu(*cpu);
-			auto& space = *pcpu.space();
+			const auto& kpcr = pcpu.object();
 
-			space.write_mem<addr_t>(pcpu.address() + offsetof(_KPCR, GdtBase), tables.gdt);
-			space.write_mem<addr_t>(pcpu.address() + offsetof(_KPCR, TssBase), tables.tss);
-			space.write_mem<addr_t>(pcpu.address() + offsetof(_KPCR, IdtBase), tables.idt);
+			const auto ptr = [](const addr_t a) { return static_cast<std::uintptr_t>(a); };
+
+			kpcr.field(&_KPCR::GdtBase).write(reinterpret_cast<_KGDTENTRY64*>(ptr(tables.gdt)));
+			kpcr.field(&_KPCR::TssBase).write(reinterpret_cast<_KTSS64*>(ptr(tables.tss)));
+			kpcr.field(&_KPCR::IdtBase).write(reinterpret_cast<_KIDTENTRY64*>(ptr(tables.idt)));
 
 			set_pcr(*cpu, pcpu.address());
 		}

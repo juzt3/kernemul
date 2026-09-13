@@ -104,35 +104,34 @@ inline _ETHREAD make_default_ethread(const ethread_params& p)
 
 inline void set_thread_state(const emu_object<_ETHREAD>& et, const KTHREAD_STATE state, const bool running)
 {
-	auto& space = *et.space();
-	space.write_mem<unsigned char>(et.address() + offsetof(_ETHREAD, Tcb.State),
-		static_cast<unsigned char>(state));
-	space.write_mem<unsigned char>(et.address() + offsetof(_ETHREAD, Tcb.Running),
-		running ? 1 : 0);
+	const auto tcb = et.field(&_ETHREAD::Tcb);
+
+	tcb.field(&_KTHREAD::State).write(static_cast<unsigned char>(state));
+	tcb.field(&_KTHREAD::Running).write(static_cast<unsigned char>(running ? 1 : 0));
 }
 
 // Why a waiting thread is waiting, which is the only thing that tells the two
 // kinds of Waiting apart once the state itself says no more than "not runnable".
 inline void set_thread_wait_reason(const emu_object<_ETHREAD>& et, const KWAIT_REASON reason)
 {
-	et.space()->write_mem<unsigned char>(et.address() + offsetof(_ETHREAD, Tcb.WaitReason),
-		static_cast<unsigned char>(reason));
+	et.field(&_ETHREAD::Tcb).field(&_KTHREAD::WaitReason)
+		.write(static_cast<unsigned char>(reason));
 }
 
 // Which cpu the thread is on. Windows uses this to decide where to send an
 // interrupt that has to reach a particular thread.
 inline void set_thread_processor(const emu_object<_ETHREAD>& et, const std::uint32_t number)
 {
-	et.space()->write_mem<std::uint32_t>(et.address() + offsetof(_ETHREAD, Tcb.NextProcessor), number);
+	et.field(&_ETHREAD::Tcb).field(&_KTHREAD::NextProcessor).write(number);
 }
 
 inline void count_thread_switch(const emu_object<_ETHREAD>& et)
 {
-	const auto at = et.address() + offsetof(_ETHREAD, Tcb.ContextSwitches);
-	et.space()->write_mem<std::uint32_t>(at, et.space()->read_mem<std::uint32_t>(at) + 1);
+	auto switches = et.field(&_ETHREAD::Tcb).field(&_KTHREAD::ContextSwitches);
+	switches.write(switches.read() + 1);
 }
 
 inline void set_thread_exit_time(const emu_object<_ETHREAD>& et, const std::int64_t time)
 {
-	et.space()->write_mem<std::int64_t>(et.address() + offsetof(_ETHREAD, ExitTime), time);
+	et.field(&_ETHREAD::ExitTime).field(&_LARGE_INTEGER::QuadPart).write(time);
 }

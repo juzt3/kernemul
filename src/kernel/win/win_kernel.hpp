@@ -144,9 +144,8 @@ struct win_kernel_state : kernel_state
 			static_cast<std::uint32_t>(cpu.id()));
 
 		// Where the guest looks to find out how many cpus the machine has.
-		kuser_shared_data.space()->write_mem<std::uint32_t>(
-			kuser_shared_data.address() + offsetof(_KUSER_SHARED_DATA, ActiveProcessorCount),
-			static_cast<std::uint32_t>(per_cpu_.size()));
+		kuser_shared_data.field(&_KUSER_SHARED_DATA::ActiveProcessorCount)
+			.write(static_cast<unsigned long>(per_cpu_.size()));
 
 		return pcpu;
 	}
