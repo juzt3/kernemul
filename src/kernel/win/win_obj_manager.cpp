@@ -32,6 +32,22 @@ void win_obj_manager::register_object(addr_t body_addr, std::shared_ptr<win_obje
 	objects_[body_addr] = { emu_object<_OBJECT_HEADER>{}, std::move(host) };
 }
 
+void win_obj_manager::register_named_object(std::string name, const addr_t body_addr)
+{
+	if (name.empty())
+		return;
+
+	std::scoped_lock lock(mtx_);
+	named_[std::move(name)] = body_addr;
+}
+
+addr_t win_obj_manager::lookup_named_object(const std::string_view name) const
+{
+	std::scoped_lock lock(mtx_);
+	const auto it = named_.find(name);
+	return it != named_.end() ? it->second : 0;
+}
+
 bool win_obj_manager::has_object(addr_t body_addr) const
 {
 	std::scoped_lock lock(mtx_);

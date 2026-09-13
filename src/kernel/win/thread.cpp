@@ -1,4 +1,5 @@
 #include "thread.hpp"
+#include <utility>
 #include <chrono>
 #include "dispatcher.hpp"
 #include "status.hpp"
@@ -137,12 +138,62 @@ bool win_thread::try_satisfy(addr_space& space)
 	return true;
 }
 
+// A wait that names no object is an alert wait, and this is the only thing
+// that ends it. One arriving with nothing parked on it is kept rather than
+// dropped, because the thread that takes it may not have asked yet.
+void win_thread::alert()
+{
+	if (wait_ && !wait_->satisfied && wait_->objects.empty())
+	{
+		wait_->status = STATUS_SUCCESS;
+		wait_->satisfied = true;
+		return;
+	}
+
+	alerted_ = true;
+}
+
+bool win_thread::take_alert()
+{
+	return std::exchange(alerted_, false);
+}
+
+std::uint32_t win_thread::suspend()
+{
+	const auto previous = suspend_count_++;
+
+	if (ethread_)
+		ethread_.field(&_ETHREAD::Tcb).field(&_KTHREAD::SuspendCount)
+			.write(static_cast<char>(suspend_count_));
+
+	return previous;
+}
+
+std::uint32_t win_thread::resume()
+{
+	const auto previous = suspend_count_;
+
+	if (suspend_count_)
+		--suspend_count_;
+
+	if (ethread_)
+		ethread_.field(&_ETHREAD::Tcb).field(&_KTHREAD::SuspendCount)
+			.write(static_cast<char>(suspend_count_));
+
+	return previous;
+}
+
 // A parked thread runs again once its wait has been satisfied by whoever
 // signalled it, or once it has waited as long as it was told to. Both are
 // answered from what the wait already holds: nothing here touches guest memory,
 // because the scheduler asks this with no thread on the cpu.
 bool win_thread::is_ready(vcpu& cpu)
 {
+	// Ahead of the wait, so a thread suspended while parked stays off the cpu
+	// even once whatever it waited for arrives.
+	if (suspend_count_)
+		return false;
+
 	if (!wait_)
 		return thread::is_ready(cpu);
 

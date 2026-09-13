@@ -1,3 +1,5 @@
+#include "../../target.hpp"
+#if defined(KERNEMUL_ARCH_ARM64)
 #include "arm64_win.hpp"
 #include "../process.hpp"
 #include "../../emu/mmu.hpp"
@@ -24,3 +26,5 @@ std::shared_ptr<vcpu> arm64_win_emulator::add_vcpu()
 
 	return cpu;
 }
+
+#endif // KERNEMUL_ARCH_ARM64

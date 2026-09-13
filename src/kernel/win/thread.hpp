@@ -72,6 +72,24 @@ public:
 	// was already signalled when it asked.
 	bool try_satisfy(addr_space& space);
 
+	// An alert aimed at the thread itself rather than at anything it is waiting
+	// on -- the wait NtWaitForAlertByThreadId starts names no object, so this
+	// is the only thing that can release it. An alert that arrives before the
+	// wait is kept: the pair builds a lock, and the release very often runs
+	// first.
+	void alert();
+
+	// Whether an alert is already in hand, consuming it if it is. A wait that
+	// finds one never parks at all.
+	bool take_alert();
+
+	// The count NtSuspendThread drives up and NtResumeThread back down. The
+	// scheduler passes over a thread that has one, which is the whole of what
+	// being suspended is here.
+	std::uint32_t suspend();
+	std::uint32_t resume();
+	[[nodiscard]] std::uint32_t suspend_count() const { return suspend_count_; }
+
 	// Ready once its wait has been satisfied or its timeout has run out.
 	// Neither answer needs guest memory, which is why the scheduler can ask.
 	[[nodiscard]] bool is_ready(vcpu& cpu) override;
@@ -112,6 +130,8 @@ public:
 
 protected:
 	std::optional<wait_state> wait_;
+	bool alerted_ = false;
+	std::uint32_t suspend_count_ = 0;
 	addr_t stack_low_;
 	std::size_t stack_size_;
 	emu_object<_TEB64> teb_;

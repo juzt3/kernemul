@@ -10,6 +10,7 @@
 #include "../../../util/string.hpp"
 #include <chrono>
 #include <string_view>
+#include <vector>
 
 namespace
 {
@@ -104,11 +105,6 @@ std::shared_ptr<win_thread> thread_from_handle(win_kernel_state& state, vcpu& cp
 // The thread and process syscalls. Creating, ending and asking about a thread
 // all go through the same scheduler and the same ETHREAD the Ps* handlers use,
 // so a driver that mixes the two sees one thread rather than two views of one.
-//
-// Suspending, resuming and thread contexts are not here: the scheduler has no
-// suspend count and no way to read a stopped thread's registers back, and a
-// handler that said otherwise would have a driver waiting on a thread that
-// never stopped.
 void modules::register_ntoskrnl_task_ops(win_kernel_state& state, proc_module& mod)
 {
 	auto* st = &state;
@@ -453,6 +449,181 @@ void modules::register_ntoskrnl_task_ops(win_kernel_state& state, proc_module& m
 		}
 	};
 
+	// A suspend count the scheduler honours: it passes over a thread that has
+	// one until the matching resume brings it back to zero. Suspending the
+	// calling thread therefore has to give the cpu up on the way out, or it
+	// would run on to the end of its quantum after asking to stop.
+	auto suspend_thread = [st](vcpu& cpu, const std::uint64_t thread_handle,
+		emu_object<std::uint32_t> previous_count) -> NTSTATUS
+	{
+		const auto t = thread_from_handle(*st, cpu, thread_handle);
+
+		if (!t)
+		{
+			THREAD_LOG_WARN("NtSuspendThread: handle 0x{:X} is not a thread", thread_handle);
+			return STATUS_INVALID_HANDLE;
+		}
+
+		const auto previous = t->suspend();
+
+		if (previous_count)
+			previous_count.write(previous);
+
+		THREAD_LOG_INFO("NtSuspendThread(tid={}) -> was suspended {} time(s)",
+			t->id(), previous);
+
+		if (t == cpu.thread())
+			thread_scheduler::yield_current(cpu);
+
+		return STATUS_SUCCESS;
+	};
+
+	auto resume_thread = [st](vcpu& cpu, const std::uint64_t thread_handle,
+		emu_object<std::uint32_t> previous_count) -> NTSTATUS
+	{
+		const auto t = thread_from_handle(*st, cpu, thread_handle);
+
+		if (!t)
+		{
+			THREAD_LOG_WARN("NtResumeThread: handle 0x{:X} is not a thread", thread_handle);
+			return STATUS_INVALID_HANDLE;
+		}
+
+		const auto previous = t->resume();
+
+		if (previous_count)
+			previous_count.write(previous);
+
+		if (!previous)
+			THREAD_LOG_WARN("NtResumeThread: tid={} was not suspended", t->id());
+		else
+			THREAD_LOG_INFO("NtResumeThread(tid={}) -> was suspended {} time(s)",
+				t->id(), previous);
+
+		return STATUS_SUCCESS;
+	};
+
+	// The alert pair. The address the waiter passes names nothing here -- it is
+	// the guest's own way of telling one wait from another, and the alert is
+	// aimed at the thread rather than at the address -- so the wait names no
+	// object and only an alert or its timeout ends it.
+	auto alert_thread = [st](vcpu& cpu, const std::uint64_t thread_id) -> NTSTATUS
+	{
+		const auto t = std::dynamic_pointer_cast<win_thread>(
+			st->find_thread(static_cast<process::thread_id_type>(thread_id)));
+
+		if (!t)
+		{
+			THREAD_LOG_WARN("NtAlertThreadByThreadId: no thread {}", thread_id);
+			return STATUS_INVALID_CID;
+		}
+
+		t->alert();
+
+		THREAD_LOG_INFO("NtAlertThreadByThreadId(tid={})", t->id());
+
+		return STATUS_SUCCESS;
+	};
+
+	auto wait_for_alert = [](vcpu& cpu, const addr_t address,
+		emu_object<std::int64_t> timeout) -> NTSTATUS
+	{
+		const auto t = std::dynamic_pointer_cast<win_thread>(cpu.thread());
+
+		if (!t)
+			return STATUS_INVALID_PARAMETER;
+
+		if (t->take_alert())
+		{
+			THREAD_LOG_INFO("NtWaitForAlertByThreadId(0x{:X}): an alert was already in hand",
+				address);
+			return STATUS_SUCCESS;
+		}
+
+		win_thread::wait_state wait{};
+
+		if (timeout)
+		{
+			const auto ticks = timeout.read();
+
+			wait.timed = true;
+			wait.deadline = ticks < 0
+				? static_cast<std::int64_t>(win_system_time()) - ticks
+				: ticks;
+		}
+
+		THREAD_LOG_INFO("NtWaitForAlertByThreadId(0x{:X}): parked {}",
+			address, wait.timed ? "with a timeout" : "with no timeout");
+
+		t->begin_wait(std::move(wait));
+		thread_scheduler::yield_current(cpu);
+
+		return STATUS_SUCCESS;
+	};
+
+	// A thread token is a security context, and nothing here has one to hand
+	// out -- so this is the status a thread that has not impersonated anyone
+	// gets on real Windows, which is the same thing for the same reason.
+	auto open_thread_token = [](vcpu&, const std::uint64_t thread_handle,
+		const std::uint32_t desired_access, const bool open_as_self,
+		emu_object<std::uint64_t> token_handle) -> NTSTATUS
+	{
+		if (token_handle)
+			token_handle.write(0);
+
+		THREAD_LOG_WARN("NtOpenThreadToken(handle=0x{:X}, access=0x{:X}, as_self={}): nothing "
+			"here carries a token", thread_handle, desired_access, open_as_self);
+
+		return STATUS_NO_TOKEN;
+	};
+
+	auto open_thread_token_ex = [open_thread_token](vcpu& cpu, const std::uint64_t thread_handle,
+		const std::uint32_t desired_access, const bool open_as_self,
+		[[maybe_unused]] const std::uint32_t handle_attributes,
+		emu_object<std::uint64_t> token_handle) -> NTSTATUS
+	{
+		return open_thread_token(cpu, thread_handle, desired_access, open_as_self,
+			std::move(token_handle));
+	};
+
+	// Ending a process ends every thread in it, including the one asking, which
+	// is why this does not return when the caller names its own process.
+	auto terminate_process = [st](vcpu& cpu, const std::uint64_t process_handle,
+		const NTSTATUS exit_status) -> NTSTATUS
+	{
+		if (process_handle != 0 && process_handle != current_process_handle)
+		{
+			THREAD_LOG_WARN("NtTerminateProcess: handle 0x{:X} is not this process",
+				process_handle);
+			return STATUS_INVALID_HANDLE;
+		}
+
+		const auto self = cpu.thread();
+
+		// Collected first: terminate_thread takes the process's thread lock,
+		// which for_each_thread is holding while it walks.
+		std::vector<process::thread_id_type> ids;
+
+		st->sys_proc->for_each_thread([&](win_thread& t)
+		{
+			if (!self || t.id() != self->id())
+				ids.push_back(t.id());
+		});
+
+		THREAD_LOG_INFO("NtTerminateProcess(status=0x{:X}): ending {} other thread(s)",
+			exit_status, ids.size());
+
+		for (const auto id : ids)
+			st->sys_proc->terminate_thread(id);
+
+		if (self)
+			self->finish();
+
+		cpu.stop();
+
+		return STATUS_SUCCESS;
+	};
+
 	// One group, and the cpu the caller is on is the one it is asking about.
 	state.redirect_ntzw(mod, "GetCurrentProcessorNumber", [](vcpu& cpu) -> std::uint32_t
 	{
@@ -495,4 +666,11 @@ void modules::register_ntoskrnl_task_ops(win_kernel_state& state, proc_module& m
 	state.redirect_ntzw(mod, "QueryInformationProcess", query_process);
 	state.redirect_ntzw(mod, "SetInformationThread", set_thread);
 	state.redirect_ntzw(mod, "SetInformationProcess", set_process);
+	state.redirect_ntzw(mod, "SuspendThread", suspend_thread);
+	state.redirect_ntzw(mod, "ResumeThread", resume_thread);
+	state.redirect_ntzw(mod, "AlertThreadByThreadId", alert_thread);
+	state.redirect_ntzw(mod, "WaitForAlertByThreadId", wait_for_alert);
+	state.redirect_ntzw(mod, "OpenThreadToken", open_thread_token);
+	state.redirect_ntzw(mod, "OpenThreadTokenEx", open_thread_token_ex);
+	state.redirect_ntzw(mod, "TerminateProcess", terminate_process);
 }

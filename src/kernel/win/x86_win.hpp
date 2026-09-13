@@ -2,6 +2,13 @@
 #include "win_kernel.hpp"
 #include "segments.hpp"
 
+// CONTEXT_*, the architecture bit that tags an x86-64 CONTEXT and the halves a
+// caller asks for on top of it.
+inline constexpr std::uint32_t context_amd64    = 0x00100000;
+inline constexpr std::uint32_t context_control  = context_amd64 | 0x1;
+inline constexpr std::uint32_t context_integer  = context_amd64 | 0x2;
+inline constexpr std::uint32_t context_segments = context_amd64 | 0x4;
+
 // Windows on x86-64: the TEB is reached through the GS base, and the CPU needs
 // a GDT, a TSS and an IDT before any of that works. The KPCR shares that same
 // GS base, which is why a thread going on a cpu has to put its cpu's block back
@@ -55,5 +62,102 @@ public:
 	void init_thread_teb(thread& t, vcpu& cpu, addr_t teb_addr) override
 	{
 		t.set_reg_val(cpu, x86::gs, x86_win_seg::make_usermode_gs(teb_addr));
+	}
+
+	// The integer and control halves of a CONTEXT, and the selectors that go
+	// with them. The floating point half is not filled in: a CONTEXT keeps the
+	// xmm registers inside an XSAVE area whose layout is the cpu's rather than
+	// Windows', and nothing asking for a thread's context here has wanted them.
+	// What is left out is left out of ContextFlags too.
+	void capture_context(const reg_view& regs, emu_object<_CONTEXT> out,
+		const std::uint32_t flags) override
+	{
+		if (!out)
+			return;
+
+		auto ctx = out.read();
+		std::uint32_t filled = context_amd64;
+
+		if (flags & context_integer)
+		{
+			filled |= context_integer;
+
+			ctx.Rax = regs.get(x86::rax);
+			ctx.Rcx = regs.get(x86::rcx);
+			ctx.Rdx = regs.get(x86::rdx);
+			ctx.Rbx = regs.get(x86::rbx);
+			ctx.Rsi = regs.get(x86::rsi);
+			ctx.Rdi = regs.get(x86::rdi);
+			ctx.R8  = regs.get(x86::r8);
+			ctx.R9  = regs.get(x86::r9);
+			ctx.R10 = regs.get(x86::r10);
+			ctx.R11 = regs.get(x86::r11);
+			ctx.R12 = regs.get(x86::r12);
+			ctx.R13 = regs.get(x86::r13);
+			ctx.R14 = regs.get(x86::r14);
+			ctx.R15 = regs.get(x86::r15);
+		}
+
+		if (flags & context_control)
+		{
+			filled |= context_control;
+
+			ctx.Rsp = regs.get(x86::rsp);
+			ctx.Rbp = regs.get(x86::rbp);
+			ctx.Rip = regs.get(x86::rip);
+			ctx.EFlags = static_cast<unsigned long>(regs.get(x86::rflags));
+			ctx.SegCs = x86_win_seg::kernel_cs;
+			ctx.SegSs = x86_win_seg::kernel_ds;
+		}
+
+		if (flags & context_segments)
+		{
+			filled |= context_segments;
+
+			ctx.SegDs = x86_win_seg::kernel_ds;
+			ctx.SegEs = x86_win_seg::kernel_ds;
+			ctx.SegFs = x86_win_seg::kernel_ds;
+			ctx.SegGs = x86_win_seg::kernel_ds;
+		}
+
+		ctx.ContextFlags = filled;
+		out.write(ctx);
+	}
+
+	void apply_context(const reg_view& regs, emu_object<_CONTEXT> in) override
+	{
+		if (!in)
+			return;
+
+		const auto ctx = in.read();
+
+		if (ctx.ContextFlags & context_integer)
+		{
+			regs.set(x86::rax, ctx.Rax);
+			regs.set(x86::rcx, ctx.Rcx);
+			regs.set(x86::rdx, ctx.Rdx);
+			regs.set(x86::rbx, ctx.Rbx);
+			regs.set(x86::rsi, ctx.Rsi);
+			regs.set(x86::rdi, ctx.Rdi);
+			regs.set(x86::r8,  ctx.R8);
+			regs.set(x86::r9,  ctx.R9);
+			regs.set(x86::r10, ctx.R10);
+			regs.set(x86::r11, ctx.R11);
+			regs.set(x86::r12, ctx.R12);
+			regs.set(x86::r13, ctx.R13);
+			regs.set(x86::r14, ctx.R14);
+			regs.set(x86::r15, ctx.R15);
+		}
+
+		if (ctx.ContextFlags & context_control)
+		{
+			regs.set(x86::rsp, ctx.Rsp);
+			regs.set(x86::rbp, ctx.Rbp);
+			regs.set(x86::rip, ctx.Rip);
+
+			// Bit 1 reads as one, and a guest handed a CONTEXT it built itself
+			// very often leaves it clear.
+			regs.set(x86::rflags, ctx.EFlags | 0x2u);
+		}
 	}
 };

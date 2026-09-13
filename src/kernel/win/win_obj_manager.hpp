@@ -1,10 +1,13 @@
 #pragma once
 #include "types.hpp"
 #include "../../emu/object.hpp"
+#include "../../util/string.hpp"
 
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <string>
+#include <string_view>
 #include <unordered_map>
 
 struct win_object
@@ -36,6 +39,13 @@ public:
 		std::shared_ptr<win_object> host = {}, mem_prot prot = prot_rw);
 
 	void register_object(addr_t body_addr, std::shared_ptr<win_object> host);
+
+	// The object namespace. It holds exactly what the guest put in it: nothing
+	// here builds \Device or \BaseNamedObjects up front, so a name that was
+	// never created is a name that does not exist.
+	void register_named_object(std::string name, addr_t body_addr);
+
+	[[nodiscard]] addr_t lookup_named_object(std::string_view name) const;
 
 	template <typename T>
 	[[nodiscard]] std::shared_ptr<T> get_object(addr_t body_addr) const
@@ -69,5 +79,6 @@ private:
 	addr_space& space_;
 	mutable std::mutex mtx_;
 	std::unordered_map<addr_t, object_entry> objects_;
+	std::unordered_map<std::string, addr_t, string_view_hash, std::equal_to<>> named_;
 	id_type next_id_ = 4;
 };

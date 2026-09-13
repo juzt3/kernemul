@@ -15,6 +15,7 @@
 #include "modules/ci.hpp"
 #include "modules/ndis.hpp"
 #include "pool.hpp"
+#include "../../emu/guest_call.hpp"
 #include "../../target.hpp"
 #include <cstring>
 #include <filesystem>
@@ -322,6 +323,23 @@ public:
 	// from without asking. x86-64 has cr8; ARM64 has nothing of the sort, so
 	// there the KPCR is the only copy and this does nothing.
 	virtual void set_hw_irql(vcpu&, irql_t) {}
+
+	// A thread's registers as the guest's own CONTEXT, and the way back from
+	// one. Which fields a CONTEXT holds, and which bit of ContextFlags asks for
+	// them, belong to the architecture -- so both halves live with the rest of
+	// what an architecture has to say about itself.
+	//
+	// `flags` is what the caller asked for; what comes back in ContextFlags is
+	// what was actually filled in, which is how a caller asking for floating
+	// point finds out it did not get any.
+	virtual void capture_context(const reg_view& regs, emu_object<_CONTEXT> out,
+		std::uint32_t flags) = 0;
+
+	// Every part of a CONTEXT the architecture can fill in, for a caller with
+	// no particular request -- what comes back says which parts those were.
+	static constexpr std::uint32_t context_all = ~0u;
+
+	virtual void apply_context(const reg_view& regs, emu_object<_CONTEXT> in) = 0;
 
 	// Raise or lower this cpu's IRQL, and say what it was. Every handler that
 	// moves the IRQL goes through here, so the two copies cannot drift.

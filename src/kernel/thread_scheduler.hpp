@@ -123,6 +123,29 @@ private:
 	bool finished_{false};
 };
 
+// A thread's registers, whether or not it is the one on the cpu. A thread that
+// is off a cpu holds its own context, so asking about another thread and asking
+// about yourself are otherwise two different pieces of code for one question.
+struct reg_view
+{
+	vcpu& cpu;
+	// Null for the thread the cpu is running, whose registers are the cpu's.
+	thread* banked = nullptr;
+
+	[[nodiscard]] std::uint64_t get(const reg_t r) const
+	{
+		return banked ? banked->get_reg(cpu, r) : cpu.reg(r);
+	}
+
+	void set(const reg_t r, const std::uint64_t value) const
+	{
+		if (banked)
+			banked->set_reg(cpu, r, value);
+		else
+			cpu.reg(r, value);
+	}
+};
+
 class thread_scheduler
 {
 public:
