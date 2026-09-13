@@ -16,6 +16,8 @@
 #include "modules/nt_sync_ops.hpp"
 #include "modules/nt_info_ops.hpp"
 #include "modules/nt_crt_ops.hpp"
+#include "modules/nt_pool_ops.hpp"
+#include "pool.hpp"
 #include "../../target.hpp"
 #include <cstring>
 #include <deque>
@@ -25,6 +27,7 @@
 struct win_kernel_state : kernel_state
 {
 	win_obj_manager objs;
+	win_pool pool;
 	win_registry reg;
 	win_filesystem fs;
 	std::shared_ptr<win_kernel_proc> sys_proc;
@@ -41,6 +44,7 @@ struct win_kernel_state : kernel_state
 
 	explicit win_kernel_state(const std::shared_ptr<class emu>& emu)
 		:	objs(*emu->default_addr_space()),
+			pool(*emu->default_addr_space()),
 			sys_proc(std::make_shared<win_kernel_proc>(objs.allocate_id(), *this, emu->default_addr_space()))
 	{
 		emu_ = emu;
@@ -59,6 +63,7 @@ struct win_kernel_state : kernel_state
 			modules::register_ntoskrnl_sync_ops(*this, *ntoskrnl);
 			modules::register_ntoskrnl_info_ops(*this, *ntoskrnl);
 			modules::register_ntoskrnl_crt_ops(*this, *ntoskrnl);
+			modules::register_ntoskrnl_pool_ops(*this, *ntoskrnl);
 
 			if (const auto ps_list = ntoskrnl->find_export("PsLoadedModuleList"))
 			{
