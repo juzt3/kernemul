@@ -23,7 +23,8 @@ public:
 		win_obj_manager& objs, const win_filesystem& fs)
 		:	process(id, std::move(space)), objs_(objs), handle_table_(objs), fs_(fs) {}
 
-	std::shared_ptr<thread> create_thread(vcpu& cpu, addr_t start_addr) override;
+	std::shared_ptr<thread> create_thread(vcpu& cpu, addr_t start_addr,
+		std::span<const std::uint64_t> args = {}) override;
 	void terminate_thread(thread_id_type id) override;
 
 	virtual std::shared_ptr<proc_module> load_module(std::string_view name, bool supervisor);
@@ -100,7 +101,8 @@ public:
 
 	void module_add_cb(proc_module& mod) override;
 
-	std::shared_ptr<thread> create_thread(vcpu& cpu, addr_t start_addr) override;
+	std::shared_ptr<thread> create_thread(vcpu& cpu, addr_t start_addr,
+		std::span<const std::uint64_t> args = {}) override;
 
 	addr_t thread_exit_addr() const override
 	{

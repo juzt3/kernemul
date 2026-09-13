@@ -20,7 +20,8 @@ addr_t windows_process::find_symbol(const std::string_view mod_name,
 	return 0;
 }
 
-std::shared_ptr<thread> windows_process::create_thread(vcpu& cpu, const addr_t start_addr)
+std::shared_ptr<thread> windows_process::create_thread(vcpu& cpu, const addr_t start_addr,
+	const std::span<const std::uint64_t> args)
 {
 	const auto id = static_cast<thread_id_type>(objs_.allocate_id());
 
@@ -42,11 +43,12 @@ std::shared_ptr<thread> windows_process::create_thread(vcpu& cpu, const addr_t s
 		threads_[t->id()] = t;
 	}
 
-	scheduler_->enqueue(cpu, t);
+	scheduler_->enqueue(cpu, t, args);
 	return t;
 }
 
-std::shared_ptr<thread> win_user_proc::create_thread(vcpu& cpu, const addr_t start_addr)
+std::shared_ptr<thread> win_user_proc::create_thread(vcpu& cpu, const addr_t start_addr,
+	const std::span<const std::uint64_t> args)
 {
 	const auto id = static_cast<thread_id_type>(objs_.allocate_id());
 
@@ -66,7 +68,7 @@ std::shared_ptr<thread> win_user_proc::create_thread(vcpu& cpu, const addr_t sta
 		threads_[t->id()] = t;
 	}
 
-	scheduler_->enqueue(cpu, t);
+	scheduler_->enqueue(cpu, t, args);
 	return t;
 }
 
