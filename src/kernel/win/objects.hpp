@@ -1,4 +1,5 @@
 #pragma once
+#include "dispatcher.hpp"
 #include "filesystem.hpp"
 #include "win_obj_manager.hpp"
 
@@ -27,6 +28,18 @@ struct section_host final : win_object
 	std::string path;
 	std::uint64_t size = 0;
 	bool is_image = false;
+};
+
+// A dispatcher object reached by handle. The body behind it is the real KEVENT,
+// KSEMAPHORE or KMUTANT, so the Ke* handlers and the Nt* ones see one state; the
+// type is what tells a handle for one apart from a handle for another.
+struct dispatcher_host final : win_object
+{
+	win::dispatcher_type type;
+	std::string name;
+
+	dispatcher_host(const win::dispatcher_type t, std::string n)
+		: type(t), name(std::move(n)) {}
 };
 
 // SECTION_ATTRIBUTES, of which only SEC_IMAGE changes what a section is.
