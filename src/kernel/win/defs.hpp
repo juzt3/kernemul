@@ -28,6 +28,42 @@ using eprocess_thread_list_t = win_linked_list<
 	offsetof(_ETHREAD, ThreadListEntry)
 >;
 
+#pragma pack(push, 4)
+struct _RTL_OSVERSIONINFOW
+{
+	std::uint32_t dwOSVersionInfoSize;
+	std::uint32_t dwMajorVersion;
+	std::uint32_t dwMinorVersion;
+	std::uint32_t dwBuildNumber;
+	std::uint32_t dwPlatformId;
+	wchar_t szCSDVersion[128];
+};
+
+struct _RTL_OSVERSIONINFOEXW
+{
+	std::uint32_t dwOSVersionInfoSize;
+	std::uint32_t dwMajorVersion;
+	std::uint32_t dwMinorVersion;
+	std::uint32_t dwBuildNumber;
+	std::uint32_t dwPlatformId;
+	wchar_t szCSDVersion[128];
+	std::uint16_t wServicePackMajor;
+	std::uint16_t wServicePackMinor;
+	std::uint16_t wSuiteMask;
+	std::uint8_t wProductType;
+	std::uint8_t wReserved;
+};
+#pragma pack(pop)
+
+// The guest's WCHAR is two bytes whatever the host compiler makes of its own,
+// and these structs are the guest's.
+static_assert(sizeof(wchar_t) == 2, "guest WCHAR is 2 bytes");
+static_assert(sizeof(_RTL_OSVERSIONINFOW) == 0x114);
+static_assert(sizeof(_RTL_OSVERSIONINFOEXW) == 0x11C);
+
+inline constexpr std::uint32_t ver_platform_win32_nt = 2;
+inline constexpr std::uint8_t ver_nt_workstation = 1;
+
 // Windows counts 100ns ticks from 1601-01-01 and the host clock counts seconds
 // from 1970-01-01, so a guest timestamp is the host's plus the gap.
 inline constexpr std::int64_t win_epoch_delta_100ns = 116444736000000000;

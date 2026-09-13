@@ -39,6 +39,20 @@ public:
 		return ethread_.field(&_ETHREAD::Tcb).field(&_KTHREAD::KernelApcDisable);
 	}
 
+	// The guarded-region equivalent, which holds off special kernel APCs too.
+	// KeAreAllApcsDisabled reads this one rather than the count above.
+	[[nodiscard]] auto special_apc_disable() const
+	{
+		return ethread_.field(&_ETHREAD::Tcb).field(&_KTHREAD::SpecialApcDisable);
+	}
+
+	// Cid.UniqueProcess -- which process the guest believes this thread runs
+	// in, as opposed to which process object the emulator hung it off.
+	[[nodiscard]] auto client_id() const
+	{
+		return ethread_.field(&_ETHREAD::Cid);
+	}
+
 	// The stack as Windows names it: the limit is its low end, the base the
 	// first byte past its top.
 	[[nodiscard]] addr_t stack_limit() const { return stack_low_; }

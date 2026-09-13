@@ -14,6 +14,7 @@
 #include "modules/nt_irql_ops.hpp"
 #include "modules/nt_string_ops.hpp"
 #include "modules/nt_sync_ops.hpp"
+#include "modules/nt_info_ops.hpp"
 #include "../../target.hpp"
 #include <cstring>
 #include <deque>
@@ -55,6 +56,7 @@ struct win_kernel_state : kernel_state
 			modules::register_ntoskrnl_irql_ops(*this, *ntoskrnl);
 			modules::register_ntoskrnl_string_ops(*this, *ntoskrnl);
 			modules::register_ntoskrnl_sync_ops(*this, *ntoskrnl);
+			modules::register_ntoskrnl_info_ops(*this, *ntoskrnl);
 
 			if (const auto ps_list = ntoskrnl->find_export("PsLoadedModuleList"))
 			{
@@ -63,7 +65,7 @@ struct win_kernel_state : kernel_state
 				sys_proc->module_add_cb(*ntoskrnl);
 			}
 
-			if (const auto ps_active = ntoskrnl->find_export("PsActiveProcessHead"))
+			if (const auto ps_active = ntoskrnl->find_symbol("PsActiveProcessHead"))
 			{
 				active_process_list = active_process_list_t(space, *ps_active);
 				active_process_list.init();
