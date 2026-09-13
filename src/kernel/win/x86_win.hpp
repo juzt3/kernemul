@@ -42,6 +42,14 @@ public:
 		x86_win_seg::set_kernel_gs(cpu, kpcr_va);
 	}
 
+	// cr8 is the task priority register, and on x86-64 Windows the IRQL is
+	// exactly what it holds: a driver reads its own IRQL with __readcr8 rather
+	// than calling anything, so the register has to agree with the KPCR.
+	void set_hw_irql(vcpu& cpu, const irql_t irql) override
+	{
+		cpu.reg(x86::cr8, static_cast<std::uint64_t>(irql));
+	}
+
 	void init_thread_teb(thread& t, vcpu& cpu, addr_t teb_addr) override
 	{
 		t.set_reg_val(cpu, x86::gs, x86_win_seg::make_usermode_gs(teb_addr));

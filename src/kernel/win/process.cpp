@@ -189,5 +189,9 @@ void win_kernel_proc::module_add_cb(proc_module& mod)
 	entry.SizeOfImage = mod.size;
 
 	std::scoped_lock lock(kernel_.list_mtx_);
-	kernel_.loaded_module_list.push_back(entry);
+	const auto obj = kernel_.loaded_module_list.push_back(entry);
+
+	// Keep where the entry landed: a driver reaches its own entry only through
+	// its DRIVER_OBJECT, and nothing else remembers the address.
+	kernel_.set_ldr_entry(mod.addr, obj.address());
 }

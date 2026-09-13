@@ -1,5 +1,6 @@
 #pragma once
 #include "../../emu/object.hpp"
+#include "../../target.hpp"
 #include "types.hpp"
 
 // Per-cpu kernel state. Windows keeps one KPCR per processor and reaches it
@@ -22,6 +23,25 @@ inline constexpr std::uint32_t default_cpu_mhz = 2000;
 
 // Processors are grouped, and a KAFFINITY only ever names one group's worth.
 inline constexpr std::uint32_t processor_group_size = 64;
+
+// The interrupt request levels a driver names. Nothing here masks interrupts --
+// there are none to mask -- so an IRQL is a number the guest sets and reads
+// back, and the levels matter only because the guest compares against them.
+using irql_t = std::uint8_t;
+
+inline constexpr irql_t passive_level  = 0;
+inline constexpr irql_t apc_level      = 1;
+inline constexpr irql_t dispatch_level = 2;
+
+// NT keeps the current IRQL in the KPCR, under a different name on each
+// architecture. x86-64 also mirrors it in cr8, which is where __readcr8 and the
+// guest's own inlined KeGetCurrentIrql look -- see x86_win_emulator.
+inline constexpr std::size_t kpcr_irql_off =
+#if defined(KERNEMUL_ARCH_ARM64)
+	offsetof(_KPCR, CurrentIrql);
+#else
+	offsetof(_KPCR, Irql);
+#endif
 
 inline _KPCR make_default_kpcr(const addr_t kpcr_va, const std::uint32_t number)
 {
@@ -76,6 +96,19 @@ public:
 	void set_current_thread(const addr_t kthread) const
 	{
 		kpcr_.space()->write_mem<addr_t>(prcb() + offsetof(_KPRCB, CurrentThread), kthread);
+	}
+
+	// The guest's own view of this cpu's IRQL. A driver reads it straight out
+	// of the block as often as it calls KeGetCurrentIrql, so the block is where
+	// it is kept rather than beside it on the host.
+	void set_irql(const irql_t irql) const
+	{
+		kpcr_.space()->write_mem<irql_t>(kpcr_.address() + kpcr_irql_off, irql);
+	}
+
+	[[nodiscard]] irql_t irql() const
+	{
+		return kpcr_.space()->read_mem<irql_t>(kpcr_.address() + kpcr_irql_off);
 	}
 
 	[[nodiscard]] addr_t address() const noexcept { return kpcr_.address(); }

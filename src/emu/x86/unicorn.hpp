@@ -124,6 +124,7 @@ public:
 		case x86::cr2:    return UC_X86_REG_CR2;
 		case x86::cr3:    return UC_X86_REG_CR3;
 		case x86::cr4:    return UC_X86_REG_CR4;
+		case x86::cr8:    return UC_X86_REG_CR8;
 		case x86::cs:     return UC_X86_REG_CS;
 		case x86::ds:     return UC_X86_REG_DS;
 		case x86::es:     return UC_X86_REG_ES;
