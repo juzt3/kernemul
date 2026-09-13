@@ -86,13 +86,6 @@ constexpr std::uint32_t object_length = 0x200;
 
 constexpr std::uint32_t aes_block_length = 16;
 
-// BCRYPT_STATUS values a caller acts on.
-constexpr NTSTATUS status_not_supported = 0xC00000BB;
-constexpr NTSTATUS status_invalid_handle = 0xC0000008;
-constexpr NTSTATUS status_buffer_too_small = 0xC0000023;
-constexpr NTSTATUS status_invalid_parameter = 0xC000000D;
-constexpr NTSTATUS status_invalid_signature = 0xC000A000;
-
 std::vector<std::uint8_t> read_bytes(addr_space& space, const addr_t addr, const std::size_t size)
 {
 	std::vector<std::uint8_t> out(size);
@@ -129,7 +122,7 @@ void modules::register_cng(win_kernel_state& state, proc_module& mod)
 			const addr_t implementation, const std::uint32_t flags) -> NTSTATUS
 		{
 			if (!algorithm)
-				return status_invalid_parameter;
+				return STATUS_INVALID_PARAMETER;
 
 			auto& space = *cpu.curr_addr_space();
 			const auto id = guest::read_wstring(space, alg_id);
@@ -144,7 +137,7 @@ void modules::register_cng(win_kernel_state& state, proc_module& mod)
 				THREAD_LOG_WARN("BCryptOpenAlgorithmProvider('{}'): not one of the algorithms "
 					"backed here", narrow_wstring(id));
 
-				return status_not_supported;
+				return STATUS_NOT_SUPPORTED;
 			}
 
 			const auto addr = make_object(std::move(host));
@@ -165,7 +158,7 @@ void modules::register_cng(win_kernel_state& state, proc_module& mod)
 		[st](vcpu&, const addr_t algorithm, const std::uint32_t flags) -> NTSTATUS
 		{
 			if (!st->objs.get_object<algorithm_host>(algorithm))
-				return status_invalid_handle;
+				return STATUS_INVALID_HANDLE;
 
 			THREAD_LOG_INFO("BCryptCloseAlgorithmProvider(0x{:X}, flags=0x{:X})",
 				algorithm, flags);
@@ -184,7 +177,7 @@ void modules::register_cng(win_kernel_state& state, proc_module& mod)
 			const auto algorithm = st->objs.get_object<algorithm_host>(handle);
 
 			if (!algorithm)
-				return status_invalid_handle;
+				return STATUS_INVALID_HANDLE;
 
 			auto& space = *cpu.curr_addr_space();
 			const auto name = guest::read_wstring(space, property);
@@ -195,14 +188,14 @@ void modules::register_cng(win_kernel_state& state, proc_module& mod)
 					result_size.write(sizeof(value));
 
 				if (output_size < sizeof(value))
-					return status_buffer_too_small;
+					return STATUS_BUFFER_TOO_SMALL;
 
 				space.write_mem<std::uint32_t>(output, value);
 
 				return STATUS_SUCCESS;
 			};
 
-			NTSTATUS status = status_not_supported;
+			NTSTATUS status = STATUS_NOT_SUPPORTED;
 			std::uint32_t reported = 0;
 
 			if (name == property_object_length)
@@ -229,7 +222,7 @@ void modules::register_cng(win_kernel_state& state, proc_module& mod)
 					result_size.write(bytes);
 
 				if (output_size < bytes)
-					return status_buffer_too_small;
+					return STATUS_BUFFER_TOO_SMALL;
 
 				space.write_mem(output, algorithm->chaining_mode.c_str(), bytes);
 				status = STATUS_SUCCESS;
@@ -248,7 +241,7 @@ void modules::register_cng(win_kernel_state& state, proc_module& mod)
 			const auto algorithm = st->objs.get_object<algorithm_host>(handle);
 
 			if (!algorithm)
-				return status_invalid_handle;
+				return STATUS_INVALID_HANDLE;
 
 			auto& space = *cpu.curr_addr_space();
 			const auto name = guest::read_wstring(space, property);
@@ -257,7 +250,7 @@ void modules::register_cng(win_kernel_state& state, proc_module& mod)
 			{
 				THREAD_LOG_WARN("BCryptSetProperty('{}'): only the chaining mode can be set here",
 					narrow_wstring(name));
-				return status_not_supported;
+				return STATUS_NOT_SUPPORTED;
 			}
 
 			algorithm->chaining_mode = guest::read_wstring(space, input);
@@ -279,16 +272,16 @@ void modules::register_cng(win_kernel_state& state, proc_module& mod)
 			const auto provider = st->objs.get_object<algorithm_host>(algorithm);
 
 			if (!provider || !provider->digest)
-				return status_invalid_handle;
+				return STATUS_INVALID_HANDLE;
 
 			if (!hash)
-				return status_invalid_parameter;
+				return STATUS_INVALID_PARAMETER;
 
 			if (secret && secret_size)
 			{
 				THREAD_LOG_WARN("BCryptCreateHash: a keyed hash needs HMAC, which is not "
 					"backed here");
-				return status_not_supported;
+				return STATUS_NOT_SUPPORTED;
 			}
 
 			auto host = std::make_shared<hash_host>();
@@ -318,7 +311,7 @@ void modules::register_cng(win_kernel_state& state, proc_module& mod)
 			const auto host = st->objs.get_object<hash_host>(hash);
 
 			if (!host || !host->ctx)
-				return status_invalid_handle;
+				return STATUS_INVALID_HANDLE;
 
 			const auto bytes = read_bytes(*cpu.curr_addr_space(), input, input_size);
 
@@ -338,12 +331,12 @@ void modules::register_cng(win_kernel_state& state, proc_module& mod)
 			const auto host = st->objs.get_object<hash_host>(hash);
 
 			if (!host || !host->ctx)
-				return status_invalid_handle;
+				return STATUS_INVALID_HANDLE;
 
 			const auto size = static_cast<std::uint32_t>(EVP_MD_get_size(host->digest));
 
 			if (output_size < size)
-				return status_buffer_too_small;
+				return STATUS_BUFFER_TOO_SMALL;
 
 			std::vector<std::uint8_t> digest(size);
 			unsigned int written = 0;
@@ -365,7 +358,7 @@ void modules::register_cng(win_kernel_state& state, proc_module& mod)
 	state.redirect(mod, "BCryptDestroyHash", [st](vcpu&, const addr_t hash) -> NTSTATUS
 	{
 		if (!st->objs.get_object<hash_host>(hash))
-			return status_invalid_handle;
+			return STATUS_INVALID_HANDLE;
 
 		THREAD_LOG_INFO("BCryptDestroyHash(0x{:X})", hash);
 
@@ -383,16 +376,16 @@ void modules::register_cng(win_kernel_state& state, proc_module& mod)
 			const auto provider = st->objs.get_object<algorithm_host>(algorithm);
 
 			if (!provider || !provider->symmetric)
-				return status_invalid_handle;
+				return STATUS_INVALID_HANDLE;
 
 			if (!key || !secret || !secret_size)
-				return status_invalid_parameter;
+				return STATUS_INVALID_PARAMETER;
 
 			if (!cipher_for(provider->chaining_mode, secret_size))
 			{
 				THREAD_LOG_WARN("BCryptGenerateSymmetricKey: {} bytes is not an AES key length",
 					secret_size);
-				return status_invalid_parameter;
+				return STATUS_INVALID_PARAMETER;
 			}
 
 			auto host = std::make_shared<key_host>();
@@ -418,7 +411,7 @@ void modules::register_cng(win_kernel_state& state, proc_module& mod)
 	state.redirect(mod, "BCryptDestroyKey", [st](vcpu&, const addr_t key) -> NTSTATUS
 	{
 		if (!st->objs.get_object<key_host>(key))
-			return status_invalid_handle;
+			return STATUS_INVALID_HANDLE;
 
 		THREAD_LOG_INFO("BCryptDestroyKey(0x{:X})", key);
 
@@ -440,12 +433,12 @@ void modules::register_cng(win_kernel_state& state, proc_module& mod)
 		const auto host = st->objs.get_object<key_host>(key);
 
 		if (!host)
-			return status_invalid_handle;
+			return STATUS_INVALID_HANDLE;
 
 		const auto* cipher = cipher_for(host->chaining_mode, host->key.size());
 
 		if (!cipher)
-			return status_not_supported;
+			return STATUS_NOT_SUPPORTED;
 
 		auto& space = *cpu.curr_addr_space();
 		const auto plain = read_bytes(space, input, input_size);
@@ -490,7 +483,7 @@ void modules::register_cng(win_kernel_state& state, proc_module& mod)
 			return STATUS_SUCCESS;
 
 		if (output_size < total)
-			return status_buffer_too_small;
+			return STATUS_BUFFER_TOO_SMALL;
 
 		space.write_mem(output, result.data(), total);
 
@@ -542,7 +535,7 @@ void modules::register_cng(win_kernel_state& state, proc_module& mod)
 				narrow_wstring(guest::read_wstring(*cpu.curr_addr_space(), blob_type)),
 				key_object, key_object_size, input, input_size, flags);
 
-			return status_not_supported;
+			return STATUS_NOT_SUPPORTED;
 		});
 
 	// The one answer that must not be invented: a driver told a signature
@@ -556,6 +549,6 @@ void modules::register_cng(win_kernel_state& state, proc_module& mod)
 				"signature=0x{:X}/{}, flags=0x{:X}): nothing here holds a key to verify against",
 				key, padding_info, hash, hash_size, signature, signature_size, flags);
 
-			return status_invalid_signature;
+			return STATUS_INVALID_SIGNATURE;
 		});
 }

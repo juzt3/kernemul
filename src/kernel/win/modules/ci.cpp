@@ -33,11 +33,6 @@ struct policy_info_t
 // SHA-256.
 constexpr std::size_t sha256_size = 32;
 
-// What Ci says about a file it will not vouch for. A driver that gets this
-// takes its unsigned-image path, which is the honest answer here: nothing in
-// the guest filesystem carries a signature that was ever checked.
-constexpr NTSTATUS status_invalid_image_hash = 0xC0000428;
-
 std::array<std::uint8_t, sha256_size> sha256(const std::span<const std::uint8_t> data)
 {
 	std::array<std::uint8_t, sha256_size> digest{};
@@ -50,10 +45,11 @@ std::array<std::uint8_t, sha256_size> sha256(const std::span<const std::uint8_t>
 
 }
 
-// Code integrity. Nothing here holds a certificate store or a catalogue, so no
-// file can be vouched for -- and a driver told an image is unsigned takes the
-// path it takes on a machine where it is. The hashing is real, so a driver that
-// computes a digest and compares it against its own gets the right answer.
+// Code integrity. Every one of these ends in STATUS_INVALID_IMAGE_HASH: nothing
+// here holds a certificate store or a catalogue, so no file can be vouched for,
+// and a driver told an image is unsigned takes the path it takes on a machine
+// where it is. The hashing is real, so a driver that computes a digest and
+// compares it against one of its own gets the right answer.
 void modules::register_ci(win_kernel_state& state, proc_module& mod)
 {
 	auto* st = &state;
@@ -83,7 +79,7 @@ void modules::register_ci(win_kernel_state& state, proc_module& mod)
 				digest, digest_size, digest_identifier, win_certificate, certificate_size,
 				signing_time, signer_digest.address());
 
-			return status_invalid_image_hash;
+			return STATUS_INVALID_IMAGE_HASH;
 		});
 
 	// The chain info a check would have allocated. Nothing is allocated on the
@@ -136,7 +132,7 @@ void modules::register_ci(win_kernel_state& state, proc_module& mod)
 				digest, hash_algorithm, is_reload_catalogs, secure_process, acceptable_policy,
 				timestamp, catalog_name.address());
 
-			return status_invalid_image_hash;
+			return STATUS_INVALID_IMAGE_HASH;
 		});
 
 	// The same question about a file that is already open. The file is one the
@@ -193,6 +189,6 @@ void modules::register_ci(win_kernel_state& state, proc_module& mod)
 				"{}, and nothing here can say whether it was signed",
 				host->path, unknown1, unknown2, signing_time, text);
 
-			return status_invalid_image_hash;
+			return STATUS_INVALID_IMAGE_HASH;
 		});
 }
