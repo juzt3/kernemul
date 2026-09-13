@@ -4,13 +4,31 @@
 #include "mmu.hpp"
 #include "emu.hpp"
 #include "../util/log.hpp"
+#include <cstddef>
+#include <type_traits>
 #include <typeinfo>
 #include <string>
+
+// Where a member sits inside its own type, measured rather than declared: a
+// pointer to member says which field without saying where, and offsetof cannot
+// be handed one. The storage is never read, only pointed into, and one of it
+// exists per type asked about.
+template <class C, class M>
+[[nodiscard]] std::size_t member_offset(M C::* const member) noexcept
+{
+	alignas(C) static const std::byte storage[sizeof(C)]{};
+	const auto* base = reinterpret_cast<const C*>(storage);
+
+	return static_cast<std::size_t>(
+		reinterpret_cast<const std::byte*>(&(base->*member)) - storage);
+}
 
 template <class T>
 class emu_object
 {
 public:
+	using value_type = T;
+
 	emu_object() noexcept = default;
 
 	emu_object(addr_space& space_, const addr_t addr, bool monitored = false) noexcept
@@ -35,6 +53,35 @@ public:
 	void write(const T& val, const std::size_t index = 0)
 	{
 		space_->write_mem<T>(addr_ + index * sizeof(T), val);
+	}
+
+	// One field of this object, as an object in its own right: the same address
+	// space, the field's own address, and the field's own type. Reading or
+	// writing through it touches that field alone rather than carrying the
+	// whole structure back and forth -- which matters because the guest owns
+	// this memory too, and a write it did not ask for is a write it can see.
+	//
+	// An array field yields an object of its element type sitting on the first
+	// element, so the index read and write already take walks it.
+	//
+	// The owning class is deduced rather than fixed to T: naming T::* here
+	// would be ill-formed for every emu_object over a type that is not a class,
+	// emu_object<void*> -- which field() itself hands back -- among them.
+	// Requiring it to be T or a base of T is what keeps the member one this
+	// object can reach.
+	template <class C, class M>
+		requires std::is_base_of_v<C, T>
+	[[nodiscard]] emu_object<std::remove_extent_t<M>> field(M C::* const member) const
+	{
+		return emu_object<std::remove_extent_t<M>>(*space_, addr_ + member_offset(member));
+	}
+
+	// The same for a field that cannot be named: one whose offset the guest
+	// architecture decides, or one the generated type spells only as padding.
+	template <class M>
+	[[nodiscard]] emu_object<M> field_at(const std::size_t offset) const
+	{
+		return emu_object<M>(*space_, addr_ + offset);
 	}
 
 	emu_hook* monitor()
