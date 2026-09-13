@@ -93,6 +93,12 @@ public:
 	// cpu looking for work passes over it until that time comes round.
 	void sleep_for(const std::chrono::milliseconds ms) { sleep_until_ = clock::now() + ms; }
 	[[nodiscard]] bool is_sleeping() const { return clock::now() < sleep_until_; }
+
+	// Whether the scheduler may run this thread now. Sleeping is the only
+	// reason the scheduler itself knows of; an OS layer with threads that park
+	// on something -- a dispatcher object, a timer -- decides here, and is
+	// handed a cpu so it can look at guest memory to do it.
+	[[nodiscard]] virtual bool is_ready(vcpu&) { return !is_sleeping(); }
 	[[nodiscard]] time_point sleep_until() const { return sleep_until_; }
 
 	void finish() { finished_ = true; }
@@ -249,7 +255,7 @@ public:
 			if (stopped_ || nothing_left(cpu))
 				return nullptr;
 
-			if (const auto it = first_runnable(); it != ready_queue_.end())
+			if (const auto it = first_runnable(cpu); it != ready_queue_.end())
 			{
 				auto next = *it;
 				ready_queue_.erase(it);
@@ -275,14 +281,14 @@ public:
 	}
 
 private:
-	// The first thread on the queue that is not sleeping. A sleeping thread is
+	// The first thread on the queue that is ready to run. One that is not is
 	// passed over rather than taken, so being the only thread left is no reason
-	// to run one early: a cpu with nothing else to do waits it out instead.
+	// to run it early: a cpu with nothing else to do waits instead.
 	// Called with the lock held.
-	std::deque<std::shared_ptr<thread>>::iterator first_runnable()
+	std::deque<std::shared_ptr<thread>>::iterator first_runnable(vcpu& cpu)
 	{
 		return std::ranges::find_if(ready_queue_,
-			[](const auto& t) { return !t->is_sleeping(); });
+			[&cpu](const auto& t) { return t->is_ready(cpu); });
 	}
 
 	// When the first of the queued sleepers is due, which is the soonest this
