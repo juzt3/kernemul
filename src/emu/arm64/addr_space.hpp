@@ -41,6 +41,7 @@ namespace arm64
 	struct addr_space : ::addr_space
 	{
 		addr_t alloc(std::size_t size, mem_prot prot) override;
+		addr_t map_phys(addr_t pa, std::size_t size, mem_prot prot) override;
 
 		// One level 0 table serves both halves. With a 48-bit VA the level 0
 		// index is VA[47:39], so user addresses land in entries 0-255 and

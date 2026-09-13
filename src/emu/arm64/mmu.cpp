@@ -346,4 +346,17 @@ addr_t addr_space::alloc(const std::size_t size, const mem_prot prot)
 	return va;
 }
 
+addr_t addr_space::map_phys(const addr_t pa, const std::size_t size, const mem_prot prot)
+{
+	constexpr std::size_t page = 0x1000;
+	const auto aligned = (size + page - 1) & ~(page - 1);
+
+	addr_t& cursor = (prot & prot_supervisor) ? kernel_next_ : user_next_;
+	const addr_t va = cursor;
+	cursor += aligned;
+
+	mmu_->map_virt_phys(*this, va, pa, aligned, prot);
+	return va;
+}
+
 }
