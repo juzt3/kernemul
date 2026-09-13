@@ -1,4 +1,5 @@
 #pragma once
+#include <span>
 #include "../emu/calling_conv.hpp"
 #include "../emu/emu.hpp"
 #include "../util/log.hpp"
@@ -121,23 +122,33 @@ public:
 	thread_scheduler() = default;
 
 	std::shared_ptr<thread> create_thread(vcpu& cpu, const addr_t start_addr,
-		std::shared_ptr<process> proc, thread::id_type id)
+		std::shared_ptr<process> proc, thread::id_type id,
+		std::span<const std::uint64_t> args = {})
 	{
 		auto space = proc->addr_space();
 		const addr_t stack_base = space->alloc(process::default_stack_size, prot_rw | prot_supervisor);
 		const addr_t stack_top = stack_base + process::default_stack_size - process::stack_reserve;
 		auto t = std::make_shared<thread>(id, std::move(proc), start_addr, stack_top, cpu);
 
-		enqueue(cpu, t);
+		enqueue(cpu, t, args);
 		return t;
 	}
 
 	// Admit a thread built elsewhere: a user thread needs a TEB and a stack in
 	// its own process, so win_user_proc builds its own.
-	void enqueue(vcpu& cpu, std::shared_ptr<thread> t)
+	void enqueue(vcpu& cpu, std::shared_ptr<thread> t,
+		const std::span<const std::uint64_t> args = {})
 	{
+		const auto& conv = *cpu.emu()->call_conv();
+
 		// Where the start routine returns to, which is how a cpu sees it finish.
-		cpu.emu()->call_conv()->set_ret_addr(cpu, *t, t->proc()->thread_exit_addr());
+		conv.set_ret_addr(cpu, *t, t->proc()->thread_exit_addr());
+
+		// Before the push below, not after: the moment the thread is on the
+		// queue another cpu can take it, and writing into the context of a
+		// thread that is already running corrupts it.
+		for (std::size_t i = 0; i < args.size(); ++i)
+			conv.set_arg(cpu, *t, i, args[i]);
 
 		{
 			std::scoped_lock lock(mtx_);

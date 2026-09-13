@@ -58,10 +58,11 @@ std::shared_ptr<addr_space> process::addr_space() const
 	return addr_space_;
 }
 
-std::shared_ptr<thread> process::create_thread(vcpu& cpu, const addr_t start_addr)
+std::shared_ptr<thread> process::create_thread(vcpu& cpu, const addr_t start_addr,
+	const std::span<const std::uint64_t> args)
 {
 	const auto id = alloc_thread_id();
-	auto t = scheduler_->create_thread(cpu, start_addr, shared_from_this(), id);
+	auto t = scheduler_->create_thread(cpu, start_addr, shared_from_this(), id, args);
 
 	std::unique_lock lock(thread_mtx_);
 	threads_[t->id()] = t;

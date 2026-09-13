@@ -1,4 +1,5 @@
 #pragma once
+#include <span>
 #include "../emu/addr_space.hpp"
 #include "../sym/symbol.hpp"
 #include "../util/string.hpp"
@@ -81,7 +82,11 @@ public:
 
 	void set_scheduler(thread_scheduler* s) { scheduler_ = s; }
 
-	virtual std::shared_ptr<thread> create_thread(vcpu& cpu, addr_t start_addr);
+	// The arguments go in before the thread is queued: a thread is runnable the
+	// moment it is on the queue, and another cpu will start it. Setting them
+	// afterwards is a race against a thread that may already be running.
+	virtual std::shared_ptr<thread> create_thread(vcpu& cpu, addr_t start_addr,
+		std::span<const std::uint64_t> args = {});
 
 	// The start stub a thread's start routine returns to. Windows starts a
 	// thread inside one of these and it ends the thread when the routine
