@@ -26,6 +26,7 @@ struct calling_conv
 	}
 
 	virtual void set_arg(vcpu& cpu, thread& t, std::size_t index, std::uint64_t value) const = 0;
+	virtual void set_ret(vcpu& cpu, thread& t, std::uint64_t value) const = 0;
 	virtual void write_arg(vcpu& cpu, std::size_t index, std::uint64_t value) const = 0;
 	virtual std::uint64_t read_ret(vcpu& cpu) const = 0;
 

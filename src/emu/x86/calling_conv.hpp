@@ -10,6 +10,7 @@ struct x86_win_conv : calling_conv
 	static constexpr reg_t arg_regs[] = { x86::rcx, x86::rdx, x86::r8, x86::r9 };
 
 	void set_arg(vcpu& cpu, thread& t, std::size_t index, std::uint64_t value) const override;
+	void set_ret(vcpu& cpu, thread& t, std::uint64_t value) const override;
 
 	// The caller reserves 32 bytes above the return address for the first four
 	// arguments whether or not it uses them, so the fifth is the first that

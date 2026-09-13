@@ -26,3 +26,11 @@ std::uint64_t arm64_win_conv::read_ret(vcpu& cpu, const thread& t) const
 {
 	return t.get_reg(cpu, arm64::x0);
 }
+
+// Against the thread's saved context rather than the live cpu: a thread parked
+// in a wait is handed its result by whoever satisfies the wait, long after it
+// stopped running.
+void arm64_win_conv::set_ret(vcpu& cpu, thread& t, const std::uint64_t value) const
+{
+	t.set_reg(cpu, arm64::x0, value);
+}

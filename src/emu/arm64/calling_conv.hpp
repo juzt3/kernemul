@@ -13,6 +13,7 @@ struct arm64_win_conv : calling_conv
 	};
 
 	void set_arg(vcpu& cpu, thread& t, std::size_t index, std::uint64_t value) const override;
+	void set_ret(vcpu& cpu, thread& t, std::uint64_t value) const override;
 
 	// AAPCS64 reserves no home space, so the ninth argument is the first thing
 	// on the stack and sits right at the stack pointer on entry to the callee.
