@@ -21,6 +21,20 @@ static T align_down(T value, Y alignment)
 	return value & ~(alignment - 1);
 }
 
+static void reset_tf(hm::vcpu& cpu)
+{
+	rflags flags = cpu.reg_read<hm::reg::rflags, rflags>();
+
+	if (!flags.trap_flag)
+	{
+		return;
+	}
+
+	flags.trap_flag = 0;
+
+	cpu.reg_write<hm::reg::rflags>(flags.flags);
+}
+
 bool hm::emu_hook::in_range(const addr_t addr) const
 {
 	return start_addr <= addr && (!end_addr || addr < end_addr);
@@ -87,36 +101,63 @@ bool hm::emu::run()
 
 	// Only the outermost run tears the step state down. A nested run returning
 	// leaves the steps its caller was in the middle of in place.
-	if (cpu.depth() == 0 && !single_step_cbs_.empty())
+	if (cpu.depth() != 0)
 	{
-		single_step_cbs_.clear();
+		return true;
+	}
 
-		for (std::size_t i = 0; i < hooks_.size(); i++)
+	// The run that just ended owned the stepping, and everything the stepping
+	// changed goes back with it: the flag driving it, the steps waiting on that
+	// flag, and the protections the hooks lifted to let the guest through. A run
+	// cut short -- the host cancelling it to take the processor back, say --
+	// would otherwise leave the hooked ranges executable and every hook over
+	// them dead for the rest of the partition's life.
+	reset_tf(cpu);
+	reset_step_cbs();
+
+	return true;
+}
+
+void hm::emu::reset_step_cbs()
+{
+	if (single_step_cbs_.empty())
+	{
+		return;
+	}
+
+	single_step_cbs_.clear();
+	block_hook_was_control_flow_ = false;
+
+	for (std::size_t i = 0; i < hooks_.size(); i++)
+	{
+		const auto& hook = hooks_[i];
+
+		if (hook->type == hook_type::code || hook->type == hook_type::basic_block)
 		{
-			const auto& hook = hooks_[i];
+			prot_block_code_hook_mem_range(hook->start_addr, hook->end_addr, false);
 
-			if (hook->type != hook_type::mem_access)
+			continue;
+		}
+
+		if (hook->type != hook_type::mem_access)
+		{
+			continue;
+		}
+
+		const auto& hook_mem = std::get<hook_mem_t>(hook->extra_data);
+		const addr_t start_page = align_down(hook->start_addr, page_size);
+		const addr_t end_page = align_up(hook->end_addr, page_size);
+
+		for (addr_t page = start_page; page < end_page; page += page_size)
+		{
+			const auto prot = partition_->query_phys_mem_prot(page);
+
+			if (prot && (*prot & hook_mem.prot))
 			{
-				continue;
-			}
-
-			const auto& hook_mem = std::get<hook_mem_t>(hook->extra_data);
-			const addr_t start_page = align_down(hook->start_addr, page_size);
-			const addr_t end_page = align_up(hook->end_addr, page_size);
-
-			for (addr_t page = start_page; page < end_page; page += page_size)
-			{
-				const auto prot = partition_->query_phys_mem_prot(page);
-
-				if (prot && (*prot & hook_mem.prot))
-				{
-					partition_->prot_phys_mem(page, page_size, *prot & ~hook_mem.prot);
-				}
+				partition_->prot_phys_mem(page, page_size, *prot & ~hook_mem.prot);
 			}
 		}
 	}
-
-	return true;
 }
 
 void hm::emu::stop()

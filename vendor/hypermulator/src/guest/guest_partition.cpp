@@ -3,6 +3,7 @@
 #include "guest_register.hpp"
 
 #include <spdlog/spdlog.h>
+#include <algorithm>
 #include <ranges>
 #include <cstring>
 

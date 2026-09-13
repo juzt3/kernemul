@@ -3,6 +3,7 @@
 
 #include <ia32.hpp>
 #include <spdlog/spdlog.h>
+#include <algorithm>
 #include <ranges>
 
 template <class T, class Y>

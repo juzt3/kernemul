@@ -1,6 +1,8 @@
 #include "guest_vmexit.hpp"
 #include "guest_virtual_processor.hpp"
 
+#include <cstring>
+
 hm::vmexit_cpu_state::vmexit_cpu_state(const WHV_VP_EXIT_CONTEXT& whv_context)
 		:	rip(whv_context.Rip),
 			insn_len(whv_context.InstructionLength)

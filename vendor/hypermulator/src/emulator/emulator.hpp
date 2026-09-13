@@ -3,6 +3,7 @@
 #include "../guest/guest_register.hpp"
 #include "../guest/guest_virtual_processor.hpp"
 
+#include <limits>
 #include <variant>
 
 namespace hm
@@ -132,7 +133,7 @@ namespace hm
 		}
 
 		template <class T>
-		requires !std::is_convertible_v<const T&, std::span<const std::uint8_t>>
+		requires (!std::is_convertible_v<const T&, std::span<const std::uint8_t>>)
 		void write_phys_mem(const addr_t phys_addr, const T& value)
 		{
 			static_assert(std::is_trivially_copyable_v<T>, "writing non trivially copyable type to physical memory");
@@ -162,6 +163,10 @@ namespace hm
 	protected:
 		bool configure_single_step();
 		void reset_guest_exit_state();
+
+		// Drop the steps a finished run was in the middle of and put back the
+		// protections its hooks lifted.
+		void reset_step_cbs();
 
 		void single_step(vcpu& cpu, vmexit_context& context);
 		bool handle_page_fault(vcpu& cpu, const vmexit_context& context);

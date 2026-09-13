@@ -5,6 +5,7 @@
 #include <stdexcept>
 #include <optional>
 #include <atomic>
+#include <cstring>
 #include <memory>
 #include <array>
 #include <span>
