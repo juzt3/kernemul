@@ -142,7 +142,7 @@ struct win_kernel_state : kernel_state
 
 	// A thread handle names the ETHREAD rather than the thread, so this is how
 	// a handle gets back to the thread it belongs to.
-	[[nodiscard]] std::shared_ptr<win_thread> find_win_thread_by_ethread(const addr_t ethread)
+	[[nodiscard]] std::shared_ptr<win_thread> find_ethread(const emu_object<_ETHREAD>& ethread)
 	{
 		if (!ethread)
 			return {};
@@ -156,7 +156,7 @@ struct win_kernel_state : kernel_state
 			if (!win_proc)
 				continue;
 
-			if (auto t = win_proc->find_thread_by_ethread(ethread))
+			if (auto t = win_proc->find_ethread(ethread))
 				return t;
 		}
 

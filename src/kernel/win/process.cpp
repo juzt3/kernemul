@@ -197,3 +197,19 @@ void win_kernel_proc::module_add_cb(proc_module& mod)
 	// its DRIVER_OBJECT, and nothing else remembers the address.
 	kernel_.set_ldr_entry(mod.addr, obj.address());
 }
+
+std::shared_ptr<win_thread> windows_process::find_ethread(
+	const emu_object<_ETHREAD>& ethread) const
+{
+	std::shared_lock lock(thread_mtx_);
+
+	for (const auto& [id, t] : threads_)
+	{
+		const auto win_t = std::dynamic_pointer_cast<win_thread>(t);
+
+		if (win_t && win_t->ethread().address() == ethread.address())
+			return win_t;
+	}
+
+	return {};
+}

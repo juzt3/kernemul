@@ -27,6 +27,10 @@ public:
 		std::span<const std::uint64_t> args = {}) override;
 	void terminate_thread(thread_id_type id) override;
 
+	// The thread the ETHREAD belongs to, which is what a thread handle names.
+	[[nodiscard]] std::shared_ptr<win_thread> find_ethread(
+		const emu_object<_ETHREAD>& ethread) const;
+
 	virtual std::shared_ptr<proc_module> load_module(std::string_view name, bool supervisor);
 
 	win_handle_table& handle_table() { return handle_table_; }
