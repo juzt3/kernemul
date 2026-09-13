@@ -1,4 +1,5 @@
 #pragma once
+#include <functional>
 #include "../process.hpp"
 #include "../map.hpp"
 #include "win_handle_table.hpp"
@@ -30,6 +31,10 @@ public:
 	// The thread the ETHREAD belongs to, which is what a thread handle names.
 	[[nodiscard]] std::shared_ptr<win_thread> find_ethread(
 		const emu_object<_ETHREAD>& ethread) const;
+
+	// Every windows thread of this process, for the things that have to look at
+	// all of them: waking waiters, and finding one by its ETHREAD.
+	void for_each_thread(const std::function<void(win_thread&)>& fn) const;
 
 	virtual std::shared_ptr<proc_module> load_module(std::string_view name, bool supervisor);
 

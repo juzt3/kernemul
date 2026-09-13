@@ -213,3 +213,14 @@ std::shared_ptr<win_thread> windows_process::find_ethread(
 
 	return {};
 }
+
+void windows_process::for_each_thread(const std::function<void(win_thread&)>& fn) const
+{
+	std::shared_lock lock(thread_mtx_);
+
+	for (const auto& [id, t] : threads_)
+	{
+		if (const auto win_t = std::dynamic_pointer_cast<win_thread>(t))
+			fn(*win_t);
+	}
+}
