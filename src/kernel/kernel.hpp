@@ -122,6 +122,22 @@ struct kernel_state
 		return it != processes.end() ? it->second : nullptr;
 	}
 
+	// Thread ids are handed out machine wide rather than per process, so the
+	// process a thread belongs to is not something a caller holding only an id
+	// can know -- which is why this searches all of them.
+	std::shared_ptr<thread> find_thread(const process::thread_id_type id)
+	{
+		std::shared_lock lock(proc_mtx_);
+
+		for (const auto& [_, proc] : processes)
+		{
+			if (auto t = proc->find_thread(id))
+				return t;
+		}
+
+		return nullptr;
+	}
+
 	std::shared_ptr<proc_module> map_redirect_module(process& proc, const std::filesystem::path& path, bool supervisor)
 	{
 		auto mod = krnl::map_img(proc, path, supervisor, true);

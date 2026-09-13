@@ -376,6 +376,24 @@ void modules::register_ntoskrnl_sync_ops(win_kernel_state& state, proc_module& m
 			THREAD_LOG_INFO("InitializeSListHead(0x{:X})", slist_head.address());
 		});
 
+	// The dispatcher reads. Every one of them is the same instruction on this
+	// kernel -- KeReadStateEvent, KeReadStateMutex, KeReadStateQueue and
+	// KeReadStateSemaphore all fold onto this address on both architectures --
+	// because the signal state sits at the same offset in every dispatcher
+	// object, so one handler answers whichever name the guest called.
+	state.redirect(mod, "KeReadStateMutant",
+		[](vcpu&, emu_object<_DISPATCHER_HEADER> object) -> std::int32_t
+		{
+			if (!object)
+				return 0;
+
+			const auto state = object.field(&_DISPATCHER_HEADER::SignalState).read();
+
+			THREAD_LOG_INFO("KeReadState*(object=0x{:X}) -> {}", object.address(), state);
+
+			return state;
+		});
+
 	state.redirect(mod, "KeEnterCriticalRegion", [apc_disable](vcpu& cpu)
 	{
 		THREAD_LOG_INFO("KeEnterCriticalRegion: apc disable count now {}",

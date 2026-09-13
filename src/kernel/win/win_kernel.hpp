@@ -17,6 +17,10 @@
 #include "modules/nt_info_ops.hpp"
 #include "modules/nt_crt_ops.hpp"
 #include "modules/nt_pool_ops.hpp"
+#include "modules/nt_process_ops.hpp"
+#include "modules/nt_lock_ops.hpp"
+#include "modules/nt_mem_ops.hpp"
+#include "modules/nt_ex_ops.hpp"
 #include "pool.hpp"
 #include "../../target.hpp"
 #include <cstring>
@@ -64,6 +68,10 @@ struct win_kernel_state : kernel_state
 			modules::register_ntoskrnl_info_ops(*this, *ntoskrnl);
 			modules::register_ntoskrnl_crt_ops(*this, *ntoskrnl);
 			modules::register_ntoskrnl_pool_ops(*this, *ntoskrnl);
+			modules::register_ntoskrnl_process_ops(*this, *ntoskrnl);
+			modules::register_ntoskrnl_lock_ops(*this, *ntoskrnl);
+			modules::register_ntoskrnl_mem_ops(*this, *ntoskrnl);
+			modules::register_ntoskrnl_ex_ops(*this, *ntoskrnl);
 
 			if (const auto ps_list = ntoskrnl->find_export("PsLoadedModuleList"))
 			{

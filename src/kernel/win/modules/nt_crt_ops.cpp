@@ -253,4 +253,65 @@ void modules::register_ntoskrnl_crt_ops(win_kernel_state& state, proc_module& mo
 			const auto text = guest::vswprintf(space, format, guest::va_list_args(space, arg_list));
 			return write_formatted(cpu, destination, size_in_words, text, true);
 		});
+
+	// The counted _s pair. They take a maximum character count as well as the
+	// buffer size, and _TRUNCATE in that slot is what asks for the truncation
+	// the plain _s forms above refuse to do.
+	auto write_counted = [](addr_space& space, const addr_t destination, const std::uint64_t count,
+		const std::uint64_t max_count, const auto& text) -> std::int32_t
+	{
+		constexpr auto truncate = ~std::uint64_t{0};
+
+		if (!destination || !count)
+			return crt_einval;
+
+		const auto wanted = max_count == truncate
+			? text.size()
+			: std::min<std::size_t>(text.size(), max_count);
+
+		if (wanted + 1 <= count)
+		{
+			guest::write_basic_string_buffer(space, destination, count,
+				std::basic_string_view(text).substr(0, wanted));
+
+			return static_cast<std::int32_t>(wanted);
+		}
+
+		// Too long for the buffer: _TRUNCATE said to keep what fits, and
+		// anything else empties the destination as the other _s routines do.
+		const auto kept = max_count == truncate ? count - 1 : 0;
+
+		guest::write_basic_string_buffer(space, destination, count,
+			std::basic_string_view(text).substr(0, kept));
+
+		return -1;
+	};
+
+	state.redirect(mod, "_vsnprintf_s",
+		[write_counted](vcpu& cpu, const addr_t destination, const std::uint64_t size_in_bytes,
+			const std::uint64_t max_count, std::string format, const addr_t arg_list) -> std::int32_t
+		{
+			auto& space = *cpu.curr_addr_space();
+			const auto text = guest::vsprintf(space, format, guest::va_list_args(space, arg_list));
+			const auto written = write_counted(space, destination, size_in_bytes, max_count, text);
+
+			THREAD_LOG_INFO("_vsnprintf_s(dest=0x{:X}, {}, {}) -> '{}' ({})",
+				destination, size_in_bytes, max_count, text, written);
+
+			return written;
+		});
+
+	state.redirect(mod, "_vsnwprintf_s",
+		[write_counted](vcpu& cpu, const addr_t destination, const std::uint64_t size_in_words,
+			const std::uint64_t max_count, std::wstring format, const addr_t arg_list) -> std::int32_t
+		{
+			auto& space = *cpu.curr_addr_space();
+			const auto text = guest::vswprintf(space, format, guest::va_list_args(space, arg_list));
+			const auto written = write_counted(space, destination, size_in_words, max_count, text);
+
+			THREAD_LOG_INFO("_vsnwprintf_s(dest=0x{:X}, {}, {}) -> '{}' ({})",
+				destination, size_in_words, max_count, narrow_wstring(text), written);
+
+			return written;
+		});
 }

@@ -1,5 +1,7 @@
 #include "nt_string_ops.hpp"
 #include "../win_kernel.hpp"
+#include "../pool.hpp"
+#include "../status.hpp"
 #include "../string.hpp"
 #include "../types.hpp"
 #include "../../../util/log.hpp"
@@ -7,10 +9,27 @@
 #include <cstring>
 #include <vector>
 
-// All of these are pure functions over guest memory: there is no state to keep
-// and nothing to fake, so they are implemented rather than accounted for.
+namespace
+{
+
+// What the kernel's RtlAllocateStringRoutine tags a counted string's buffer
+// with, and therefore what RtlFreeUnicodeString expects to be freeing.
+constexpr std::uint32_t string_pool_tag = 0x67727453;
+
+// A counted string's Length is sixteen bits, so a conversion that would need
+// more than that fails rather than truncating.
+constexpr std::size_t max_counted_string_bytes = 0xFFFF;
+
+}
+
+// Most of these are pure functions over guest memory: there is no state to keep
+// and nothing to fake, so they are implemented rather than accounted for. The
+// three that allocate take their buffers from the executive pool, exactly as
+// the kernel's own string routine does.
 void modules::register_ntoskrnl_string_ops(win_kernel_state& state, proc_module& mod)
 {
+	auto* st = &state;
+
 	state.redirect(mod, "RtlInitUnicodeString",
 		[](vcpu& cpu, emu_object<_UNICODE_STRING> destination, const addr_t source)
 		{
@@ -228,5 +247,150 @@ void modules::register_ntoskrnl_string_ops(win_kernel_state& state, proc_module&
 				oem_code_page.write(oem_us);
 
 			THREAD_LOG_INFO("RtlGetDefaultCodePage() -> ansi={}, oem={}", ansi_latin1, oem_us);
+		});
+
+	// The conversion a driver reaches for when it has an ANSI string and needs
+	// a counted unicode one. Ascii-only, for the reason the code-page
+	// conversions above give; the sizes and statuses are the real ones.
+	state.redirect(mod, "RtlAnsiStringToUnicodeString",
+		[st](vcpu& cpu, emu_object<_UNICODE_STRING> destination_string,
+			emu_object<_STRING> source_string, const std::uint8_t allocate_destination_string)
+			-> NTSTATUS
+		{
+			if (!destination_string || !source_string)
+				return STATUS_INVALID_PARAMETER;
+
+			const auto narrow = win::read_ansi_string(source_string);
+			const auto wide = widen_string(narrow);
+
+			// Room for a terminator is part of what the caller has to have,
+			// even though Length does not count it.
+			const auto length = wide.size() * sizeof(wchar_t);
+			const auto needed = length + sizeof(wchar_t);
+
+			if (needed > max_counted_string_bytes)
+			{
+				THREAD_LOG_WARN("RtlAnsiStringToUnicodeString: '{}' needs {} bytes, which a "
+					"counted string cannot describe", narrow, needed);
+				return STATUS_INVALID_PARAMETER_2;
+			}
+
+			auto out = destination_string.read();
+
+			if (allocate_destination_string)
+			{
+				const auto buffer = st->pool.allocate(needed, string_pool_tag, true);
+
+				if (!buffer)
+				{
+					THREAD_LOG_ERR("RtlAnsiStringToUnicodeString: out of pool for {} bytes",
+						needed);
+					return STATUS_NO_MEMORY;
+				}
+
+				out.Buffer = guest_ptr<wchar_t>(buffer);
+				out.MaximumLength = static_cast<unsigned short>(needed);
+			}
+			else if (needed > out.MaximumLength)
+			{
+				THREAD_LOG_WARN("RtlAnsiStringToUnicodeString: '{}' needs {} bytes, destination "
+					"holds {}", narrow, needed, out.MaximumLength);
+				return STATUS_BUFFER_OVERFLOW;
+			}
+
+			out.Length = static_cast<unsigned short>(length);
+			destination_string.write(out);
+
+			guest::write_wstring_buffer(*cpu.curr_addr_space(), guest_va(out.Buffer),
+				out.MaximumLength / sizeof(wchar_t), wide);
+
+			THREAD_LOG_INFO("RtlAnsiStringToUnicodeString('{}', allocate={}) -> 0x{:X}, {} bytes",
+				narrow, allocate_destination_string, guest_va(out.Buffer), out.Length);
+
+			return STATUS_SUCCESS;
+		});
+
+	// Folded onto RtlFreeAnsiString and RtlFreeUTF8String on both
+	// architectures, which is harmless: the three descriptors have the same
+	// shape and this frees the buffer and empties the descriptor either way.
+	state.redirect(mod, "RtlFreeUnicodeString",
+		[st](vcpu&, emu_object<_UNICODE_STRING> unicode_string)
+		{
+			if (!unicode_string)
+				return;
+
+			const auto str = unicode_string.read();
+			const auto buffer = guest_va(str.Buffer);
+
+			if (!buffer)
+				return;
+
+			unicode_string.write(_UNICODE_STRING{});
+
+			if (!st->pool.free(buffer))
+			{
+				// Real NT bugchecks here, as ExFreePool would on anything the
+				// pool did not hand out. The descriptor is emptied regardless,
+				// because the buffer is gone as far as the caller is concerned.
+				THREAD_LOG_ERR("RtlFreeUnicodeString: 0x{:X} is not a live pool allocation",
+					buffer);
+				return;
+			}
+
+			THREAD_LOG_INFO("RtlFreeUnicodeString(0x{:X}): freed 0x{:X}",
+				unicode_string.address(), buffer);
+		});
+
+	state.redirect(mod, "RtlDuplicateUnicodeString",
+		[st](vcpu& cpu, const std::uint32_t flags, emu_object<_UNICODE_STRING> string_in,
+			emu_object<_UNICODE_STRING> string_out) -> NTSTATUS
+		{
+			constexpr std::uint32_t duplicate_null_terminate = 0x1;
+			constexpr std::uint32_t duplicate_allocate_null_string = 0x2;
+			constexpr std::uint32_t duplicate_known_flags =
+				duplicate_null_terminate | duplicate_allocate_null_string;
+
+			if (!string_in || !string_out || (flags & ~duplicate_known_flags))
+				return STATUS_INVALID_PARAMETER;
+
+			const auto source = win::read_unicode_string(string_in);
+
+			// An empty source duplicates to an empty descriptor unless the
+			// caller asked for a buffer anyway.
+			if (source.empty() && !(flags & duplicate_allocate_null_string))
+			{
+				string_out.write(_UNICODE_STRING{});
+
+				THREAD_LOG_INFO("RtlDuplicateUnicodeString(flags=0x{:X}, ''): empty", flags);
+
+				return STATUS_SUCCESS;
+			}
+
+			const auto length = source.size() * sizeof(wchar_t);
+			const auto needed = (flags & duplicate_null_terminate)
+				? length + sizeof(wchar_t)
+				: std::max<std::size_t>(length, sizeof(wchar_t));
+
+			const auto buffer = st->pool.allocate(needed, string_pool_tag, true);
+
+			if (!buffer)
+			{
+				THREAD_LOG_ERR("RtlDuplicateUnicodeString: out of pool for {} bytes", needed);
+				return STATUS_NO_MEMORY;
+			}
+
+			if (!source.empty())
+				cpu.curr_addr_space()->write_mem(buffer, source.data(), length);
+
+			string_out.write(_UNICODE_STRING{
+				.Length = static_cast<unsigned short>(length),
+				.MaximumLength = static_cast<unsigned short>(needed),
+				.Buffer = guest_ptr<wchar_t>(buffer),
+			});
+
+			THREAD_LOG_INFO("RtlDuplicateUnicodeString(flags=0x{:X}, '{}') -> 0x{:X}, {} bytes",
+				flags, narrow_wstring(source), buffer, needed);
+
+			return STATUS_SUCCESS;
 		});
 }

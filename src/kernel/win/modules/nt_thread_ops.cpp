@@ -93,4 +93,69 @@ void modules::register_ntoskrnl_thread_ops(win_kernel_state& state, proc_module&
 
 			return STATUS_SUCCESS;
 		});
+
+	// The increment is relative to the owning process's base priority, and what
+	// comes back is the increment the thread had before. Nothing here schedules
+	// by priority, so moving it changes only what the guest reads back -- which
+	// it does, to restore the level it found.
+	state.redirect(mod, "KeSetBasePriorityThread",
+		[](vcpu& cpu, emu_object<_KTHREAD> thread, const std::int32_t increment) -> std::int32_t
+		{
+			if (!thread)
+				return 0;
+
+			const auto process = guest_va(thread.field(&_KTHREAD::Process).read());
+
+			const auto process_base = process
+				? emu_object<_KPROCESS>(*cpu.curr_addr_space(), process)
+					.field(&_KPROCESS::BasePriority).read()
+				: 0;
+
+			const auto previous = thread.field(&_KTHREAD::BasePriority).read() - process_base;
+			const auto updated = static_cast<char>(process_base + increment);
+
+			thread.field(&_KTHREAD::BasePriority).write(updated);
+			thread.field(&_KTHREAD::Priority).write(updated);
+
+			THREAD_LOG_INFO("KeSetBasePriorityThread(thread=0x{:X}, increment={}) -> {}",
+				thread.address(), increment, previous);
+
+			return previous;
+		});
+
+	// The irp a filesystem filter is re-entered under, which is per thread and
+	// lives in the ETHREAD rather than anywhere the io manager keeps. Nothing
+	// here builds an irp, so what the guest reads back is only ever what the
+	// guest itself put there -- which is exactly what a filter checks it for.
+	state.redirect(mod, "IoGetTopLevelIrp", [](vcpu& cpu) -> addr_t
+	{
+		const auto t = std::dynamic_pointer_cast<win_thread>(cpu.thread());
+
+		if (!t || !t->ethread())
+		{
+			THREAD_LOG_WARN("IoGetTopLevelIrp: no current thread");
+			return 0;
+		}
+
+		const auto irp = t->ethread().field(&_ETHREAD::TopLevelIrp).read();
+
+		THREAD_LOG_INFO("IoGetTopLevelIrp() -> 0x{:X}", irp);
+
+		return irp;
+	});
+
+	state.redirect(mod, "IoSetTopLevelIrp", [](vcpu& cpu, const addr_t irp)
+	{
+		const auto t = std::dynamic_pointer_cast<win_thread>(cpu.thread());
+
+		if (!t || !t->ethread())
+		{
+			THREAD_LOG_ERR("IoSetTopLevelIrp: no current thread to set 0x{:X} on", irp);
+			return;
+		}
+
+		t->ethread().field(&_ETHREAD::TopLevelIrp).write(irp);
+
+		THREAD_LOG_INFO("IoSetTopLevelIrp(0x{:X})", irp);
+	});
 }
