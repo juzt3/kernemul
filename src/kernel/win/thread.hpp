@@ -4,6 +4,10 @@
 #include "process.hpp"
 #include "user_setup.hpp"
 
+#include <algorithm>
+#include <optional>
+#include <vector>
+
 class windows_emulator;
 
 // A Windows thread. Its registers are the scheduler's business; everything else
@@ -30,6 +34,47 @@ public:
 	[[nodiscard]] const emu_object<_ETHREAD>& ethread() const { return ethread_; }
 
 	void set_emulator(windows_emulator* e) { emulator_ = e; }
+
+	// A thread parked on one or more dispatcher objects. The scheduler is what
+	// notices the wait can be satisfied and hands the thread its result, so the
+	// handler that started the wait runs once and never has to look again.
+	struct wait_state
+	{
+		std::vector<addr_t> objects;
+		// WaitAll needs every object; WaitAny takes the first that is signalled
+		// and reports which one it was.
+		bool all = false;
+		// Absolute guest time. Only meaningful with `timed`, because zero is a
+		// legitimate deadline for a caller that asked not to block at all.
+		std::int64_t deadline = 0;
+		bool timed = false;
+
+		// Filled in by whoever satisfied the wait. The scheduler only reads
+		// these: looking at the objects themselves means reading guest memory,
+		// and that is the signalling thread's job, on a cpu, where it works.
+		bool satisfied = false;
+		NTSTATUS status = 0;
+	};
+
+	// Parks the thread on the wait. The nap that goes with it is what keeps a
+	// cpu with nothing else to do from spinning over a queue of parked threads
+	// -- see the definition.
+	void begin_wait(wait_state w);
+
+	[[nodiscard]] bool is_waiting() const { return wait_.has_value(); }
+	[[nodiscard]] bool waiting_on(const addr_t object) const
+	{
+		return wait_ && std::ranges::find(wait_->objects, object) != wait_->objects.end();
+	}
+
+	// Tries to take what this thread is parked on. Called on a cpu by whoever
+	// signalled one of its objects, and by the wait itself in case the object
+	// was already signalled when it asked.
+	bool try_satisfy(addr_space& space);
+
+	// Ready once its wait has been satisfied or its timeout has run out.
+	// Neither answer needs guest memory, which is why the scheduler can ask.
+	[[nodiscard]] bool is_ready(vcpu& cpu) override;
 
 	// The count KeEnterCriticalRegion drives down and KeLeaveCriticalRegion
 	// back up. Kernel APCs are disabled for this thread while it is negative,
@@ -66,6 +111,7 @@ public:
 	[[nodiscard]] bool is_user_mode() const override { return !is_system_thread(); }
 
 protected:
+	std::optional<wait_state> wait_;
 	addr_t stack_low_;
 	std::size_t stack_size_;
 	emu_object<_TEB64> teb_;

@@ -191,18 +191,18 @@ void register_fast_mutexes(win_kernel_state& state, proc_module& mod)
 
 }
 
-// None of these can block. A wait is only a wait if something else could have
-// run in the meantime, and the object a driver signals here is one it built in
-// its own memory, which nothing else in the emulator holds a reference to --
-// there is no second party to wake. What is left, and what the guest reads
-// back, is the signal state in the object's own header, so that is what these
-// keep exactly right.
+// Signalling, and the locks that never contend. What the guest reads back is
+// the signal state in the object's own header, so that is what these keep
+// exactly right -- and anything a thread is parked on is handed over here, at
+// the moment it is signalled, because this is a thread on a cpu and so the one
+// place the objects can be read to decide who gets them.
 //
-// KeWaitForSingleObject is deliberately not implemented. That is what keeps the
-// omission honest: a driver that waits is told so at the point it waits, rather
-// than sailing past a wait that silently succeeded.
+// The fast mutexes and spin locks below still cannot contend: nothing yields
+// while one is held, so one is always free by the time it is asked for.
 void modules::register_ntoskrnl_sync_ops(win_kernel_state& state, proc_module& mod)
 {
+	auto* st = &state;
+
 	state.redirect(mod, "KeInitializeEvent",
 		[](vcpu&, emu_object<_KEVENT> event, const std::uint32_t type,
 			const std::uint8_t state)
@@ -219,7 +219,7 @@ void modules::register_ntoskrnl_sync_ops(win_kernel_state& state, proc_module& m
 		});
 
 	state.redirect(mod, "KeSetEvent",
-		[](vcpu&, emu_object<_KEVENT> event, const std::int32_t increment,
+		[st](vcpu& cpu, emu_object<_KEVENT> event, const std::int32_t increment,
 			const std::uint8_t wait) -> std::int32_t
 		{
 			if (!event)
@@ -230,6 +230,12 @@ void modules::register_ntoskrnl_sync_ops(win_kernel_state& state, proc_module& m
 
 			THREAD_LOG_INFO("KeSetEvent(event=0x{:X}, increment={}, wait={}) -> {}",
 				event.address(), increment, wait, previous);
+
+			// A synchronization event releases one waiter and goes back to
+			// unsignalled, which is the waiter taking it rather than anything
+			// done here -- so the state written above is what a wait sees, and
+			// what it leaves behind.
+			st->sys_proc->wake_waiters(*cpu.curr_addr_space(), event.address());
 
 			return previous;
 		});
@@ -274,12 +280,11 @@ void modules::register_ntoskrnl_sync_ops(win_kernel_state& state, proc_module& m
 				mutex.address(), level);
 		});
 
-	// Nothing here acquires a mutex -- that is KeWaitForSingleObject's job --
-	// so every release is of one that was already free. Real Windows bugchecks
-	// on that, so it is reported rather than quietly counted: a driver reaching
-	// it is relying on a wait that did not happen.
+	// A mutex is acquired by waiting on it, so a release of one that is already
+	// free is a release without a matching wait. Real Windows bugchecks on
+	// that, so it is reported rather than quietly counted.
 	state.redirect(mod, "KeReleaseMutex",
-		[](vcpu&, emu_object<_KMUTANT> mutex, const std::uint8_t wait) -> std::int32_t
+		[st](vcpu& cpu, emu_object<_KMUTANT> mutex, const std::uint8_t wait) -> std::int32_t
 		{
 			if (!mutex)
 				return 0;
@@ -295,6 +300,8 @@ void modules::register_ntoskrnl_sync_ops(win_kernel_state& state, proc_module& m
 
 			THREAD_LOG_INFO("KeReleaseMutex(mutex=0x{:X}, wait={}) -> {}",
 				mutex.address(), wait, previous);
+
+			st->sys_proc->wake_waiters(*cpu.curr_addr_space(), mutex.address());
 
 			return previous;
 		});
@@ -318,7 +325,7 @@ void modules::register_ntoskrnl_sync_ops(win_kernel_state& state, proc_module& m
 	// what is missing is the raise, so this is reported as an error rather than
 	// pushed somewhere the guest can never bring it back from.
 	state.redirect(mod, "KeReleaseSemaphore",
-		[](vcpu&, emu_object<_KSEMAPHORE> semaphore, const std::int32_t increment,
+		[st](vcpu& cpu, emu_object<_KSEMAPHORE> semaphore, const std::int32_t increment,
 			const std::int32_t adjustment, const std::uint8_t wait) -> std::int32_t
 		{
 			if (!semaphore)
@@ -340,6 +347,10 @@ void modules::register_ntoskrnl_sync_ops(win_kernel_state& state, proc_module& m
 			THREAD_LOG_INFO(
 				"KeReleaseSemaphore(semaphore=0x{:X}, increment={}, adjustment={}, wait={}) -> {}",
 				semaphore.address(), increment, adjustment, wait, previous);
+
+			// The count says how many waits the release covers, and each waiter
+			// that takes the semaphore spends one of them.
+			st->sys_proc->wake_waiters(*cpu.curr_addr_space(), semaphore.address());
 
 			return previous;
 		});

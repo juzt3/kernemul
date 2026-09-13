@@ -173,6 +173,10 @@ void modules::register_ntoskrnl_dispatch_ops(win_kernel_state& state, proc_modul
 		THREAD_LOG_INFO("NtSetEvent(0x{:X}, '{}') -> was {}",
 			event_handle, found.host->name, previous);
 
+		// Whoever is parked on it takes it from here, on this thread, because
+		// deciding that means reading the object.
+		st->sys_proc->wake_waiters(*cpu.curr_addr_space(), event.address());
+
 		return STATUS_SUCCESS;
 	};
 
@@ -317,6 +321,8 @@ void modules::register_ntoskrnl_dispatch_ops(win_kernel_state& state, proc_modul
 		THREAD_LOG_INFO("NtReleaseSemaphore(0x{:X}, '{}', release={}) -> was {}",
 			semaphore_handle, found.host->name, release_count, previous);
 
+		st->sys_proc->wake_waiters(*cpu.curr_addr_space(), semaphore.address());
+
 		return STATUS_SUCCESS;
 	};
 
@@ -382,6 +388,8 @@ void modules::register_ntoskrnl_dispatch_ops(win_kernel_state& state, proc_modul
 
 		THREAD_LOG_INFO("NtReleaseMutant(0x{:X}, '{}') -> was {}",
 			mutant_handle, found.host->name, previous);
+
+		st->sys_proc->wake_waiters(*cpu.curr_addr_space(), mutant.address());
 
 		return STATUS_SUCCESS;
 	};

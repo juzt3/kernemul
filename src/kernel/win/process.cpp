@@ -127,6 +127,12 @@ void windows_process::destroy_ethread(const win_thread& t)
 	set_thread_state(et, Terminated, false);
 	set_thread_exit_time(et, win_system_time());
 
+	// A thread object is signalled once the thread is done with, and stays that
+	// way: waiting for a worker to finish is a wait on its ETHREAD, and this is
+	// what releases it.
+	win::set_state_at(*et.space(), et.address(), 1);
+	wake_waiters(*et.space(), et.address());
+
 	if (!eprocess_)
 		return;
 
@@ -223,4 +229,13 @@ void windows_process::for_each_thread(const std::function<void(win_thread&)>& fn
 		if (const auto win_t = std::dynamic_pointer_cast<win_thread>(t))
 			fn(*win_t);
 	}
+}
+
+void windows_process::wake_waiters(struct addr_space& space, const addr_t object) const
+{
+	for_each_thread([&](win_thread& t)
+	{
+		if (t.waiting_on(object) && t.try_satisfy(space))
+			THREAD_LOG_INFO("wait on 0x{:X} satisfied for tid={}", object, t.id());
+	});
 }

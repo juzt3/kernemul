@@ -36,6 +36,12 @@ public:
 	// all of them: waking waiters, and finding one by its ETHREAD.
 	void for_each_thread(const std::function<void(win_thread&)>& fn) const;
 
+	// Hands `object` to whichever of this process's threads are parked on it
+	// and can take it. Called by whoever signalled the object, because deciding
+	// a wait means reading the objects and the scheduler is in no position to
+	// do that -- it only notices that the answer is in.
+	void wake_waiters(struct addr_space& space, addr_t object) const;
+
 	virtual std::shared_ptr<proc_module> load_module(std::string_view name, bool supervisor);
 
 	win_handle_table& handle_table() { return handle_table_; }

@@ -9,6 +9,7 @@
 #include <condition_variable>
 #include <cstring>
 #include <deque>
+#include <optional>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -271,12 +272,14 @@ public:
 				return next;
 			}
 
-			// Every thread is either on another cpu or asleep. Waiting drops the
-			// lock, so whoever holds them can get back in to requeue or retire.
-			if (ready_queue_.empty())
-				cv_.wait(lock);
+			// Every thread is either on another cpu or not ready. Waiting drops
+			// the lock, so whoever holds them can get back in to requeue or
+			// retire -- and whoever makes one of them ready notifies, which is
+			// what gets this cpu back up when there is no time to wake at.
+			if (const auto wake = next_wake())
+				cv_.wait_until(lock, *wake);
 			else
-				cv_.wait_until(lock, next_wake());
+				cv_.wait(lock);
 		}
 	}
 
@@ -292,14 +295,21 @@ private:
 	}
 
 	// When the first of the queued sleepers is due, which is the soonest this
-	// cpu could have anything to do. Only asked with every queued thread asleep,
-	// so there is always one to find. Called with the lock held.
-	thread::time_point next_wake() const
+	// cpu could have anything to do by itself. Nothing at all if none of them is
+	// sleeping: a queued thread that is not ready and has no time on it is
+	// parked on something another thread has to do, and that thread wakes the
+	// cpus when it does it. Called with the lock held.
+	std::optional<thread::time_point> next_wake() const
 	{
-		const auto earliest = std::ranges::min_element(ready_queue_, {},
-			[](const auto& t) { return t->sleep_until(); });
+		std::optional<thread::time_point> earliest;
 
-		return (*earliest)->sleep_until();
+		for (const auto& t : ready_queue_)
+		{
+			if (t->is_sleeping() && (!earliest || t->sleep_until() < *earliest))
+				earliest = t->sleep_until();
+		}
+
+		return earliest;
 	}
 
 	// Put the thread's context on the cpu. Page tables are not part of that

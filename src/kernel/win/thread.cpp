@@ -1,4 +1,8 @@
 #include "thread.hpp"
+#include <chrono>
+#include "dispatcher.hpp"
+#include "status.hpp"
+#include "../../emu/calling_conv.hpp"
 #include "win_kernel.hpp"
 
 // Coming off a cpu.
@@ -54,4 +58,117 @@ void win_thread::restore(vcpu& cpu) const
 	set_thread_state(ethread_, Running, true);
 	set_thread_processor(ethread_, static_cast<std::uint32_t>(cpu.id()));
 	count_thread_switch(ethread_);
+}
+
+// Parking the thread. A timed wait is asleep until its deadline, so a cpu with
+// nothing else to do sleeps that long too rather than looking at the thread
+// again and again while it waits. An untimed wait has nothing to sleep until:
+// it is released by the signal or not at all, and the signal wakes the cpus.
+void win_thread::begin_wait(wait_state w)
+{
+	if (w.timed)
+	{
+		const auto remaining = std::max<std::int64_t>(
+			0, w.deadline - static_cast<std::int64_t>(win_system_time()));
+
+		sleep_for(std::chrono::duration_cast<std::chrono::milliseconds>(win_ticks(remaining)));
+	}
+
+	wait_ = std::move(w);
+}
+
+// Taking what a parked thread is waiting for. Whoever signalled one of its
+// objects calls this, from a cpu, because deciding takes guest reads and the
+// scheduler is in no position to make them.
+bool win_thread::try_satisfy(addr_space& space)
+{
+	if (!wait_ || wait_->satisfied)
+		return false;
+
+	const auto self = ethread_.address();
+
+	// WaitAll takes none of the objects until every one is available, which is
+	// what keeps two threads from each taking half of what they need.
+	std::size_t taken = wait_->objects.size();
+
+	if (wait_->all)
+	{
+		for (const auto object : wait_->objects)
+		{
+			if (!win::is_signalled(space, object, self))
+				return false;
+		}
+	}
+	else
+	{
+		taken = wait_->objects.size() + 1;
+
+		for (std::size_t i = 0; i < wait_->objects.size(); ++i)
+		{
+			if (win::is_signalled(space, wait_->objects[i], self))
+			{
+				taken = i;
+				break;
+			}
+		}
+
+		if (taken > wait_->objects.size())
+			return false;
+	}
+
+	if (wait_->all)
+	{
+		for (const auto object : wait_->objects)
+			win::take(space, object, self);
+
+		wait_->status = STATUS_SUCCESS;
+	}
+	else
+	{
+		win::take(space, wait_->objects[taken], self);
+
+		// WaitAny reports which object released it, and STATUS_WAIT_0 is zero,
+		// so the index is the status.
+		wait_->status = static_cast<NTSTATUS>(taken);
+	}
+
+	wait_->satisfied = true;
+
+	return true;
+}
+
+// A parked thread runs again once its wait has been satisfied by whoever
+// signalled it, or once it has waited as long as it was told to. Both are
+// answered from what the wait already holds: nothing here touches guest memory,
+// because the scheduler asks this with no thread on the cpu.
+bool win_thread::is_ready(vcpu& cpu)
+{
+	if (!wait_)
+		return thread::is_ready(cpu);
+
+	const auto conv = cpu.emu()->call_conv();
+
+	const auto finish = [&](const NTSTATUS status)
+	{
+		conv->set_ret(cpu, *this, status);
+
+		// A timed wait slept until its deadline. Leaving that behind would
+		// make a thread released early look asleep to every later look.
+		sleep_for(std::chrono::milliseconds(0));
+		wait_.reset();
+	};
+
+	if (wait_->satisfied)
+	{
+		finish(wait_->status);
+		return true;
+	}
+
+	if (wait_->timed && static_cast<std::int64_t>(win_system_time()) >= wait_->deadline)
+	{
+		finish(STATUS_TIMEOUT);
+		return true;
+	}
+
+	return false;
 }
