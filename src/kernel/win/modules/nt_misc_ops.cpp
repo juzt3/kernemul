@@ -58,36 +58,35 @@ struct device_host final : win_object
 	addr_t driver_object = 0;
 };
 
-// DEVICE_OBJECT::Flags, as the io manager sets them.
-constexpr std::uint32_t do_exclusive = 0x00000008;
-constexpr std::uint32_t do_device_initializing = 0x00000080;
-constexpr std::uint32_t do_shutdown_registered = 0x00000800;
-
-constexpr std::uint32_t pool_tag_device_interfaces = 0x69446F49; // 'IoDi'
-constexpr std::uint32_t pool_tag_pnp_notify = 0x4E506E50;        // 'PnPN'
-constexpr std::uint32_t pool_tag_security = 0x20206553;          // 'Se  '
-
 // TOKEN_INFORMATION_CLASS, the two a driver asks for often enough to answer.
-constexpr std::uint32_t token_privileges = 3;
-constexpr std::uint32_t token_integrity_level = 25;
+// A WDK enum; the kernel does not store one, so it is not in the PDB.
+enum token_information_class : std::uint32_t
+{
+	token_privileges      = 3,
+	token_integrity_level = 25,
+};
 
-constexpr std::uint32_t se_group_integrity = 0x00000020;
+// SID_AND_ATTRIBUTES::Attributes, and the parts of S-1-16-12288 -- the
+// integrity level everything here runs at.
+enum sid_attributes : std::uint32_t
+{
+	se_group_integrity = 0x00000020,
+};
 
-// S-1-16-12288, the integrity level everything here runs at.
 constexpr std::uint8_t security_mandatory_label_authority = 16;
 constexpr std::uint32_t security_mandatory_high_rid = 12288;
 
-// The two CallbackType values SeRegisterImageVerificationCallback accepts, and
-// the subtype each of them pairs with. Recovered from the binary -- it has no
-// documented prototype.
-constexpr std::uint32_t image_verification_driver_info = 1;
-constexpr std::uint32_t image_verification_block_info = 4;
-
-std::wstring unicode_string_at(addr_space& space, const addr_t addr)
+// What SeRegisterImageVerificationCallback accepts, recovered from the binary --
+// it has no documented prototype. Each type takes exactly one subtype.
+enum image_verification_type : std::uint32_t
 {
-	return addr
-		? win::read_unicode_string(emu_object<_UNICODE_STRING>(space, addr))
-		: std::wstring{};
+	image_verification_driver_info = 1,
+	image_verification_block_info  = 4,
+};
+
+constexpr std::uint32_t image_verification_subtype(const image_verification_type type)
+{
+	return type == image_verification_driver_info ? 0u : 1u;
 }
 
 }
@@ -161,10 +160,10 @@ void modules::register_ntoskrnl_misc_ops(win_kernel_state& state, proc_module& m
 		{
 			auto& space = *cpu.curr_addr_space();
 
-			const auto name_addr = object_attributes
+			const emu_object<_UNICODE_STRING> object_name(space, object_attributes
 				? guest_va(object_attributes.field(&_OBJECT_ATTRIBUTES::ObjectName).read())
-				: 0;
-			const auto name = unicode_string_at(space, name_addr);
+				: 0);
+			const auto name = win::read_unicode_string(object_name);
 
 			if (name.empty() || !create)
 			{
@@ -251,7 +250,8 @@ void modules::register_ntoskrnl_misc_ops(win_kernel_state& state, proc_module& m
 	// carries is where the driver keeps its own state.
 	state.redirect(mod, "IoCreateDevice",
 		[st](vcpu& cpu, emu_object<_DRIVER_OBJECT> driver_object,
-			const std::uint32_t device_extension_size, const addr_t device_name,
+			const std::uint32_t device_extension_size,
+			emu_object<_UNICODE_STRING> device_name,
 			const std::uint32_t device_type, const std::uint32_t device_characteristics,
 			const bool exclusive, emu_object<addr_t> device_object_out) -> NTSTATUS
 		{
@@ -259,7 +259,7 @@ void modules::register_ntoskrnl_misc_ops(win_kernel_state& state, proc_module& m
 				return STATUS_INVALID_PARAMETER;
 
 			auto& space = *cpu.curr_addr_space();
-			const auto name = unicode_string_at(space, device_name);
+			const auto name = win::read_unicode_string(device_name);
 
 			// The extension follows the object, and a driver casts it to its own
 			// structure, so it starts where that structure would want to.
@@ -416,7 +416,7 @@ void modules::register_ntoskrnl_misc_ops(win_kernel_state& state, proc_module& m
 			if (!notification_entry)
 				return STATUS_INVALID_PARAMETER;
 
-			const auto entry = st->pool.allocate(sizeof(addr_t), pool_tag_pnp_notify, true);
+			const auto entry = st->pool.allocate(sizeof(addr_t), pool_tag("PnPN"), true);
 
 			if (!entry)
 			{
@@ -455,7 +455,7 @@ void modules::register_ntoskrnl_misc_ops(win_kernel_state& state, proc_module& m
 				return STATUS_INVALID_PARAMETER;
 
 			const auto list = st->pool.allocate(2 * sizeof(wchar_t),
-				pool_tag_device_interfaces, true);
+				pool_tag("IoDi"), true);
 
 			if (!list)
 			{
@@ -546,7 +546,7 @@ void modules::register_ntoskrnl_misc_ops(win_kernel_state& state, proc_module& m
 			if (token_information_class == token_integrity_level)
 			{
 				constexpr auto size = sizeof(_SID_AND_ATTRIBUTES) + sizeof(_SID);
-				const auto buffer = st->pool.allocate(size, pool_tag_security, true);
+				const auto buffer = st->pool.allocate(size, pool_tag("Se  "), true);
 
 				if (!buffer)
 					return STATUS_INSUFFICIENT_RESOURCES;
@@ -579,7 +579,7 @@ void modules::register_ntoskrnl_misc_ops(win_kernel_state& state, proc_module& m
 				// PrivilegeCount alone: the array that follows it is empty, so
 				// none of it is there to write.
 				const auto buffer = st->pool.allocate(sizeof(std::uint32_t),
-					pool_tag_security, true);
+					pool_tag("Se  "), true);
 
 				if (!buffer)
 					return STATUS_INSUFFICIENT_RESOURCES;
@@ -610,10 +610,8 @@ void modules::register_ntoskrnl_misc_ops(win_kernel_state& state, proc_module& m
 				&& callback_type != image_verification_block_info)
 				return STATUS_INVALID_PARAMETER_1;
 
-			const std::uint32_t expected_subtype =
-				callback_type == image_verification_driver_info ? 0 : 1;
-
-			if (callback_subtype != expected_subtype)
+			if (callback_subtype != image_verification_subtype(
+					static_cast<image_verification_type>(callback_type)))
 				return STATUS_INVALID_PARAMETER_2;
 
 			if (reserved)
@@ -688,17 +686,38 @@ void modules::register_ntoskrnl_misc_ops(win_kernel_state& state, proc_module& m
 			return base;
 		});
 
-	// No debugger is attached, so nothing types a response and the caller is
-	// told that nothing was read.
+	// DbgPrompt does not ask anything: it raises a debug service trap and lets
+	// whoever is attached fill the response in. So the trap is the behaviour,
+	// and STATUS_BREAKPOINT goes through the same dispatcher a real one would --
+	// a driver with a handler around the call gets it, and the redirect leaves
+	// the pc alone once the dispatcher has moved it.
+	//
+	// The trap carries BREAKPOINT_PROMPT and the response buffer on real
+	// Windows; the dispatcher here takes no exception parameters, so a handler
+	// cannot tell this breakpoint from any other.
 	state.redirect(mod, "DbgPrompt",
-		[](vcpu& cpu, const addr_t prompt, const addr_t response,
+		[st](vcpu& cpu, const addr_t prompt, const addr_t response,
 			const std::uint32_t length) -> std::uint32_t
 		{
 			auto& space = *cpu.curr_addr_space();
 			const auto text = prompt ? guest::read_string(space, prompt) : std::string{};
 
-			THREAD_LOG_WARN("DbgPrompt('{}', response=0x{:X}, length={}): no debugger is attached -> 0 bytes",
+			THREAD_LOG_WARN("DbgPrompt('{}', response=0x{:X}, length={})",
 				text, response, length);
+
+			auto* emulator = st->emulator();
+
+			if (emulator && emulator->handle_exception(cpu, cpu_exception::breakpoint))
+			{
+				THREAD_LOG_WARN("DbgPrompt: the breakpoint was handled, so the call does not return");
+				return 0;
+			}
+
+			// Real Windows bugchecks here: nothing is attached to answer the
+			// trap and no handler caught it. There is no bugcheck to take, so
+			// the thread is left standing and told nothing was read -- which is
+			// the one thing a caller can act on.
+			THREAD_LOG_WARN("DbgPrompt: no debugger is attached and nothing handled the breakpoint -> 0 bytes");
 
 			return 0;
 		});
