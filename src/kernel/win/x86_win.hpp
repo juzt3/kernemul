@@ -2,8 +2,7 @@
 #include "win_kernel.hpp"
 #include "segments.hpp"
 
-// CONTEXT_*, the architecture bit that tags an x86-64 CONTEXT and the halves a
-// caller asks for on top of it.
+// CONTEXT_*, the x86-64 tag and the halves asked for on top of it.
 inline constexpr std::uint32_t context_amd64    = 0x00100000;
 inline constexpr std::uint32_t context_control  = context_amd64 | 0x1;
 inline constexpr std::uint32_t context_integer  = context_amd64 | 0x2;
@@ -64,11 +63,8 @@ public:
 		t.set_reg_val(cpu, x86::gs, x86_win_seg::make_usermode_gs(teb_addr));
 	}
 
-	// The integer and control halves of a CONTEXT, and the selectors that go
-	// with them. The floating point half is not filled in: a CONTEXT keeps the
-	// xmm registers inside an XSAVE area whose layout is the cpu's rather than
-	// Windows', and nothing asking for a thread's context here has wanted them.
-	// What is left out is left out of ContextFlags too.
+	// The floating point half is not filled in -- a CONTEXT keeps the xmm
+	// registers in an XSAVE area -- and is left out of ContextFlags too.
 	void capture_context(const reg_view& regs, emu_object<_CONTEXT> out,
 		const std::uint32_t flags) override
 	{
@@ -155,8 +151,7 @@ public:
 			regs.set(x86::rbp, ctx.Rbp);
 			regs.set(x86::rip, ctx.Rip);
 
-			// Bit 1 reads as one, and a guest handed a CONTEXT it built itself
-			// very often leaves it clear.
+			// Bit 1 reads as one, and a hand-built CONTEXT often leaves it clear.
 			regs.set(x86::rflags, ctx.EFlags | 0x2u);
 		}
 	}

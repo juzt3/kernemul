@@ -138,9 +138,8 @@ bool win_thread::try_satisfy(addr_space& space)
 	return true;
 }
 
-// A wait that names no object is an alert wait, and this is the only thing
-// that ends it. One arriving with nothing parked on it is kept rather than
-// dropped, because the thread that takes it may not have asked yet.
+// A wait naming no object is an alert wait, and this is the only thing that
+// ends it. One arriving with nothing parked on it is kept, not dropped.
 void win_thread::alert()
 {
 	if (wait_ && !wait_->satisfied && wait_->objects.empty())
@@ -189,8 +188,7 @@ std::uint32_t win_thread::resume()
 // because the scheduler asks this with no thread on the cpu.
 bool win_thread::is_ready(vcpu& cpu)
 {
-	// Ahead of the wait, so a thread suspended while parked stays off the cpu
-	// even once whatever it waited for arrives.
+	// Ahead of the wait, so a thread suspended while parked stays off the cpu.
 	if (suspend_count_)
 		return false;
 

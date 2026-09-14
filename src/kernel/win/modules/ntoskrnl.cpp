@@ -21,6 +21,9 @@
 #include "nt_wait_ops.hpp"
 #include "nt_task_ops.hpp"
 #include "nt_sysinfo_ops.hpp"
+#include "nt_ctx_ops.hpp"
+#include "nt_iocp_ops.hpp"
+#include "nt_lpc_ops.hpp"
 
 void modules::register_ntoskrnl(win_kernel_state& state, proc_module& mod)
 {
@@ -46,4 +49,7 @@ void modules::register_ntoskrnl(win_kernel_state& state, proc_module& mod)
 	register_ntoskrnl_wait_ops(state, mod);
 	register_ntoskrnl_task_ops(state, mod);
 	register_ntoskrnl_sysinfo_ops(state, mod);
+	register_ntoskrnl_ctx_ops(state, mod);
+	register_ntoskrnl_iocp_ops(state, mod);
+	register_ntoskrnl_lpc_ops(state, mod);
 }
