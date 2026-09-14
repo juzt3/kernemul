@@ -178,6 +178,7 @@ set(kernemul_SOURCES
 	"src/kernel/process.cpp"
 	"src/kernel/process.hpp"
 	"src/kernel/thread_scheduler.hpp"
+	"src/kernel/win/api_set.hpp"
 	"src/kernel/win/arm64_win.cpp"
 	"src/kernel/win/arm64_win.hpp"
 	"src/kernel/win/defs.hpp"
