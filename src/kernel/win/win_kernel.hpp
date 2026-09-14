@@ -26,6 +26,7 @@
 #include <cstring>
 #include <filesystem>
 #include <deque>
+#include <limits>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -214,25 +215,6 @@ struct win_kernel_state : kernel_state
 		syscalls->add(name, image, impl);
 	}
 
-	// Only ever serves a log line, so it never throws.
-	[[nodiscard]] std::string syscall_caller(vcpu& cpu) const
-	{
-		const auto t = cpu.thread();
-		const auto proc = t ? std::dynamic_pointer_cast<windows_process>(t->proc()) : nullptr;
-
-		if (!proc)
-			return "an unknown caller";
-
-		try
-		{
-			return symbols::format_addr(*proc, cpu.read_virt_mem<addr_t>(cpu.sp()));
-		}
-		catch (const std::exception&)
-		{
-			return "an unreadable stack";
-		}
-	}
-
 	// The service number names an address in ntoskrnl or win32k, which is what
 	// the handler was bound to -- so a trap lands on the same function a driver
 	// calling that name would reach. Returns whether the handler moved the pc.
@@ -249,8 +231,7 @@ struct win_kernel_state : kernel_state
 		{
 			// Unlike an unimplemented export this does not end the thread: the
 			// guest asked and gets an answer it knows how to deal with.
-			THREAD_LOG_WARN("unimplemented syscall 0x{:X}, called from {}", id,
-				syscall_caller(cpu));
+			THREAD_LOG_WARN("unimplemented syscall 0x{:X}", id);
 			emu_->call_conv()->ret(cpu, static_cast<NTSTATUS>(STATUS_NOT_IMPLEMENTED));
 			return false;
 		}
@@ -421,8 +402,7 @@ public:
 		kernel_.set_emulator(this);
 		excp_ = std::make_shared<win::win_exception>(kernel_);
 
-		// Unbounded: start > end.
-		emu_->hook_insn(1, 0, hook_insn_t::syscall,
+		emu_->hook_insn(0, std::numeric_limits<addr_t>::max(), hook_insn_t::syscall,
 			[this](vcpu& cpu) { return kernel_.dispatch_syscall(cpu); });
 	}
 
