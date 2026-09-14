@@ -110,10 +110,13 @@ public:
 		mem_.register_mapped(kuser_shared_data_user_va, sizeof(_KUSER_SHARED_DATA),
 			win::page_readonly);
 
+		auto api_sets = win::init_api_set_map(mem_, fs);
+		api_sets_ = std::move(api_sets.map);
+
 		auto peb = peb_.read();
 		peb.Ldr = ldr_addr;
 		peb.ProcessParameters = params_.address();
-		peb.ApiSetMap = win::init_api_set_map(mem_, fs);
+		peb.ApiSetMap = api_sets.address;
 		peb.GdiSharedHandleTable = mem_.alloc(0x1000, prot_rw);
 		peb_.write(peb);
 
@@ -124,6 +127,15 @@ public:
 	}
 
 	std::shared_ptr<proc_module> load_module(std::string_view name, bool supervisor) override;
+
+	[[nodiscard]] std::string resolve_module_name(const std::string_view name,
+		const std::string_view importer) const override
+	{
+		if (auto host = api_sets_.resolve(name, importer))
+			return std::move(*host);
+
+		return std::string(name);
+	}
 
 	void module_add_cb(proc_module& mod) override;
 
@@ -171,6 +183,7 @@ private:
 	emu_object<_RTL_USER_PROCESS_PARAMETERS> params_;
 	std::string current_dir_;
 	std::string image_name_;
+	win::api_set_map api_sets_;
 };
 
 class win_kernel_proc : public windows_process

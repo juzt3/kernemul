@@ -1,5 +1,6 @@
 #pragma once
 #include "../../emu/object.hpp"
+#include "api_set.hpp"
 #include "filesystem.hpp"
 #include "string.hpp"
 #include <pe.hpp>
@@ -115,14 +116,23 @@ inline emu_object<_RTL_USER_PROCESS_PARAMETERS> init_process_parameters(
 	return emu_object<_RTL_USER_PROCESS_PARAMETERS>(mem.space(), addr);
 }
 
-inline addr_t load_api_set_from_pe(win_user_mem& mem, std::span<const std::uint8_t> data)
+// The guest's copy of the schema, and the host's. The guest resolves its own
+// names through the PEB; the host needs the same answers for the imports the
+// emulator resolves itself.
+struct api_set_result
+{
+	addr_t address = 0;
+	api_set_map map;
+};
+
+inline api_set_result load_api_set_from_pe(win_user_mem& mem, std::span<const std::uint8_t> data)
 {
 	if (data.size() < sizeof(pe::dos_header))
-		return 0;
+		return {};
 
 	const auto* img = reinterpret_cast<const pe::image*>(data.data());
 	if (!img->dos_hdr()->ok())
-		return 0;
+		return {};
 
 	for (const auto& sec : img->sections())
 	{
@@ -137,20 +147,26 @@ inline addr_t load_api_set_from_pe(win_user_mem& mem, std::span<const std::uint8
 		if (offset + size > data.size())
 			break;
 
+		const auto section = data.subspan(offset, size);
+
 		const auto addr = mem.alloc(size, prot_rw);
-		mem.write_mem(addr, data.data() + offset, size);
-		return addr;
+		mem.write_mem(addr, section.data(), size);
+
+		return { addr, parse_api_set_map(section) };
 	}
 
-	return 0;
+	return {};
 }
 
-inline addr_t init_api_set_map(win_user_mem& mem, const win_filesystem& fs)
+inline api_set_result init_api_set_map(win_user_mem& mem, const win_filesystem& fs)
 {
 	if (const auto file = fs.open(std::string(system32_dir_narrow) + "apisetschema.dll"))
 	{
-		if (const auto addr = load_api_set_from_pe(mem, file->data()))
-			return addr;
+		if (auto result = load_api_set_from_pe(mem, file->data()); result.address)
+		{
+			LOG_INFO("api set schema: {} names resolve through it", result.map.hosts.size());
+			return result;
+		}
 	}
 
 	const _API_SET_NAMESPACE ns{
@@ -165,7 +181,7 @@ inline addr_t init_api_set_map(win_user_mem& mem, const win_filesystem& fs)
 
 	const auto addr = mem.alloc(sizeof(ns), prot_rw);
 	mem.write_mem(addr, &ns, sizeof(ns));
-	return addr;
+	return { addr, {} };
 }
 
 }
