@@ -54,6 +54,11 @@ enum file_information_class : std::uint32_t
 constexpr std::uint32_t file_fs_device_information = 4;
 constexpr std::uint32_t file_device_disk = 0x07;
 
+// What GetFileType turns into FILE_TYPE_CHAR, and with it what the crt decides
+// a stream is: a stream on a disk file is buffered until something flushes it,
+// and nothing flushes an exe that returns straight out of its entry point.
+constexpr std::uint32_t file_device_console = 0x50;
+
 // FILE_ATTRIBUTE_*.
 constexpr std::uint32_t file_attribute_normal = 0x80;
 constexpr std::uint32_t file_attribute_directory = 0x10;
@@ -645,7 +650,7 @@ void modules::register_ntoskrnl_io_ops(win_kernel_state& state, proc_module& mod
 	{
 		const auto host = st->sys_proc->handle_table().get_object<file_host>(file_handle);
 
-		if (!host || !host->file)
+		if (!host || (!host->file && !host->console))
 		{
 			THREAD_LOG_WARN("NtWriteFile: handle 0x{:X} is not an open file", file_handle);
 			write_status_block(io_status_block, {STATUS_INVALID_HANDLE, 0});
@@ -658,10 +663,22 @@ void modules::register_ntoskrnl_io_ops(win_kernel_state& state, proc_module& mod
 			return STATUS_INVALID_PARAMETER;
 		}
 
-		const auto offset = file_offset(byte_offset, host->position);
-
 		std::vector<std::uint8_t> bytes(length);
 		cpu.curr_addr_space()->read_mem(buffer, bytes.data(), length);
+
+		// Straight out of the emulator, unbuffered: what the guest prints and
+		// what the emulator logs are then in the order they happened.
+		if (host->console)
+		{
+			std::fwrite(bytes.data(), 1, bytes.size(), stdout);
+			std::fflush(stdout);
+
+			write_status_block(io_status_block, {STATUS_SUCCESS, length});
+
+			return STATUS_SUCCESS;
+		}
+
+		const auto offset = file_offset(byte_offset, host->position);
 
 		// win_file::write replaces the file, so a write at an offset grows a
 		// copy of what is there, drops the new bytes in, and puts it back.
@@ -874,7 +891,8 @@ void modules::register_ntoskrnl_io_ops(win_kernel_state& state, proc_module& mod
 				return STATUS_INFO_LENGTH_MISMATCH;
 			}
 
-			const file_fs_device_information_t info{file_device_disk, 0};
+			const file_fs_device_information_t info{
+				host->console ? file_device_console : file_device_disk, 0};
 			emu_object<file_fs_device_information_t>(space, fs_information).write(info);
 
 			write_status_block(io_status_block, {STATUS_SUCCESS, sizeof(info)});

@@ -18,6 +18,11 @@ struct file_host final : win_object
 	// Where the next read or write starts, which is what a caller that does not
 	// pass a ByteOffset relies on.
 	std::uint64_t position = 0;
+
+	// A process's standard output rather than anything in the guest
+	// filesystem: what is written to it goes to the emulator's own stdout,
+	// because that is the only place a guest can be seen to print.
+	bool console = false;
 };
 
 struct section_host final : win_object
