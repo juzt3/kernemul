@@ -5,6 +5,7 @@
 #include "../status.hpp"
 #include "../string.hpp"
 #include "../types.hpp"
+#include "../../../emu/guest_call.hpp"
 #include "../../../util/log.hpp"
 #include "../../../util/string.hpp"
 #include <vector>
@@ -684,6 +685,197 @@ void modules::register_ntoskrnl_misc_ops(win_kernel_state& state, proc_module& m
 				pc_value, base, m ? m->name : "no module");
 
 			return base;
+		});
+
+	// A tail call, so the broadcast function's result is the caller's without
+	// anything in between able to change it.
+	state.redirect(mod, "KeIpiGenericCall",
+		[](vcpu& cpu, const addr_t broadcast_function, const std::uint64_t context)
+		{
+			if (!broadcast_function)
+			{
+				THREAD_LOG_ERR("KeIpiGenericCall: null broadcast function");
+				return;
+			}
+
+			THREAD_LOG_WARN("KeIpiGenericCall(0x{:X}, context=0x{:X}): nothing here holds the "
+				"other cpus still, so it runs on this one alone",
+				broadcast_function, context);
+
+			const std::uint64_t args[] = { context };
+			guest_tail_call(cpu, broadcast_function, args);
+		});
+
+	// A triage dump is an undocumented layout nothing here can produce, and a
+	// buffer left untouched with a length saying it was filled is worse than
+	// none.
+	state.redirect(mod, "KeCapturePersistentThreadState",
+		[](vcpu&, const addr_t context, const addr_t thread, const std::uint32_t bugcheck_code,
+			const std::uint64_t p1, const std::uint64_t p2, const std::uint64_t p3,
+			const std::uint64_t p4, const addr_t buffer) -> std::uint32_t
+		{
+			THREAD_LOG_WARN("KeCapturePersistentThreadState(context=0x{:X}, thread=0x{:X}, "
+				"bugcheck=0x{:X}, params=[0x{:X}, 0x{:X}, 0x{:X}, 0x{:X}], buffer=0x{:X}): "
+				"nothing here writes a triage dump -> 0 bytes",
+				context, thread, bugcheck_code, p1, p2, p3, p4, buffer);
+
+			return 0;
+		});
+
+	// Nothing consumes a trace, so every event is dropped -- which is what a
+	// real kernel with no logger running does with one too.
+	state.redirect_ntzw(mod, "TraceEvent",
+		[](vcpu&, const std::uint64_t trace_handle, const std::uint32_t flags,
+			const std::uint32_t field_size, const addr_t fields) -> NTSTATUS
+		{
+			THREAD_LOG_INFO("NtTraceEvent(handle=0x{:X}, flags=0x{:X}, fields=0x{:X}/{}): "
+				"nothing consumes a trace, so the event is dropped",
+				trace_handle, flags, fields, field_size);
+
+			return STATUS_SUCCESS;
+		});
+
+	// There is no trace session to control, and nothing wrote the output buffer.
+	state.redirect_ntzw(mod, "TraceControl",
+		[](vcpu&, const std::uint32_t function_code, const addr_t in_buffer,
+			const std::uint32_t in_length, const addr_t out_buffer,
+			const std::uint32_t out_length, emu_object<std::uint32_t> return_length) -> NTSTATUS
+		{
+			if (return_length)
+				return_length.write(0);
+
+			THREAD_LOG_WARN("NtTraceControl(function={}, in=0x{:X}/{}, out=0x{:X}/{}): there is "
+				"no trace session here to control, so nothing was returned",
+				function_code, in_buffer, in_length, out_buffer, out_length);
+
+			return STATUS_SUCCESS;
+		});
+
+	state.redirect_ntzw(mod, "ManageHotPatch",
+		[](vcpu&, const std::uint32_t information_class, const addr_t buffer,
+			const std::uint32_t length, emu_object<std::uint32_t> return_length) -> NTSTATUS
+		{
+			if (return_length)
+				return_length.write(0);
+
+			THREAD_LOG_WARN("NtManageHotPatch(class={}, buffer=0x{:X}/{}): nothing here is hot "
+				"patchable", information_class, buffer, length);
+
+			return STATUS_NOT_SUPPORTED;
+		});
+
+	// Nobody is here to answer the message, so its parameters go to the log --
+	// the mask says which of them are strings.
+	state.redirect_ntzw(mod, "RaiseHardError",
+		[](vcpu& cpu, const NTSTATUS error_status, const std::uint32_t parameter_count,
+			const std::uint32_t unicode_string_mask, const addr_t parameters,
+			const std::uint32_t valid_response_options,
+			emu_object<std::uint32_t> response) -> NTSTATUS
+		{
+			auto& space = *cpu.curr_addr_space();
+
+			THREAD_LOG_ERR("NtRaiseHardError(status=0x{:X}, parameters={}, mask=0x{:X}, "
+				"responses=0x{:X})", error_status, parameter_count, unicode_string_mask,
+				valid_response_options);
+
+			for (std::uint32_t i = 0; parameters && i < parameter_count && i < 32; ++i)
+			{
+				const auto value = space.read_mem<addr_t>(parameters + i * sizeof(addr_t));
+
+				if ((unicode_string_mask >> i) & 1)
+				{
+					const emu_object<_UNICODE_STRING> str(space, value);
+
+					THREAD_LOG_ERR("  parameter[{}] = '{}'", i,
+						narrow_wstring(win::read_unicode_string(str)));
+				}
+				else
+				{
+					THREAD_LOG_ERR("  parameter[{}] = 0x{:X}", i, value);
+				}
+			}
+
+			// ResponseNotHandled.
+			if (response)
+				response.write(1);
+
+			return STATUS_SUCCESS;
+		});
+
+	// There is no shim cache, so a lookup finds nothing and everything else has
+	// nothing to change.
+	state.redirect_ntzw(mod, "ApphelpCacheControl",
+		[](vcpu&, const std::uint32_t service_class, const addr_t data) -> NTSTATUS
+		{
+			THREAD_LOG_WARN("NtApphelpCacheControl(class={}, data=0x{:X}): there is no shim "
+				"cache here", service_class, data);
+
+			return STATUS_SUCCESS;
+		});
+
+	// The answer real Windows gives for a state name nothing published.
+	state.redirect_ntzw(mod, "QueryWnfStateNameInformation",
+		[](vcpu&, const addr_t state_name, const std::uint32_t name_information_class,
+			const addr_t explicit_scope, const addr_t information_buffer,
+			const std::uint32_t information_buffer_size) -> NTSTATUS
+		{
+			THREAD_LOG_WARN("NtQueryWnfStateNameInformation(name=0x{:X}, class={}, scope=0x{:X}, "
+				"buffer=0x{:X}/{}): nothing here publishes a state name",
+				state_name, name_information_class, explicit_scope, information_buffer,
+				information_buffer_size);
+
+			return STATUS_OBJECT_NAME_NOT_FOUND;
+		});
+
+	// Nothing here builds a token, so no handle can name one.
+	state.redirect_ntzw(mod, "QuerySecurityAttributesToken",
+		[](vcpu&, const std::uint64_t token_handle, const addr_t attributes,
+			const std::uint32_t attribute_count, const addr_t buffer,
+			const std::uint32_t length, emu_object<std::uint32_t> return_length) -> NTSTATUS
+		{
+			if (return_length)
+				return_length.write(0);
+
+			THREAD_LOG_WARN("NtQuerySecurityAttributesToken(handle=0x{:X}, attributes=0x{:X}/{}, "
+				"buffer=0x{:X}/{}): nothing here carries a token",
+				token_handle, attributes, attribute_count, buffer, length);
+
+			return STATUS_INVALID_HANDLE;
+		});
+
+	// No UEFI variable store, as ExGetFirmwareEnvironmentVariable also reports.
+	state.redirect_ntzw(mod, "QuerySystemEnvironmentValueEx",
+		[](vcpu&, emu_object<_UNICODE_STRING> variable_name, emu_object<void> vendor_guid,
+			[[maybe_unused]] const addr_t value, emu_object<std::uint32_t> value_length,
+			[[maybe_unused]] emu_object<std::uint32_t> attributes) -> NTSTATUS
+		{
+			if (value_length)
+				value_length.write(0);
+
+			THREAD_LOG_WARN("NtQuerySystemEnvironmentValueEx('{}', guid=0x{:X}): no uefi "
+				"firmware to read from",
+				narrow_wstring(win::read_unicode_string(variable_name)), vendor_guid.address());
+
+			return STATUS_NOT_IMPLEMENTED;
+		});
+
+	// Licence values live under a registry key this registry does not have.
+	state.redirect_ntzw(mod, "QueryLicenseValue",
+		[](vcpu&, emu_object<_UNICODE_STRING> value_name, emu_object<std::uint32_t> type,
+			[[maybe_unused]] const addr_t data, const std::uint32_t data_size,
+			emu_object<std::uint32_t> return_length) -> NTSTATUS
+		{
+			if (return_length)
+				return_length.write(0);
+
+			if (type)
+				type.write(0);
+
+			THREAD_LOG_WARN("NtQueryLicenseValue('{}', buffer={} bytes): nothing here holds "
+				"licence values",
+				narrow_wstring(win::read_unicode_string(value_name)), data_size);
+
+			return STATUS_OBJECT_NAME_NOT_FOUND;
 		});
 
 	// DbgPrompt does not ask anything: it raises a debug service trap and lets
