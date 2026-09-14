@@ -827,6 +827,26 @@ void modules::register_ntoskrnl_misc_ops(win_kernel_state& state, proc_module& m
 			return STATUS_OBJECT_NAME_NOT_FOUND;
 		});
 
+	// The same answer for the data behind such a name. Both outputs are still
+	// written: a caller reads them back even on the failure.
+	state.redirect_ntzw(mod, "QueryWnfStateData",
+		[](vcpu&, const addr_t state_name, const addr_t type_id,
+			const addr_t explicit_scope, emu_object<std::uint32_t> change_stamp,
+			const addr_t buffer, emu_object<std::uint32_t> buffer_size) -> NTSTATUS
+		{
+			if (change_stamp)
+				change_stamp.write(0);
+
+			if (buffer_size)
+				buffer_size.write(0);
+
+			THREAD_LOG_WARN("NtQueryWnfStateData(name=0x{:X}, type=0x{:X}, scope=0x{:X}, "
+				"buffer=0x{:X}): nothing here publishes a state name",
+				state_name, type_id, explicit_scope, buffer);
+
+			return STATUS_OBJECT_NAME_NOT_FOUND;
+		});
+
 	// Nothing here builds a token, so no handle can name one.
 	state.redirect_ntzw(mod, "QuerySecurityAttributesToken",
 		[](vcpu&, const std::uint64_t token_handle, const addr_t attributes,
