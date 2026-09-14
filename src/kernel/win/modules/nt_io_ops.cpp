@@ -337,7 +337,7 @@ void write_status_block(emu_object<_IO_STATUS_BLOCK> block, const open_result& r
 		return;
 
 	_IO_STATUS_BLOCK status{};
-	status.Status = static_cast<long>(result.status);
+	status.Status = static_cast<std::int32_t>(result.status);
 	status.Information = result.information;
 
 	block.write(status);
@@ -481,8 +481,8 @@ void modules::register_ntoskrnl_io_ops(win_kernel_state& state, proc_module& mod
 			// behind it, allocated for the caller to free with ExFreePool.
 			auto& space = *cpu.curr_addr_space();
 			const auto wide = widen_string(host->path);
-			const auto bytes = static_cast<std::uint16_t>(wide.size() * sizeof(wchar_t));
-			const auto size = sizeof(_UNICODE_STRING) + bytes + sizeof(wchar_t);
+			const auto bytes = static_cast<std::uint16_t>(wide.size() * sizeof(char16_t));
+			const auto size = sizeof(_UNICODE_STRING) + bytes + sizeof(char16_t);
 
 			const auto addr = st->pool.allocate(size, pool_tag("IoNm"), true);
 
@@ -493,8 +493,8 @@ void modules::register_ntoskrnl_io_ops(win_kernel_state& state, proc_module& mod
 
 			_UNICODE_STRING name{};
 			name.Length = bytes;
-			name.MaximumLength = static_cast<std::uint16_t>(bytes + sizeof(wchar_t));
-			name.Buffer = guest_ptr<wchar_t>(buffer);
+			name.MaximumLength = static_cast<std::uint16_t>(bytes + sizeof(char16_t));
+			name.Buffer = guest_ptr<char16_t>(buffer);
 
 			emu_object<_UNICODE_STRING>(space, addr).write(name);
 			space.write_mem(buffer, wide.data(), bytes);
@@ -776,7 +776,7 @@ void modules::register_ntoskrnl_io_ops(win_kernel_state& state, proc_module& mod
 
 		const auto& entry = entries[static_cast<std::size_t>(host->position)];
 		const auto wide = widen_string(entry.name);
-		const auto name_bytes = static_cast<std::uint32_t>(wide.size() * sizeof(wchar_t));
+		const auto name_bytes = static_cast<std::uint32_t>(wide.size() * sizeof(char16_t));
 		const auto needed = sizeof(file_directory_information_t) + name_bytes;
 
 		if (length < needed)

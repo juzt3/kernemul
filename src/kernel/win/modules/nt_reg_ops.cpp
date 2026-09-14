@@ -145,9 +145,9 @@ static_assert(sizeof(key_value_basic_information_t) == 0x0C);
 static_assert(sizeof(key_value_partial_information_t) == 0x0C);
 static_assert(sizeof(key_value_full_information_t) == 0x14);
 
-std::uint32_t byte_length(const std::wstring& str)
+std::uint32_t byte_length(const std::u16string& str)
 {
-	return static_cast<std::uint32_t>(str.size() * sizeof(wchar_t));
+	return static_cast<std::uint32_t>(str.size() * sizeof(char16_t));
 }
 
 // Every query here answers the same three questions: how big the answer is,
@@ -199,7 +199,7 @@ std::vector<std::uint8_t> with_tail(const T& head, const void* tail, const std::
 }
 
 std::vector<std::uint8_t> value_response(const std::uint32_t info_class,
-	const std::wstring& value_name, const registry_value& value)
+	const std::u16string& value_name, const registry_value& value)
 {
 	const auto type = static_cast<std::uint32_t>(value.type);
 	const auto name_bytes = byte_length(value_name);
@@ -297,7 +297,7 @@ std::string resolve_key_path(win_kernel_state& state, addr_space& space,
 // RelativeTo names one of a handful of well known roots, and the caller's path
 // hangs off it. RTL_REGISTRY_HANDLE instead means Path is a handle, which
 // nothing here hands out for this purpose.
-std::string resolve_rtl_path(const std::uint32_t relative_to, const std::wstring& path)
+std::string resolve_rtl_path(const std::uint32_t relative_to, const std::u16string& path)
 {
 	const auto relative = win_registry::normalize_path(path);
 
@@ -433,14 +433,14 @@ void modules::register_ntoskrnl_reg_ops(win_kernel_state& state, proc_module& mo
 
 			std::uint32_t max_name = 0;
 			for (const auto& sub : subkeys)
-				max_name = std::max(max_name, static_cast<std::uint32_t>(sub.size() * sizeof(wchar_t)));
+				max_name = std::max(max_name, static_cast<std::uint32_t>(sub.size() * sizeof(char16_t)));
 
 			std::uint32_t max_value_name = 0;
 			std::uint32_t max_value_data = 0;
 			for (const auto& value_name : values)
 			{
 				max_value_name = std::max(max_value_name,
-					static_cast<std::uint32_t>(value_name.size() * sizeof(wchar_t)));
+					static_cast<std::uint32_t>(value_name.size() * sizeof(char16_t)));
 
 				if (const auto* value = host->key->query_value(value_name))
 					max_value_data = std::max(max_value_data,
@@ -846,7 +846,7 @@ void modules::register_ntoskrnl_reg_ops(win_kernel_state& state, proc_module& mo
 			if (io_status_block)
 			{
 				_IO_STATUS_BLOCK status{};
-				status.Status = static_cast<long>(STATUS_SUCCESS);
+				status.Status = static_cast<std::int32_t>(STATUS_SUCCESS);
 				io_status_block.write(status);
 			}
 

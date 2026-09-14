@@ -35,7 +35,7 @@ void modules::register_ntoskrnl_crt_ops(win_kernel_state& state, proc_module& mo
 {
 	auto* st = &state;
 
-	state.redirect(mod, "wcslen", [](vcpu&, std::wstring str) -> std::uint64_t
+	state.redirect(mod, "wcslen", [](vcpu&, std::u16string str) -> std::uint64_t
 	{
 		THREAD_LOG_INFO("wcslen('{}') -> {}", narrow_wstring(str), str.size());
 		return str.size();
@@ -60,7 +60,7 @@ void modules::register_ntoskrnl_crt_ops(win_kernel_state& state, proc_module& mo
 	state.redirect(mod, "_stricmp",
 		[](vcpu&, std::string str1, std::string str2) -> std::int32_t
 		{
-			const auto r = _stricmp(str1.c_str(), str2.c_str());
+			const auto r = compare_ascii_nocase<char>(str1, str2);
 			THREAD_LOG_INFO("_stricmp('{}', '{}') -> {}", str1, str2, r);
 			return r;
 		});
@@ -68,7 +68,8 @@ void modules::register_ntoskrnl_crt_ops(win_kernel_state& state, proc_module& mo
 	state.redirect(mod, "_strnicmp",
 		[](vcpu&, std::string str1, std::string str2, const std::uint64_t count) -> std::int32_t
 		{
-			const auto r = _strnicmp(str1.c_str(), str2.c_str(), count);
+			const auto r = compare_ascii_nocase(str1.c_str(), str2.c_str(),
+				std::min<std::size_t>(count, std::min(str1.size(), str2.size()) + 1));
 			THREAD_LOG_INFO("_strnicmp('{}', '{}', {}) -> {}", str1, str2, count, r);
 			return r;
 		});
@@ -91,13 +92,13 @@ void modules::register_ntoskrnl_crt_ops(win_kernel_state& state, proc_module& mo
 		});
 
 	state.redirect(mod, "wcsncpy",
-		[](vcpu& cpu, const addr_t destination, std::wstring source,
+		[](vcpu& cpu, const addr_t destination, std::u16string source,
 			const std::uint64_t count) -> addr_t
 		{
-			std::wstring out(count, L'\0');
+			std::u16string out(count, u'\0');
 			source.copy(out.data(), std::min<std::size_t>(count, source.size()));
 
-			cpu.curr_addr_space()->write_mem(destination, out.data(), count * sizeof(wchar_t));
+			cpu.curr_addr_space()->write_mem(destination, out.data(), count * sizeof(char16_t));
 
 			THREAD_LOG_INFO("wcsncpy(dest=0x{:X}, '{}', {})",
 				destination, narrow_wstring(source), count);
@@ -123,7 +124,7 @@ void modules::register_ntoskrnl_crt_ops(win_kernel_state& state, proc_module& mo
 
 	state.redirect(mod, "wcscpy_s",
 		[](vcpu& cpu, const addr_t destination, const std::uint64_t size_in_words,
-			std::wstring source) -> std::int32_t
+			std::u16string source) -> std::int32_t
 		{
 			if (!destination || !size_in_words)
 				return crt_einval;
@@ -132,7 +133,7 @@ void modules::register_ntoskrnl_crt_ops(win_kernel_state& state, proc_module& mo
 			{
 				// The _s routines empty the destination on a range failure so a
 				// caller that ignores the result cannot read a partial copy.
-				cpu.curr_addr_space()->write_mem<wchar_t>(destination, L'\0');
+				cpu.curr_addr_space()->write_mem<char16_t>(destination, u'\0');
 				return crt_erange;
 			}
 
@@ -147,7 +148,7 @@ void modules::register_ntoskrnl_crt_ops(win_kernel_state& state, proc_module& mo
 
 	state.redirect(mod, "wcscat_s",
 		[](vcpu& cpu, const addr_t destination, const std::uint64_t size_in_words,
-			std::wstring source) -> std::int32_t
+			std::u16string source) -> std::int32_t
 		{
 			if (!destination || !size_in_words)
 				return crt_einval;
@@ -157,7 +158,7 @@ void modules::register_ntoskrnl_crt_ops(win_kernel_state& state, proc_module& mo
 
 			if (existing.size() + source.size() + 1 > size_in_words)
 			{
-				space.write_mem<wchar_t>(destination, L'\0');
+				space.write_mem<char16_t>(destination, u'\0');
 				return crt_erange;
 			}
 
@@ -197,7 +198,7 @@ void modules::register_ntoskrnl_crt_ops(win_kernel_state& state, proc_module& mo
 	// destination and return -1, which is what their constraint handler would
 	// leave behind had one been installed.
 	auto write_formatted = [](vcpu& cpu, const addr_t destination,
-		const std::uint64_t count, const std::wstring& text, const bool secure) -> std::int32_t
+		const std::uint64_t count, const std::u16string& text, const bool secure) -> std::int32_t
 	{
 		auto& space = *cpu.curr_addr_space();
 
@@ -208,13 +209,13 @@ void modules::register_ntoskrnl_crt_ops(win_kernel_state& state, proc_module& mo
 		{
 			if (secure)
 			{
-				space.write_mem<wchar_t>(destination, L'\0');
+				space.write_mem<char16_t>(destination, u'\0');
 				return -1;
 			}
 
 			// Truncated, and deliberately not terminated: that is what the
 			// non-secure form does when the text fills the buffer exactly.
-			space.write_mem(destination, text.data(), count * sizeof(wchar_t));
+			space.write_mem(destination, text.data(), count * sizeof(char16_t));
 			return -1;
 		}
 
@@ -228,7 +229,7 @@ void modules::register_ntoskrnl_crt_ops(win_kernel_state& state, proc_module& mo
 
 	state.redirect(mod, "_snwprintf",
 		[write_formatted](vcpu& cpu, const addr_t destination, const std::uint64_t count,
-			std::wstring format) -> std::int32_t
+			std::u16string format) -> std::int32_t
 		{
 			const auto text = guest::vswprintf(*cpu.curr_addr_space(), format, varargs(cpu, 3));
 			return write_formatted(cpu, destination, count, text, false);
@@ -236,7 +237,7 @@ void modules::register_ntoskrnl_crt_ops(win_kernel_state& state, proc_module& mo
 
 	state.redirect(mod, "swprintf_s",
 		[write_formatted](vcpu& cpu, const addr_t destination, const std::uint64_t size_in_words,
-			std::wstring format) -> std::int32_t
+			std::u16string format) -> std::int32_t
 		{
 			const auto text = guest::vswprintf(*cpu.curr_addr_space(), format, varargs(cpu, 3));
 			return write_formatted(cpu, destination, size_in_words, text, true);
@@ -244,7 +245,7 @@ void modules::register_ntoskrnl_crt_ops(win_kernel_state& state, proc_module& mo
 
 	state.redirect(mod, "_vsnwprintf",
 		[write_formatted](vcpu& cpu, const addr_t destination, const std::uint64_t count,
-			std::wstring format, const addr_t arg_list) -> std::int32_t
+			std::u16string format, const addr_t arg_list) -> std::int32_t
 		{
 			auto& space = *cpu.curr_addr_space();
 			const auto text = guest::vswprintf(space, format, guest::va_list_args(space, arg_list));
@@ -253,7 +254,7 @@ void modules::register_ntoskrnl_crt_ops(win_kernel_state& state, proc_module& mo
 
 	state.redirect(mod, "vswprintf_s",
 		[write_formatted](vcpu& cpu, const addr_t destination, const std::uint64_t size_in_words,
-			std::wstring format, const addr_t arg_list) -> std::int32_t
+			std::u16string format, const addr_t arg_list) -> std::int32_t
 		{
 			auto& space = *cpu.curr_addr_space();
 			const auto text = guest::vswprintf(space, format, guest::va_list_args(space, arg_list));
@@ -309,7 +310,7 @@ void modules::register_ntoskrnl_crt_ops(win_kernel_state& state, proc_module& mo
 
 	state.redirect(mod, "_vsnwprintf_s",
 		[write_counted](vcpu& cpu, const addr_t destination, const std::uint64_t size_in_words,
-			const std::uint64_t max_count, std::wstring format, const addr_t arg_list) -> std::int32_t
+			const std::uint64_t max_count, std::u16string format, const addr_t arg_list) -> std::int32_t
 		{
 			auto& space = *cpu.curr_addr_space();
 			const auto text = guest::vswprintf(space, format, guest::va_list_args(space, arg_list));

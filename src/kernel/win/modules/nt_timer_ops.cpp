@@ -242,8 +242,8 @@ void modules::register_ntoskrnl_timer_ops(win_kernel_state& state, proc_module& 
 			const emu_object<_KTIMER> timer(*cpu.curr_addr_space(), entry->body_addr);
 
 			timer.field(&_KTIMER::DueTime).field(&_ULARGE_INTEGER::QuadPart)
-				.write(static_cast<unsigned __int64>(when.deadline));
-			timer.field(&_KTIMER::Period).write(static_cast<unsigned long>(
+				.write(static_cast<std::uint64_t>(when.deadline));
+			timer.field(&_KTIMER::Period).write(static_cast<std::uint32_t>(
 				interval / 10000));
 
 			THREAD_LOG_WARN("NtSetTimer2(0x{:X}, due={}, period={}, parameters=0x{:X}): nothing "

@@ -39,13 +39,13 @@ void modules::register_ntoskrnl_string_ops(win_kernel_state& state, proc_module&
 			auto& space = *cpu.curr_addr_space();
 
 			_UNICODE_STRING out{};
-			out.Buffer = guest_ptr<wchar_t>(source);
+			out.Buffer = guest_ptr<char16_t>(source);
 
 			if (source)
 			{
 				const auto s = guest::read_wstring(space, source);
-				out.Length = static_cast<unsigned short>(s.size() * sizeof(wchar_t));
-				out.MaximumLength = static_cast<unsigned short>(out.Length + sizeof(wchar_t));
+				out.Length = static_cast<unsigned short>(s.size() * sizeof(char16_t));
+				out.MaximumLength = static_cast<unsigned short>(out.Length + sizeof(char16_t));
 			}
 
 			destination.write(out);
@@ -115,7 +115,7 @@ void modules::register_ntoskrnl_string_ops(win_kernel_state& state, proc_module&
 			const auto b = win::read_unicode_string(string);
 
 			const bool is_prefix = a.size() <= b.size()
-				&& win::compare_unicode(a, std::wstring_view(b).substr(0, a.size()),
+				&& win::compare_unicode(a, std::u16string_view(b).substr(0, a.size()),
 					case_insensitive != 0) == 0;
 
 			THREAD_LOG_INFO("RtlPrefixUnicodeString('{}', '{}', ci={}) -> {}",
@@ -132,7 +132,7 @@ void modules::register_ntoskrnl_string_ops(win_kernel_state& state, proc_module&
 			const auto b = win::read_ansi_string(string2);
 
 			const auto r = case_insensitive
-				? _strnicmp(a.c_str(), b.c_str(), std::min(a.size(), b.size()))
+				? compare_ascii_nocase(a.c_str(), b.c_str(), std::min(a.size(), b.size()))
 				: a.compare(b);
 
 			// A shared prefix leaves the shorter string the lesser, which the
@@ -186,17 +186,17 @@ void modules::register_ntoskrnl_string_ops(win_kernel_state& state, proc_module&
 				space.read_mem(multi_byte_string, narrow.data(), bytes_in_multi_byte_string);
 
 			const auto chars = std::min<std::size_t>(narrow.size(),
-				max_bytes_in_unicode_string / sizeof(wchar_t));
+				max_bytes_in_unicode_string / sizeof(char16_t));
 			const auto wide = widen_string(std::string_view(narrow).substr(0, chars));
 
 			if (bytes_in_unicode_string)
-				bytes_in_unicode_string.write(static_cast<std::uint32_t>(wide.size() * sizeof(wchar_t)));
+				bytes_in_unicode_string.write(static_cast<std::uint32_t>(wide.size() * sizeof(char16_t)));
 
 			if (unicode_string && !wide.empty())
-				space.write_mem(unicode_string, wide.data(), wide.size() * sizeof(wchar_t));
+				space.write_mem(unicode_string, wide.data(), wide.size() * sizeof(char16_t));
 
 			THREAD_LOG_INFO("RtlMultiByteToUnicodeN(in={} bytes, out={} bytes) -> '{}'",
-				bytes_in_multi_byte_string, wide.size() * sizeof(wchar_t), narrow_wstring(wide));
+				bytes_in_multi_byte_string, wide.size() * sizeof(char16_t), narrow_wstring(wide));
 
 			return STATUS_SUCCESS;
 		});
@@ -208,7 +208,7 @@ void modules::register_ntoskrnl_string_ops(win_kernel_state& state, proc_module&
 		{
 			auto& space = *cpu.curr_addr_space();
 
-			std::wstring wide(unicode_string_byte_count / sizeof(wchar_t), L'\0');
+			std::u16string wide(unicode_string_byte_count / sizeof(char16_t), u'\0');
 
 			if (unicode_string_byte_count)
 				space.read_mem(unicode_string_source, wide.data(), unicode_string_byte_count);
@@ -265,8 +265,8 @@ void modules::register_ntoskrnl_string_ops(win_kernel_state& state, proc_module&
 
 			// Room for a terminator is part of what the caller has to have,
 			// even though Length does not count it.
-			const auto length = wide.size() * sizeof(wchar_t);
-			const auto needed = length + sizeof(wchar_t);
+			const auto length = wide.size() * sizeof(char16_t);
+			const auto needed = length + sizeof(char16_t);
 
 			if (needed > max_counted_string_bytes)
 			{
@@ -288,7 +288,7 @@ void modules::register_ntoskrnl_string_ops(win_kernel_state& state, proc_module&
 					return STATUS_NO_MEMORY;
 				}
 
-				out.Buffer = guest_ptr<wchar_t>(buffer);
+				out.Buffer = guest_ptr<char16_t>(buffer);
 				out.MaximumLength = static_cast<unsigned short>(needed);
 			}
 			else if (needed > out.MaximumLength)
@@ -302,7 +302,7 @@ void modules::register_ntoskrnl_string_ops(win_kernel_state& state, proc_module&
 			destination_string.write(out);
 
 			guest::write_wstring_buffer(*cpu.curr_addr_space(), guest_va(out.Buffer),
-				out.MaximumLength / sizeof(wchar_t), wide);
+				out.MaximumLength / sizeof(char16_t), wide);
 
 			THREAD_LOG_INFO("RtlAnsiStringToUnicodeString('{}', allocate={}) -> 0x{:X}, {} bytes",
 				narrow, allocate_destination_string, guest_va(out.Buffer), out.Length);
@@ -366,10 +366,10 @@ void modules::register_ntoskrnl_string_ops(win_kernel_state& state, proc_module&
 				return STATUS_SUCCESS;
 			}
 
-			const auto length = source.size() * sizeof(wchar_t);
+			const auto length = source.size() * sizeof(char16_t);
 			const auto needed = (flags & duplicate_null_terminate)
-				? length + sizeof(wchar_t)
-				: std::max<std::size_t>(length, sizeof(wchar_t));
+				? length + sizeof(char16_t)
+				: std::max<std::size_t>(length, sizeof(char16_t));
 
 			const auto buffer = st->pool.allocate(needed, string_pool_tag, true);
 
@@ -385,7 +385,7 @@ void modules::register_ntoskrnl_string_ops(win_kernel_state& state, proc_module&
 			string_out.write(_UNICODE_STRING{
 				.Length = static_cast<unsigned short>(length),
 				.MaximumLength = static_cast<unsigned short>(needed),
-				.Buffer = guest_ptr<wchar_t>(buffer),
+				.Buffer = guest_ptr<char16_t>(buffer),
 			});
 
 			THREAD_LOG_INFO("RtlDuplicateUnicodeString(flags=0x{:X}, '{}') -> 0x{:X}, {} bytes",

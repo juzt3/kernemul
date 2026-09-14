@@ -373,7 +373,7 @@ void modules::register_ntoskrnl_object_ops(win_kernel_state& state, proc_module&
 			}
 
 			const auto target = widen_string(host->target);
-			const auto needed = static_cast<std::uint16_t>(target.size() * sizeof(wchar_t));
+			const auto needed = static_cast<std::uint16_t>(target.size() * sizeof(char16_t));
 
 			if (returned_length)
 				returned_length.write(needed);

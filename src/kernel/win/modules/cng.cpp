@@ -19,8 +19,8 @@ namespace
 // hashes a buffer here gets the digest it would get on Windows.
 struct algorithm_host final : win_object
 {
-	std::wstring id;
-	std::wstring chaining_mode = L"ChainingModeCBC";
+	std::u16string id;
+	std::u16string chaining_mode = u"ChainingModeCBC";
 	const EVP_MD* digest = nullptr;
 	bool symmetric = false;
 	std::size_t key_length = 0;
@@ -43,26 +43,26 @@ struct hash_host final : win_object
 struct key_host final : win_object
 {
 	std::vector<std::uint8_t> key;
-	std::wstring algorithm;
-	std::wstring chaining_mode;
+	std::u16string algorithm;
+	std::u16string chaining_mode;
 };
 
-const EVP_MD* digest_for(const std::wstring_view id)
+const EVP_MD* digest_for(const std::u16string_view id)
 {
-	if (id == L"MD5")    return EVP_md5();
-	if (id == L"SHA1")   return EVP_sha1();
-	if (id == L"SHA256") return EVP_sha256();
-	if (id == L"SHA384") return EVP_sha384();
-	if (id == L"SHA512") return EVP_sha512();
+	if (id == u"MD5")    return EVP_md5();
+	if (id == u"SHA1")   return EVP_sha1();
+	if (id == u"SHA256") return EVP_sha256();
+	if (id == u"SHA384") return EVP_sha384();
+	if (id == u"SHA512") return EVP_sha512();
 
 	return nullptr;
 }
 
 // AES is the only symmetric algorithm a driver here is likely to ask for, and
 // the cipher depends on the key length the caller ends up importing.
-const EVP_CIPHER* cipher_for(const std::wstring_view chaining_mode, const std::size_t key_bytes)
+const EVP_CIPHER* cipher_for(const std::u16string_view chaining_mode, const std::size_t key_bytes)
 {
-	const bool cbc = chaining_mode != L"ChainingModeECB";
+	const bool cbc = chaining_mode != u"ChainingModeECB";
 
 	switch (key_bytes)
 	{
@@ -74,10 +74,10 @@ const EVP_CIPHER* cipher_for(const std::wstring_view chaining_mode, const std::s
 }
 
 // BCRYPT_* property names, read and written as counted wide strings.
-constexpr std::wstring_view property_object_length = L"ObjectLength";
-constexpr std::wstring_view property_hash_length = L"HashDigestLength";
-constexpr std::wstring_view property_chaining_mode = L"ChainingMode";
-constexpr std::wstring_view property_block_length = L"BlockLength";
+constexpr std::u16string_view property_object_length = u"ObjectLength";
+constexpr std::u16string_view property_hash_length = u"HashDigestLength";
+constexpr std::u16string_view property_chaining_mode = u"ChainingMode";
+constexpr std::u16string_view property_block_length = u"BlockLength";
 
 // The opaque object a caller allocates for a hash or a key. Nothing here uses
 // it -- the state is host side -- but the caller sizes its allocation from
@@ -130,7 +130,7 @@ void modules::register_cng(win_kernel_state& state, proc_module& mod)
 			auto host = std::make_shared<algorithm_host>();
 			host->id = id;
 			host->digest = digest_for(id);
-			host->symmetric = id == L"AES";
+			host->symmetric = id == u"AES";
 
 			if (!host->digest && !host->symmetric)
 			{
@@ -216,7 +216,7 @@ void modules::register_cng(win_kernel_state& state, proc_module& mod)
 			else if (name == property_chaining_mode)
 			{
 				const auto bytes = static_cast<std::uint32_t>(
-					(algorithm->chaining_mode.size() + 1) * sizeof(wchar_t));
+					(algorithm->chaining_mode.size() + 1) * sizeof(char16_t));
 
 				if (result_size)
 					result_size.write(bytes);

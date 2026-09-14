@@ -1,5 +1,7 @@
 #pragma once
 #include "../emu/addr_space.hpp"
+#include <algorithm>
+#include <cstddef>
 #include <string>
 #include <string_view>
 
@@ -9,7 +11,62 @@ struct string_view_hash
 	size_t operator()(std::string_view s) const { return std::hash<std::string_view>{}(s); }
 };
 
-inline std::string narrow_wstring(std::wstring_view wide)
+// NT folds case against its own upcase table rather than the host locale, which
+// differs from either above ascii -- and ascii is the whole of what a guest
+// driver names. Folding here rather than reaching for a CRT routine also keeps
+// one spelling: _stricmp and _wcsnicmp are MSVC's, strcasecmp and wcsncasecmp
+// are POSIX's, and neither pair exists for char16_t at all.
+constexpr char ascii_lower(const char c)
+{
+	return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c;
+}
+
+constexpr char16_t ascii_lower(const char16_t c)
+{
+	return c >= u'A' && c <= u'Z' ? static_cast<char16_t>(c - u'A' + u'a') : c;
+}
+
+inline std::string ascii_lower(const std::string_view s)
+{
+	std::string out(s);
+	for (auto& c : out)
+		c = ascii_lower(c);
+	return out;
+}
+
+// The sign of the first folded difference, which is all the Rtl and CRT
+// comparisons promise. Bounded by `count`, so neither side is read past its end
+// -- a counted guest string is very often not terminated at all.
+template <typename T>
+constexpr int compare_ascii_nocase(const T* const a, const T* const b, const std::size_t count)
+{
+	for (std::size_t i = 0; i < count; ++i)
+	{
+		const auto ca = ascii_lower(a[i]);
+		const auto cb = ascii_lower(b[i]);
+
+		if (ca != cb)
+			return ca < cb ? -1 : 1;
+	}
+
+	return 0;
+}
+
+// The whole of both strings: a shared prefix leaves the shorter one the lesser,
+// which the bounded compare above cannot say on its own.
+template <typename T>
+constexpr int compare_ascii_nocase(const std::basic_string_view<T> a, const std::basic_string_view<T> b)
+{
+	if (const auto diff = compare_ascii_nocase(a.data(), b.data(), std::min(a.size(), b.size())))
+		return diff;
+
+	if (a.size() == b.size())
+		return 0;
+
+	return a.size() < b.size() ? -1 : 1;
+}
+
+inline std::string narrow_wstring(std::u16string_view wide)
 {
 	std::string result;
 	result.reserve(wide.size());
@@ -18,12 +75,12 @@ inline std::string narrow_wstring(std::wstring_view wide)
 	return result;
 }
 
-inline std::wstring widen_string(std::string_view narrow)
+inline std::u16string widen_string(std::string_view narrow)
 {
-	std::wstring result;
+	std::u16string result;
 	result.reserve(narrow.size());
 	for (const auto c : narrow)
-		result += static_cast<wchar_t>(static_cast<unsigned char>(c));
+		result += static_cast<char16_t>(static_cast<unsigned char>(c));
 	return result;
 }
 
@@ -48,9 +105,9 @@ inline std::string read_string(addr_space& space, addr_t addr, std::size_t max_c
 	return read_basic_string<char>(space, addr, max_chars);
 }
 
-inline std::wstring read_wstring(addr_space& space, addr_t addr, std::size_t max_chars = 4096)
+inline std::u16string read_wstring(addr_space& space, addr_t addr, std::size_t max_chars = 4096)
 {
-	return read_basic_string<wchar_t>(space, addr, max_chars);
+	return read_basic_string<char16_t>(space, addr, max_chars);
 }
 
 template <typename T>
@@ -68,9 +125,9 @@ inline void write_string_buffer(addr_space& space, addr_t addr, std::size_t buf_
 	write_basic_string_buffer<char>(space, addr, buf_count, str);
 }
 
-inline void write_wstring_buffer(addr_space& space, addr_t addr, std::size_t buf_count, std::wstring_view str)
+inline void write_wstring_buffer(addr_space& space, addr_t addr, std::size_t buf_count, std::u16string_view str)
 {
-	write_basic_string_buffer<wchar_t>(space, addr, buf_count, str);
+	write_basic_string_buffer<char16_t>(space, addr, buf_count, str);
 }
 
 // Space is anything exposing addr_space's alloc/write_mem interface, so guest strings
@@ -96,9 +153,9 @@ addr_t allocate_string(Space& space, std::string_view str, bool terminate = true
 }
 
 template <typename Space>
-addr_t allocate_wstring(Space& space, std::wstring_view str, bool terminate = true)
+addr_t allocate_wstring(Space& space, std::u16string_view str, bool terminate = true)
 {
-	return allocate_basic_string<wchar_t>(space, str, terminate);
+	return allocate_basic_string<char16_t>(space, str, terminate);
 }
 
 }

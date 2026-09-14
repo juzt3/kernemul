@@ -75,6 +75,9 @@ endif()
 
 [conditions]
 windows = "WIN32"
+# -Wno-changes-meaning is gcc's own spelling; clang rejects it as an unknown
+# warning option and msvc as an unknown flag.
+gnu = "CMAKE_CXX_COMPILER_ID STREQUAL \"GNU\""
 arch-x64 = "KERNEMUL_ARCH STREQUAL \"x64\""
 arch-arm64 = "KERNEMUL_ARCH STREQUAL \"arm64\""
 whp = "KERNEMUL_BACKEND STREQUAL \"whp\""
@@ -100,7 +103,7 @@ include-directories = ["src", "vendor/pe/src", "vendor/ia32-doc/out"]
 compile-features = ["cxx_std_23"]
 link-libraries = ["spdlog::spdlog", "unicorn", "raw_pdb", "Boost::beast", "OpenSSL::SSL", "OpenSSL::Crypto"]
 windows.link-libraries = ["ws2_32"]
-compile-options = ["-Wno-changes-meaning"]
+gnu.compile-options = ["-Wno-changes-meaning"]
 arch-x64.compile-definitions = ["KERNEMUL_ARCH_X64=1"]
 arch-arm64.compile-definitions = ["KERNEMUL_ARCH_ARM64=1"]
 whp.sources = ["vendor/hypermulator/src/**.cpp", "vendor/hypermulator/src/**.hpp"]

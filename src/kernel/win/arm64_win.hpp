@@ -53,7 +53,7 @@ public:
 			ctx.Lr = regs.get(arm64::lr);
 			ctx.Sp = regs.get(arm64::sp);
 			ctx.Pc = regs.get(arm64::pc);
-			ctx.Cpsr = static_cast<unsigned long>(regs.get(arm64::pstate));
+			ctx.Cpsr = static_cast<std::uint32_t>(regs.get(arm64::pstate));
 		}
 
 		ctx.ContextFlags = filled;

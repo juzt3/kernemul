@@ -266,7 +266,7 @@ void modules::register_fltmgr(win_kernel_state& state, proc_module& mod)
 			}
 
 			const auto wide = widen_string(host->path);
-			const auto bytes = static_cast<std::uint16_t>(wide.size() * sizeof(wchar_t));
+			const auto bytes = static_cast<std::uint16_t>(wide.size() * sizeof(char16_t));
 			const auto size = sizeof(flt_file_name_information_t) + bytes;
 
 			const auto addr = st->pool.allocate(size, pool_tag("FltN"), true);
@@ -284,7 +284,7 @@ void modules::register_fltmgr(win_kernel_state& state, proc_module& mod)
 			info.format = name_options;
 			info.name.Length = bytes;
 			info.name.MaximumLength = bytes;
-			info.name.Buffer = guest_ptr<wchar_t>(buffer);
+			info.name.Buffer = guest_ptr<char16_t>(buffer);
 
 			auto& space = *cpu.curr_addr_space();
 			emu_object<flt_file_name_information_t>(space, addr).write(info);
@@ -327,34 +327,34 @@ void modules::register_fltmgr(win_kernel_state& state, proc_module& mod)
 			auto& space = *cpu.curr_addr_space();
 
 			const auto buffer = guest_va(info.name.Buffer);
-			const auto chars = info.name.Length / sizeof(wchar_t);
+			const auto chars = info.name.Length / sizeof(char16_t);
 
 			if (!buffer || !chars)
 				return STATUS_INVALID_PARAMETER;
 
-			std::wstring path(chars, L'\0');
+			std::u16string path(chars, u'\0');
 			space.read_mem(buffer, path.data(), info.name.Length);
 
-			const auto slash = path.find_last_of(L"\\/");
-			const auto component_at = slash == std::wstring::npos ? 0 : slash + 1;
+			const auto slash = path.find_last_of(u"\\/");
+			const auto component_at = slash == std::u16string::npos ? 0 : slash + 1;
 
 			const auto counted = [&](const std::size_t at, const std::size_t count)
 			{
-				const auto bytes = static_cast<std::uint16_t>(count * sizeof(wchar_t));
+				const auto bytes = static_cast<std::uint16_t>(count * sizeof(char16_t));
 
 				return _UNICODE_STRING{
 					.Length = bytes,
 					.MaximumLength = bytes,
-					.Buffer = guest_ptr<wchar_t>(buffer + at * sizeof(wchar_t)),
+					.Buffer = guest_ptr<char16_t>(buffer + at * sizeof(char16_t)),
 				};
 			};
 
 			info.parent_dir = counted(0, component_at);
 			info.final_component = counted(component_at, chars - component_at);
 
-			const auto dot = path.find_last_of(L'.');
+			const auto dot = path.find_last_of(u'.');
 
-			if (dot != std::wstring::npos && dot > component_at)
+			if (dot != std::u16string::npos && dot > component_at)
 				info.extension = counted(dot + 1, chars - dot - 1);
 
 			file_name_information.write(info);

@@ -455,7 +455,7 @@ void modules::register_ntoskrnl_misc_ops(win_kernel_state& state, proc_module& m
 			if (!symbolic_link_list)
 				return STATUS_INVALID_PARAMETER;
 
-			const auto list = st->pool.allocate(2 * sizeof(wchar_t),
+			const auto list = st->pool.allocate(2 * sizeof(char16_t),
 				pool_tag("IoDi"), true);
 
 			if (!list)

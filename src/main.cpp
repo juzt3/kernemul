@@ -67,7 +67,7 @@ int main()
 
 	// What Windows hands a driver: the object it hangs everything it exposes
 	// off, and the service key it was started from.
-	auto args = kernel.create_driver(*driver, L"test_driver");
+	auto args = kernel.create_driver(*driver, u"test_driver");
 
 	win.create_vcpus(vcpu_count);
 

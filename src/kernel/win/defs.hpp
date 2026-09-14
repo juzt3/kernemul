@@ -36,7 +36,7 @@ struct _RTL_OSVERSIONINFOW
 	std::uint32_t dwMinorVersion;
 	std::uint32_t dwBuildNumber;
 	std::uint32_t dwPlatformId;
-	wchar_t szCSDVersion[128];
+	char16_t szCSDVersion[128];
 };
 
 struct _RTL_OSVERSIONINFOEXW
@@ -46,7 +46,7 @@ struct _RTL_OSVERSIONINFOEXW
 	std::uint32_t dwMinorVersion;
 	std::uint32_t dwBuildNumber;
 	std::uint32_t dwPlatformId;
-	wchar_t szCSDVersion[128];
+	char16_t szCSDVersion[128];
 	std::uint16_t wServicePackMajor;
 	std::uint16_t wServicePackMinor;
 	std::uint16_t wSuiteMask;
@@ -57,7 +57,7 @@ struct _RTL_OSVERSIONINFOEXW
 
 // The guest's WCHAR is two bytes whatever the host compiler makes of its own,
 // and these structs are the guest's.
-static_assert(sizeof(wchar_t) == 2, "guest WCHAR is 2 bytes");
+static_assert(sizeof(char16_t) == 2, "guest WCHAR is 2 bytes");
 static_assert(sizeof(_RTL_OSVERSIONINFOW) == 0x114);
 static_assert(sizeof(_RTL_OSVERSIONINFOEXW) == 0x11C);
 

@@ -98,7 +98,7 @@ filter_pointers build_exception_pointers(vcpu& cpu, windows_emulator& emulator,
 	const auto ptr = [](const addr_t a) { return static_cast<std::uintptr_t>(a); };
 
 	_EXCEPTION_RECORD record{};
-	record.ExceptionCode = static_cast<long>(info.code);
+	record.ExceptionCode = static_cast<std::int32_t>(info.code);
 	record.ExceptionAddress = reinterpret_cast<void*>(ptr(info.exception_address));
 
 	if (info.code == status_access_violation)

@@ -101,7 +101,7 @@ public:
 			ctx.Rsp = regs.get(x86::rsp);
 			ctx.Rbp = regs.get(x86::rbp);
 			ctx.Rip = regs.get(x86::rip);
-			ctx.EFlags = static_cast<unsigned long>(regs.get(x86::rflags));
+			ctx.EFlags = static_cast<std::uint32_t>(regs.get(x86::rflags));
 			ctx.SegCs = x86_win_seg::kernel_cs;
 			ctx.SegSs = x86_win_seg::kernel_ds;
 		}

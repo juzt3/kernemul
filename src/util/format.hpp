@@ -62,22 +62,22 @@ std::basic_string<CharT> vformat(addr_space& space, std::basic_string_view<CharT
 
 	auto append_null = [&]() {
 		if constexpr (std::is_same_v<CharT, char>) result += "(null)";
-		else result += L"(null)";
+		else result += u"(null)";
 	};
 
-	auto format_spec = [&](const std::basic_string<CharT>& spec_str, auto val) {
-		CharT buf[256]{};
-		if constexpr (std::is_same_v<CharT, char>)
-			std::snprintf(buf, std::size(buf), spec_str.c_str(), val);
-		else
-			std::swprintf(buf, std::size(buf), spec_str.c_str(), val);
-		result += buf;
+	// Every conversion routed here prints ascii, so one narrow snprintf serves
+	// both widths -- and swprintf, which has no char16_t form, is not needed.
+	auto format_spec = [&](const std::string& host_spec, auto val) {
+		char buf[256]{};
+		std::snprintf(buf, std::size(buf), host_spec.c_str(), val);
+		if constexpr (std::is_same_v<CharT, char>) result += buf;
+		else result += widen_string(buf);
 	};
 
 	auto read_unicode_string = [&](addr_t ptr) {
 		const auto ws = read_wstring(space,
 			space.read_mem<std::uint64_t>(ptr + 8),
-			space.read_mem<std::uint16_t>(ptr) / sizeof(wchar_t));
+			space.read_mem<std::uint16_t>(ptr) / sizeof(char16_t));
 		if constexpr (std::is_same_v<CharT, char>) result += narrow_wstring(ws);
 		else result += ws;
 	};
@@ -101,18 +101,36 @@ std::basic_string<CharT> vformat(addr_space& space, std::basic_string_view<CharT
 		if (++i >= fmt.size()) break;
 		if (fmt[i] == pct) { result += pct; continue; }
 
+		// Flags, width and precision mean the same to every host printf, so they
+		// carry over as written -- except a '*', whose value came off the guest's
+		// argument list and is spelled out here rather than left for the host to
+		// go looking for.
+		std::string mods;
+
 		while (i < fmt.size() && (fmt[i] == CharT('-') || fmt[i] == CharT('+') ||
 			fmt[i] == CharT(' ') || fmt[i] == CharT('0') || fmt[i] == CharT('#')))
-			++i;
+			mods += static_cast<char>(fmt[i++]);
 
-		if (i < fmt.size() && fmt[i] == CharT('*')) { next_arg(); ++i; }
-		else while (i < fmt.size() && fmt[i] >= CharT('0') && fmt[i] <= CharT('9')) ++i;
+		if (i < fmt.size() && fmt[i] == CharT('*'))
+		{
+			mods += std::to_string(static_cast<std::int32_t>(next_arg()));
+			++i;
+		}
+		else while (i < fmt.size() && fmt[i] >= CharT('0') && fmt[i] <= CharT('9'))
+			mods += static_cast<char>(fmt[i++]);
 
 		if (i < fmt.size() && fmt[i] == CharT('.'))
 		{
+			mods += '.';
 			++i;
-			if (i < fmt.size() && fmt[i] == CharT('*')) { next_arg(); ++i; }
-			else while (i < fmt.size() && fmt[i] >= CharT('0') && fmt[i] <= CharT('9')) ++i;
+
+			if (i < fmt.size() && fmt[i] == CharT('*'))
+			{
+				mods += std::to_string(static_cast<std::int32_t>(next_arg()));
+				++i;
+			}
+			else while (i < fmt.size() && fmt[i] >= CharT('0') && fmt[i] <= CharT('9'))
+				mods += static_cast<char>(fmt[i++]);
 		}
 
 		const auto length = detail::parse_length_mod<CharT>(fmt, i);
@@ -135,6 +153,15 @@ std::basic_string<CharT> vformat(addr_space& space, std::basic_string_view<CharT
 		const CharT spec = fmt[i];
 		const std::basic_string<CharT> spec_str(fmt.substr(spec_start, i - spec_start + 1));
 
+		// The length modifier is re-emitted to match the width cast below rather
+		// than carried over: the guest writes MSVC's spelling, where %l is four
+		// bytes and %I64 is how it says eight. A host that is not MSVC reads %l as
+		// eight and %I as a flag of its own, so passing the guest's text through
+		// would have it read the wrong number of bytes off the argument list.
+		auto host_spec = [&mods](const bool as_64bit, const CharT conv) {
+			return "%" + mods + (as_64bit ? "ll" : "") + static_cast<char>(conv);
+		};
+
 		switch (spec)
 		{
 		case CharT('d'): case CharT('i'): case CharT('u'):
@@ -142,13 +169,13 @@ std::basic_string<CharT> vformat(addr_space& space, std::basic_string_view<CharT
 		{
 			const auto raw = next_arg();
 			if (detail::is_64bit(length))
-				format_spec(spec_str, static_cast<std::uint64_t>(raw));
+				format_spec(host_spec(true, spec), static_cast<std::uint64_t>(raw));
 			else
-				format_spec(spec_str, static_cast<std::uint32_t>(raw));
+				format_spec(host_spec(false, spec), static_cast<std::uint32_t>(raw));
 			break;
 		}
 		case CharT('p'):
-			format_spec(spec_str, reinterpret_cast<void*>(next_arg()));
+			format_spec(host_spec(false, spec), reinterpret_cast<void*>(next_arg()));
 			break;
 		case CharT('s'):
 		{
@@ -169,9 +196,9 @@ std::basic_string<CharT> vformat(addr_space& space, std::basic_string_view<CharT
 		case CharT('C'):
 		{
 			if constexpr (std::is_same_v<CharT, char>)
-				result += static_cast<char>(static_cast<wchar_t>(next_arg()));
+				result += static_cast<char>(static_cast<char16_t>(next_arg()));
 			else
-				result += static_cast<wchar_t>(static_cast<char>(next_arg()));
+				result += static_cast<char16_t>(static_cast<char>(next_arg()));
 			break;
 		}
 		default:
@@ -190,9 +217,9 @@ std::string vsprintf(addr_space& space, std::string_view fmt, NextArg next_arg)
 }
 
 template <typename NextArg>
-std::wstring vswprintf(addr_space& space, std::wstring_view fmt, NextArg next_arg)
+std::u16string vswprintf(addr_space& space, std::u16string_view fmt, NextArg next_arg)
 {
-	return vformat<wchar_t>(space, fmt, std::move(next_arg));
+	return vformat<char16_t>(space, fmt, std::move(next_arg));
 }
 
 // The arguments behind a va_list the guest passed in, for the routines that

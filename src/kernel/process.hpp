@@ -18,6 +18,12 @@
 struct proc_module
 {
 	std::string name;
+
+	// What find_module matches on: name folded to lower case. A PE import
+	// descriptor names its module in whatever case the linker felt like --
+	// FLTMGR.SYS is as common as fltmgr.sys -- and Windows resolves imports
+	// case-insensitively, so the emulator has to as well.
+	std::string lookup_name;
 	addr_t addr;
 	std::uint32_t size;
 	addr_t entry_point;

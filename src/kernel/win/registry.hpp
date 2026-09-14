@@ -37,7 +37,7 @@ public:
 
 	void set_dword(std::string_view name, std::uint32_t value);
 	void set_qword(std::string_view name, std::uint64_t value);
-	void set_string(std::string_view name, std::wstring_view value);
+	void set_string(std::string_view name, std::u16string_view value);
 	void set_string(std::string_view name, std::string_view value);
 	void set_binary(std::string_view name, const void* data, std::size_t size);
 	void set_binary(std::string_view name, std::span<const std::uint8_t> data);
@@ -57,7 +57,7 @@ public:
 	[[nodiscard]] bool key_exists(std::string_view path) const;
 	[[nodiscard]] std::vector<std::string> enumerate_subkeys(std::string_view parent_path) const;
 
-	[[nodiscard]] static std::string normalize_path(std::wstring_view guest_path);
+	[[nodiscard]] static std::string normalize_path(std::u16string_view guest_path);
 
 private:
 	std::unordered_map<std::string, std::shared_ptr<win_registry_key>> keys_;

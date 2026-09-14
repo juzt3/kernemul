@@ -90,7 +90,7 @@ private:
 		const emu_object<_KQUEUE> queue(space, body);
 
 		win::set_signal_state(queue, static_cast<std::int32_t>(packets_.size()));
-		queue.field(&_KQUEUE::CurrentCount).write(static_cast<unsigned long>(packets_.size()));
+		queue.field(&_KQUEUE::CurrentCount).write(static_cast<std::uint32_t>(packets_.size()));
 	}
 
 	std::recursive_mutex mtx_;
@@ -143,6 +143,10 @@ struct worker_factory_basic_information_t
 	std::uint32_t padding2;
 };
 #pragma pack(pop)
+
+// The four bytes before start_routine are an alignment hole rather than a
+// member, so the size is the only thing that pins the tail of this down.
+static_assert(sizeof(worker_factory_basic_information_t) == 0x70);
 
 std::string attribute_name(vcpu& cpu, const emu_object<_OBJECT_ATTRIBUTES>& object_attributes)
 {
@@ -295,7 +299,7 @@ void modules::register_ntoskrnl_iocp_ops(win_kernel_state& state, proc_module& m
 			if (io_status_block)
 			{
 				_IO_STATUS_BLOCK block{};
-				block.Status = static_cast<long>(packet->status);
+				block.Status = static_cast<std::int32_t>(packet->status);
 				block.Information = packet->information;
 				io_status_block.write(block);
 			}

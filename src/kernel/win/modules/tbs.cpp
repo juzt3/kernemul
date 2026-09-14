@@ -23,6 +23,8 @@ struct tpm_device_info_t
 };
 #pragma pack(pop)
 
+static_assert(sizeof(tpm_device_info_t) == 0x10);
+
 }
 
 // There is a TPM to describe but no service to talk to it through.

@@ -72,6 +72,6 @@ inline _DRIVER_OBJECT make_default_driver_object(const driver_object_params& p)
 // Where a driver object and its registry path live in the guest's namespace.
 // Both are strings the driver may read back and print, and a service name is
 // the last component of its registry key, so the two are built from one name.
-inline constexpr std::wstring_view driver_name_prefix = L"\\Driver\\";
-inline constexpr std::wstring_view driver_services_key =
-	L"\\Registry\\Machine\\System\\CurrentControlSet\\Services\\";
+inline constexpr std::u16string_view driver_name_prefix = u"\\Driver\\";
+inline constexpr std::u16string_view driver_services_key =
+	u"\\Registry\\Machine\\System\\CurrentControlSet\\Services\\";

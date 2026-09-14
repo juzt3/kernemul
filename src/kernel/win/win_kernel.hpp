@@ -210,13 +210,13 @@ struct win_kernel_state : kernel_state
 		emu_object<_UNICODE_STRING> registry_path;
 	};
 
-	driver_entry_args create_driver(proc_module& mod, const std::wstring_view service_name)
+	driver_entry_args create_driver(proc_module& mod, const std::u16string_view service_name)
 	{
 		auto& space = *emu_->default_addr_space();
 
 		const auto drv = make_default_driver_object({
 			.driver_name = win::init_unicode_string(space,
-				std::wstring(driver_name_prefix) + std::wstring(service_name)),
+				std::u16string(driver_name_prefix) + std::u16string(service_name)),
 			.driver_start = mod.addr,
 			.driver_size = mod.size,
 			.driver_section = ldr_entry(mod.addr),
@@ -231,7 +231,7 @@ struct win_kernel_state : kernel_state
 		emu_object<_DRIVER_OBJECT> obj(space, body, std::string(mod.name));
 
 		auto reg_path = win::allocate_unicode_string(space,
-			std::wstring(driver_services_key) + std::wstring(service_name), "RegistryPath");
+			std::u16string(driver_services_key) + std::u16string(service_name), "RegistryPath");
 
 		LOG_INFO("driver object for {} at 0x{:X} (section=0x{:X}, registry path at 0x{:X})",
 			mod.name, obj.address(), ldr_entry(mod.addr), reg_path.address());
@@ -248,7 +248,7 @@ struct win_kernel_state : kernel_state
 
 		// Where the guest looks to find out how many cpus the machine has.
 		kuser_shared_data.field(&_KUSER_SHARED_DATA::ActiveProcessorCount)
-			.write(static_cast<unsigned long>(per_cpu_.size()));
+			.write(static_cast<std::uint32_t>(per_cpu_.size()));
 
 		return pcpu;
 	}

@@ -7,6 +7,7 @@ std::shared_ptr<proc_module> process::add_module(const std::string_view name, co
 {
 	auto mod = std::make_shared<proc_module>();
 	mod->name = std::string(name);
+	mod->lookup_name = ascii_lower(name);
 	mod->addr = addr;
 	mod->size = pe->size();
 	mod->entry_point = addr + pe->entry_point();
@@ -16,7 +17,7 @@ std::shared_ptr<proc_module> process::add_module(const std::string_view name, co
 
 	{
 		std::unique_lock lock(modules_mtx_);
-		modules_[mod->name] = mod;
+		modules_[mod->lookup_name] = mod;
 	}
 
 	for (const auto exp : pe->exports())
@@ -35,9 +36,11 @@ std::shared_ptr<proc_module> process::add_module(const std::string_view name, co
 
 std::shared_ptr<proc_module> process::find_module(const std::string_view name) const
 {
+	const auto key = ascii_lower(name);
+
 	std::shared_lock lock(modules_mtx_);
 
-	const auto it = modules_.find(name);
+	const auto it = modules_.find(key);
 
 	return it != modules_.end() ? it->second : nullptr;
 }

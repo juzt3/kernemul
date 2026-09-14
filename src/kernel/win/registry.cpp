@@ -43,11 +43,11 @@ void win_registry_key::set_qword(const std::string_view name, const std::uint64_
 	set_value(name, registry_type::qword, &value, sizeof(value));
 }
 
-void win_registry_key::set_string(const std::string_view name, const std::wstring_view value)
+void win_registry_key::set_string(const std::string_view name, const std::u16string_view value)
 {
-	const auto byte_length = (value.size() + 1) * sizeof(wchar_t);
+	const auto byte_length = (value.size() + 1) * sizeof(char16_t);
 	std::vector<std::uint8_t> buffer(byte_length, 0);
-	std::memcpy(buffer.data(), value.data(), value.size() * sizeof(wchar_t));
+	std::memcpy(buffer.data(), value.data(), value.size() * sizeof(char16_t));
 	set_value(name, registry_type::sz, buffer.data(), buffer.size());
 }
 
@@ -140,7 +140,7 @@ std::vector<std::string> win_registry::enumerate_subkeys(const std::string_view 
 	return { subkeys.begin(), subkeys.end() };
 }
 
-std::string win_registry::normalize_path(const std::wstring_view guest_path)
+std::string win_registry::normalize_path(const std::u16string_view guest_path)
 {
 	auto path = narrow_wstring(guest_path);
 

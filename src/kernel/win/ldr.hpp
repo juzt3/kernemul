@@ -32,7 +32,7 @@ public:
 		const auto entry_addr = mem.alloc(sizeof(_LDR_DATA_TABLE_ENTRY), prot_rw);
 
 		const auto wide_name = widen_string(name);
-		const auto full_path = std::wstring(system32_dir) + wide_name;
+		const auto full_path = std::u16string(system32_dir) + wide_name;
 
 		_LDR_DATA_TABLE_ENTRY entry{};
 		entry.DllBase = guest_ptr(base);

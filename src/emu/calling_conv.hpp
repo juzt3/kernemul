@@ -74,9 +74,9 @@ struct arg_reader<std::string>
 };
 
 template <>
-struct arg_reader<std::wstring>
+struct arg_reader<std::u16string>
 {
-	static std::wstring read(vcpu& cpu, const calling_conv& conv, std::size_t index)
+	static std::u16string read(vcpu& cpu, const calling_conv& conv, std::size_t index)
 	{
 		const auto addr = conv.arg<addr_t>(cpu, index);
 		return guest::read_wstring(*cpu.curr_addr_space(), addr);

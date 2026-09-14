@@ -7,39 +7,39 @@
 constexpr std::string_view  root_dir_narrow     = "C:\\";
 constexpr std::string_view  windows_dir_narrow  = "C:\\Windows";
 constexpr std::string_view  system32_dir_narrow = "C:\\Windows\\System32\\";
-constexpr std::wstring_view windows_dir  = L"C:\\Windows";
-constexpr std::wstring_view system32_dir = L"C:\\Windows\\System32\\";
+constexpr std::u16string_view windows_dir  = u"C:\\Windows";
+constexpr std::u16string_view system32_dir = u"C:\\Windows\\System32\\";
 
 namespace win
 {
 
 inline addr_t allocate_environment_block(win_user_mem& mem)
 {
-	std::wstring env;
-	env += L"PATH=";
+	std::u16string env;
+	env += u"PATH=";
 	env += system32_dir;
-	env += L'\0';
-	env += L"SystemRoot=";
+	env += u'\0';
+	env += u"SystemRoot=";
 	env += windows_dir;
-	env += L'\0';
-	env += L"TEMP=C:\\Users\\Default\\AppData\\Local\\Temp";
-	env += L'\0';
-	env += L'\0';
+	env += u'\0';
+	env += u"TEMP=C:\\Users\\Default\\AppData\\Local\\Temp";
+	env += u'\0';
+	env += u'\0';
 
-	const auto size = env.size() * sizeof(wchar_t);
+	const auto size = env.size() * sizeof(char16_t);
 	const auto addr = mem.alloc(size, prot_rw);
 	mem.write_mem(addr, env.data(), size);
 	return addr;
 }
 
-inline std::wstring_view dir_from_path(std::wstring_view path)
+inline std::u16string_view dir_from_path(std::u16string_view path)
 {
-	const auto pos = path.find_last_of(L"\\/");
-	return pos != std::wstring_view::npos ? path.substr(0, pos + 1) : path;
+	const auto pos = path.find_last_of(u"\\/");
+	return pos != std::u16string_view::npos ? path.substr(0, pos + 1) : path;
 }
 
 inline emu_object<_RTL_USER_PROCESS_PARAMETERS> init_process_parameters(
-	win_user_mem& mem, std::wstring_view image_path)
+	win_user_mem& mem, std::u16string_view image_path)
 {
 	const auto addr = mem.alloc(sizeof(_RTL_USER_PROCESS_PARAMETERS), prot_rw);
 	const auto current_dir = dir_from_path(image_path);

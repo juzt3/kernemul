@@ -2,7 +2,8 @@
 #include "../../emu/object.hpp"
 #include "process_params.hpp"
 #include "../../target.hpp"
-#include <cwchar>
+#include <algorithm>
+#include <string>
 
 namespace win_target
 {
@@ -36,7 +37,11 @@ inline _KUSER_SHARED_DATA make_default_kuser_shared_data()
 	sd.LargePageMinimum = 0x200000;
 	sd.TickCountMultiplier = 0x0FA00000;
 
-	std::wcscpy(sd.NtSystemRoot, windows_dir.data());
+	// NtSystemRoot is a fixed guest array, so the copy is bounded by it rather
+	// than by trusting the source to fit, and terminated by hand.
+	const auto root_chars = std::min(windows_dir.size(), std::size(sd.NtSystemRoot) - 1);
+	std::char_traits<char16_t>::copy(sd.NtSystemRoot, windows_dir.data(), root_chars);
+	sd.NtSystemRoot[root_chars] = u'\0';
 
 	return sd;
 }

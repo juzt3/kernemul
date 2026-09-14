@@ -5,7 +5,6 @@
 #include "defs.hpp"
 #include "mmu.hpp"
 #include <functional>
-#include <expected>
 #include <memory>
 #include <span>
 #include <variant>
