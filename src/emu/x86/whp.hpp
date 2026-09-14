@@ -49,7 +49,7 @@ public:
 	hook_handle hook_exception(exception_hk_cb) override;
 	void remove_hook(hook_handle handle) override;
 
-	void map_phys_mem(addr_t addr, std::size_t size, mem_prot prot) override;
+	void map_phys_mem(addr_t addr, std::size_t size) override;
 	void unmap_phys_mem(addr_t addr, std::size_t size, mem_prot prot) override;
 	void read_phys_mem(addr_t addr, void* buf, std::size_t size) override;
 	void write_phys_mem(addr_t addr, const void* buf, std::size_t size) override;

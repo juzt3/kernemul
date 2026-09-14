@@ -82,9 +82,16 @@ std::shared_ptr<proc_module> krnl::map_img(process& proc, const std::string_view
 	return proc.add_module(name, addr, img);
 }
 
-static std::vector<std::uint8_t> map_pe_virtual(const std::vector<std::uint8_t>& raw)
+std::vector<std::uint8_t> krnl::pe_virtual_image(const std::span<const std::uint8_t> raw)
 {
+	if (raw.size() < sizeof(pe::dos_header))
+		return {};
+
 	const auto* img = reinterpret_cast<const pe::image*>(raw.data());
+
+	if (!img->dos_hdr()->ok())
+		return {};
+
 	const auto* nt = img->nt_hdrs();
 	const auto virt_size = nt->optional_hdr.size_of_image;
 	const auto hdr_size = nt->optional_hdr.size_of_headers;
@@ -125,7 +132,11 @@ std::shared_ptr<proc_module> krnl::map_img(process& proc, const std::filesystem:
 
 std::shared_ptr<proc_module> krnl::map_img(process& proc, const std::string_view name, const std::span<const std::uint8_t> raw, const bool supervisor, const bool skip_imports)
 {
-	auto mapped = map_pe_virtual({raw.begin(), raw.end()});
+	auto mapped = krnl::pe_virtual_image(raw);
+
+	if (mapped.empty())
+		return nullptr;
+
 	const auto* img = reinterpret_cast<const pe::image*>(mapped.data());
 
 	return map_img(proc, name, img, supervisor, skip_imports);

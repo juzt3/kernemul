@@ -31,10 +31,15 @@ namespace x86
 
 		std::unordered_map<addr_t, std::shared_ptr<::addr_space>> spaces_;
 
+		addr_t kernel_pml4_pa_ = 0;
+
 		static addr_t pfn_to_pa(std::uint64_t pfn) { return static_cast<addr_t>(pfn) << page_shift; }
 
 		static addr_space& as_x86(::addr_space& space);
 		static const addr_space& as_x86(const ::addr_space& space);
+
+		// Unlocked -- see the definition.
+		std::optional<addr_t> translate_virt(const addr_space& space, addr_t page);
 
 		addr_t ensure_table(addr_t table_pa, std::size_t index);
 		void map_page(addr_space& space, addr_t va, addr_t pa, bool user = true);

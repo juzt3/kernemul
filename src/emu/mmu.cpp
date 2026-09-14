@@ -39,7 +39,7 @@ addr_t mmu::alloc_phys_locked(std::size_t size, mem_prot prot)
 	const addr_t addr = phys_next_;
 	phys_next_ += aligned;
 
-	emu_->map_phys_mem(addr, aligned, prot);
+	emu_->map_phys_mem(addr, aligned);
 
 	return addr;
 }
