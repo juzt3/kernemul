@@ -31,6 +31,17 @@ std::string win_filesystem::normalize(const std::string_view path)
 	while (!result.empty() && result.back() == '/')
 		result.pop_back();
 
+	// Guest paths are object manager names; everything here is named from the
+	// drive letter down.
+	for (const std::string_view prefix : { "/??/", "/dosdevices/" })
+	{
+		if (result.starts_with(prefix))
+		{
+			result.erase(0, prefix.size());
+			break;
+		}
+	}
+
 	return result;
 }
 

@@ -3,6 +3,7 @@
 #include "filesystem.hpp"
 #include "string.hpp"
 #include <pe.hpp>
+#include <vector>
 
 constexpr std::string_view  root_dir_narrow     = "C:\\";
 constexpr std::string_view  windows_dir_narrow  = "C:\\Windows";
@@ -13,7 +14,15 @@ constexpr std::u16string_view system32_dir = u"C:\\Windows\\System32\\";
 namespace win
 {
 
-inline addr_t allocate_environment_block(win_user_mem& mem)
+// The size matters as much as the address: the loader copies the block using
+// it, and a zero has it copy nothing and then read what it never wrote.
+struct environment_block
+{
+	addr_t address;
+	std::uint64_t size;
+};
+
+inline environment_block allocate_environment_block(win_user_mem& mem)
 {
 	std::u16string env;
 	env += u"PATH=";
@@ -29,7 +38,7 @@ inline addr_t allocate_environment_block(win_user_mem& mem)
 	const auto size = env.size() * sizeof(char16_t);
 	const auto addr = mem.alloc(size, prot_rw);
 	mem.write_mem(addr, env.data(), size);
-	return addr;
+	return { addr, size };
 }
 
 inline std::u16string_view dir_from_path(std::u16string_view path)
@@ -41,24 +50,69 @@ inline std::u16string_view dir_from_path(std::u16string_view path)
 inline emu_object<_RTL_USER_PROCESS_PARAMETERS> init_process_parameters(
 	win_user_mem& mem, std::u16string_view image_path)
 {
-	const auto addr = mem.alloc(sizeof(_RTL_USER_PROCESS_PARAMETERS), prot_rw);
 	const auto current_dir = dir_from_path(image_path);
 
+	// One block: the structure, then the strings it points at, with Length
+	// covering both. The loader rebases every Buffer against the block when it
+	// copies it, so a string allocated apart comes out pointing at nothing.
+	std::vector<char16_t> strings;
+
+	struct placement
+	{
+		std::size_t offset;
+		unsigned short length;
+	};
+
+	const auto place = [&strings](const std::u16string_view text)
+	{
+		const placement at{ strings.size() * sizeof(char16_t),
+			static_cast<unsigned short>(text.size() * sizeof(char16_t)) };
+
+		// Terminated as well as counted: the loader runs plain string functions
+		// over these.
+		strings.insert(strings.end(), text.begin(), text.end());
+		strings.push_back(u'\0');
+
+		return at;
+	};
+
+	const auto dos_path     = place(current_dir);
+	const auto dll_path     = place(system32_dir);
+	const auto image_name   = place(image_path);
+	const auto command_line = place(image_path);
+
+	constexpr std::size_t strings_at = sizeof(_RTL_USER_PROCESS_PARAMETERS);
+	const auto total = strings_at + strings.size() * sizeof(char16_t);
+	const auto addr = mem.alloc(total, prot_rw);
+
+	const auto string_at = [addr](const placement& at)
+	{
+		return _UNICODE_STRING{
+			.Length = at.length,
+			.MaximumLength = static_cast<unsigned short>(at.length + sizeof(char16_t)),
+			.Buffer = guest_ptr<char16_t>(addr + strings_at + at.offset),
+		};
+	};
+
 	_RTL_USER_PROCESS_PARAMETERS params{};
-	params.MaximumLength = sizeof(_RTL_USER_PROCESS_PARAMETERS);
-	params.Length = sizeof(_RTL_USER_PROCESS_PARAMETERS);
+	params.MaximumLength = static_cast<std::uint32_t>(total);
+	params.Length = static_cast<std::uint32_t>(total);
 	params.Flags = 0x6001;
 	params.ConsoleHandle = guest_ptr(~0ULL);
 
-	params.CurrentDirectory.DosPath = init_unicode_string(mem, current_dir);
-	params.DllPath = init_unicode_string(mem, system32_dir);
-	params.ImagePathName = init_unicode_string(mem, image_path);
-	params.CommandLine = init_unicode_string(mem, image_path);
-	params.Environment = guest_ptr(allocate_environment_block(mem));
+	params.CurrentDirectory.DosPath = string_at(dos_path);
+	params.DllPath = string_at(dll_path);
+	params.ImagePathName = string_at(image_name);
+	params.CommandLine = string_at(command_line);
 
-	auto obj = emu_object<_RTL_USER_PROCESS_PARAMETERS>(mem.space(), addr);
-	obj.write(params);
-	return obj;
+	const auto env = allocate_environment_block(mem);
+	params.Environment = guest_ptr(env.address);
+	params.EnvironmentSize = env.size;
+
+	mem.write_mem(addr, &params, sizeof(params));
+	mem.write_mem(addr + strings_at, strings.data(), strings.size() * sizeof(char16_t));
+
+	return emu_object<_RTL_USER_PROCESS_PARAMETERS>(mem.space(), addr);
 }
 
 inline addr_t load_api_set_from_pe(win_user_mem& mem, std::span<const std::uint8_t> data)

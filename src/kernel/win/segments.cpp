@@ -169,10 +169,20 @@ void swap_to_kernel_segments(vcpu& cpu)
 	cpu.reg(x86::ss, make_data_sr(kernel_ds, 0));
 }
 
+x86::seg_reg make_usermode_cs()
+{
+	return make_code_sr(user_cs, 3);
+}
+
+x86::seg_reg make_usermode_ss()
+{
+	return make_data_sr(user_ds, 3);
+}
+
 void swap_to_usermode_segments(vcpu& cpu)
 {
-	cpu.reg(x86::cs, make_code_sr(user_cs, 3));
-	cpu.reg(x86::ss, make_data_sr(user_ds, 3));
+	cpu.reg(x86::cs, make_usermode_cs());
+	cpu.reg(x86::ss, make_usermode_ss());
 }
 
 }

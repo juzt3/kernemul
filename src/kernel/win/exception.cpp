@@ -45,16 +45,20 @@ bool win_exception::handle(vcpu& cpu, const cpu_exception ex)
 	if (ex == cpu_exception::page_fault && handle_page_fault(cpu))
 		return true;
 
-	auto& proc = *kernel_.sys_proc;
+	const auto t = cpu.thread();
+	const auto faulting = t ? std::dynamic_pointer_cast<windows_process>(t->proc()) : nullptr;
+	auto& proc = faulting ? *faulting : *kernel_.sys_proc;
+
 	const auto original_pc = cpu.pc();
 	const auto code = exception_to_status(ex);
 
-	LOG_INFO("exception dispatch: code=0x{:X}, rip={}", code, symbols::format_addr(proc, original_pc));
+	LOG_INFO("exception dispatch: code=0x{:X}, rip={}, address=0x{:X}", code,
+		symbols::format_addr(proc, original_pc), cpu.arch()->fault_addr(cpu));
 
 	auto mod = proc.find_module_by_addr(original_pc);
 	if (!mod)
 	{
-		LOG_WARN("exception at 0x{:X}: not in any module", original_pc);
+		LOG_ERR("exception at 0x{:X}: not in any module this process knows of", original_pc);
 		return false;
 	}
 
@@ -140,7 +144,6 @@ bool win_exception::handle(vcpu& cpu, const cpu_exception ex)
 	}
 
 	LOG_ERR("unhandled exception code=0x{:X} at 0x{:X}", code, original_pc);
-	cpu.stop();
 	return false;
 }
 
