@@ -22,6 +22,7 @@ enum thread_information_class : std::uint32_t
 {
 	thread_basic_information       = 0,
 	thread_times                   = 1,
+	thread_am_i_last_thread        = 12,
 	thread_quantum_reset           = 14,
 	thread_hide_from_debugger      = 17,
 	thread_is_terminated           = 20,
@@ -35,7 +36,32 @@ enum process_information_class : std::uint32_t
 	process_image_file_name     = 27,
 	process_debug_object_handle = 30,
 	process_debug_flags         = 31,
+	process_cookie              = 36,
+	process_tls_information     = 35,
 };
+
+// PROCESS_TLS_INFORMATION, followed by one entry per thread, in the order the
+// kernel keeps them rather than named by id.
+#pragma pack(push, 8)
+struct process_tls_information_t
+{
+	std::uint32_t flags;
+	std::uint32_t operation;
+	std::uint32_t thread_data_count;
+	std::uint32_t tls_index;
+	std::uint64_t reserved;
+};
+
+struct thread_tls_information_t
+{
+	std::uint64_t new_tls_data;
+	std::uint64_t old_tls_data;
+};
+#pragma pack(pop)
+
+// PROCESS_TLS_INFORMATION_TYPE.
+constexpr std::uint32_t process_tls_replace_index = 0;
+constexpr std::uint32_t process_tls_replace_vector = 1;
 
 #pragma pack(push, 8)
 struct thread_basic_information_t
@@ -317,6 +343,34 @@ void modules::register_ntoskrnl_task_ops(win_kernel_state& state, proc_module& m
 			return STATUS_SUCCESS;
 		}
 
+		// A thread returning from its start routine asks this before deciding
+		// whether to end the process with itself.
+		case thread_am_i_last_thread:
+		{
+			if (return_length)
+				return_length.write(sizeof(std::uint32_t));
+
+			if (length < sizeof(std::uint32_t))
+				return STATUS_INFO_LENGTH_MISMATCH;
+
+			std::size_t live = 0;
+
+			if (const auto proc = std::dynamic_pointer_cast<windows_process>(t->proc()))
+				proc->for_each_thread([&](win_thread& other)
+				{
+					if (!other.is_finished())
+						++live;
+				});
+
+			const std::uint32_t last = live <= 1 ? 1 : 0;
+			emu_object<std::uint32_t>(space, thread_information).write(last);
+
+			THREAD_LOG_INFO("NtQueryInformationThread(tid={}, ThreadAmILastThread) -> {} "
+				"({} running)", t->id(), last != 0, live);
+
+			return STATUS_SUCCESS;
+		}
+
 		default:
 			THREAD_LOG_WARN("NtQueryInformationThread: unhandled class {}",
 				thread_information_class);
@@ -397,6 +451,24 @@ void modules::register_ntoskrnl_task_ops(win_kernel_state& state, proc_module& m
 			return STATUS_SUCCESS;
 		}
 
+		// What RtlEncodePointer xors with. Any value will do, as long as it is
+		// the same every time.
+		case process_cookie:
+		{
+			if (return_length)
+				return_length.write(sizeof(std::uint32_t));
+
+			if (length < sizeof(std::uint32_t))
+				return STATUS_INFO_LENGTH_MISMATCH;
+
+			constexpr std::uint32_t cookie = 0x1EE7C0DE;
+			emu_object<std::uint32_t>(space, process_information).write(cookie);
+
+			THREAD_LOG_INFO("NtQueryInformationProcess(ProcessCookie) -> 0x{:X}", cookie);
+
+			return STATUS_SUCCESS;
+		}
+
 		default:
 			THREAD_LOG_WARN("NtQueryInformationProcess: unhandled class {}",
 				process_information_class);
@@ -431,12 +503,74 @@ void modules::register_ntoskrnl_task_ops(win_kernel_state& state, proc_module& m
 		}
 	};
 
-	auto set_process = [](vcpu&, const std::uint64_t process_handle,
+	auto set_process = [](vcpu& cpu, const std::uint64_t process_handle,
 		const std::uint32_t process_information_class, const addr_t process_information,
 		const std::uint32_t length) -> NTSTATUS
 	{
 		switch (process_information_class)
 		{
+		case process_tls_information:
+		{
+			if (length < sizeof(process_tls_information_t))
+				return STATUS_INFO_LENGTH_MISMATCH;
+
+			auto& space = *cpu.curr_addr_space();
+			const auto header =
+				emu_object<process_tls_information_t>(space, process_information).read();
+
+			if (header.operation != process_tls_replace_vector)
+			{
+				THREAD_LOG_WARN("NtSetInformationProcess(ProcessTlsInformation): "
+					"operation {} is not the vector swap", header.operation);
+				return STATUS_INVALID_PARAMETER;
+			}
+
+			const auto entries = process_information + sizeof(process_tls_information_t);
+			const auto room = (length - sizeof(process_tls_information_t))
+				/ sizeof(thread_tls_information_t);
+
+			if (header.thread_data_count > room)
+				return STATUS_INFO_LENGTH_MISMATCH;
+
+			const auto t = cpu.thread();
+			const auto proc = t ? std::dynamic_pointer_cast<windows_process>(t->proc()) : nullptr;
+
+			if (!proc)
+				return STATUS_INVALID_HANDLE;
+
+			// Each entry says what the thread's vector becomes; the value it had
+			// goes back in the same entry for the loader to free.
+			std::uint32_t index = 0;
+
+			proc->for_each_thread([&](win_thread& other)
+			{
+				if (index >= header.thread_data_count)
+					return;
+
+				const auto& teb = other.teb();
+
+				if (!teb)
+					return;
+
+				emu_object<thread_tls_information_t> entry(space,
+					entries + index * sizeof(thread_tls_information_t));
+
+				auto data = entry.read();
+				auto slot = teb.field(&_TEB64::ThreadLocalStoragePointer);
+
+				data.old_tls_data = slot.read();
+				slot.write(data.new_tls_data);
+
+				entry.write(data);
+				++index;
+			});
+
+			THREAD_LOG_INFO("NtSetInformationProcess(ProcessTlsInformation): swapped the tls "
+				"vector of {} of {} thread(s)", index, header.thread_data_count);
+
+			return STATUS_SUCCESS;
+		}
+
 		case process_debug_flags:
 			THREAD_LOG_INFO("NtSetInformationProcess(class={}): accepted, and nothing here "
 				"acts on it", process_information_class);
@@ -655,6 +789,13 @@ void modules::register_ntoskrnl_task_ops(win_kernel_state& state, proc_module& m
 	state.redirect_ntzw(mod, "SetInformationProcess", set_process);
 	state.redirect_ntzw(mod, "SuspendThread", suspend_thread);
 	state.redirect_ntzw(mod, "ResumeThread", resume_thread);
+	// Nothing queues a user APC, so there is never anything pending.
+	state.redirect_ntzw(mod, "TestAlert", [](vcpu&) -> NTSTATUS
+	{
+		THREAD_LOG_INFO("NtTestAlert(): nothing queues an alert here");
+		return STATUS_SUCCESS;
+	});
+
 	state.redirect_ntzw(mod, "AlertThreadByThreadId", alert_thread);
 	state.redirect_ntzw(mod, "WaitForAlertByThreadId", wait_for_alert);
 	state.redirect_ntzw(mod, "OpenThreadToken", open_thread_token);
