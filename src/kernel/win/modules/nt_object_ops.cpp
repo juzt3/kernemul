@@ -2,13 +2,27 @@
 #include "../win_kernel.hpp"
 #include "../objects.hpp"
 #include "../status.hpp"
+#include "../process_params.hpp"
 #include "../string.hpp"
 #include "../types.hpp"
 #include "../../../util/string.hpp"
 #include "../../../util/log.hpp"
+#include <array>
+#include <string>
 
 namespace
 {
+
+// A directory and a symbolic link are both reached only by handle, so their
+// bodies are opaque and what they hold lives here.
+constexpr std::size_t namespace_object_body_size = 0x10;
+
+struct directory_host final : win_object {};
+
+struct symbolic_link_host final : win_object
+{
+	std::string target;
+};
 
 // OB_CALLBACK_REGISTRATION and OB_OPERATION_REGISTRATION are WDK types the
 // kernel does not store, so they are not in the PDB. Both are the same on each
@@ -254,5 +268,131 @@ void modules::register_ntoskrnl_object_ops(win_kernel_state& state, proc_module&
 				handle_table, callback, context);
 
 			return false;
+		});
+
+	// Nothing builds the directories these names would hang off, so opening one
+	// makes it: the handle is a real handle to a real object, and a caller that
+	// enumerates it finds it empty rather than finding the open refused.
+	auto attribute_name = [](vcpu& cpu, const emu_object<_OBJECT_ATTRIBUTES>& object_attributes)
+	{
+		auto& space = *cpu.curr_addr_space();
+
+		const emu_object<_UNICODE_STRING> name(space, object_attributes
+			? guest_va(object_attributes.field(&_OBJECT_ATTRIBUTES::ObjectName).read())
+			: 0);
+
+		return narrow_wstring(win::read_unicode_string(name));
+	};
+
+	auto open_namespace_object = [st = &state](std::shared_ptr<win_object> host,
+		const std::string& name, const std::uint32_t desired_access) -> std::uint64_t
+	{
+		if (const auto existing = st->objs.lookup_named_object(name))
+			return st->sys_proc->handle_table().create_handle(existing, desired_access);
+
+		const std::array<std::uint8_t, namespace_object_body_size> body{};
+		const auto addr = st->objs.create_object(0, body.data(), body.size(), std::move(host),
+			prot_rw | prot_supervisor);
+
+		if (!addr)
+			return 0;
+
+		st->objs.register_named_object(name, addr);
+
+		return st->sys_proc->handle_table().create_handle(addr, desired_access);
+	};
+
+	state.redirect_ntzw(mod, "OpenDirectoryObject",
+		[attribute_name, open_namespace_object](vcpu& cpu,
+			emu_object<std::uint64_t> directory_handle, const std::uint32_t desired_access,
+			emu_object<_OBJECT_ATTRIBUTES> object_attributes) -> NTSTATUS
+		{
+			if (!directory_handle)
+				return STATUS_INVALID_PARAMETER;
+
+			const auto name = attribute_name(cpu, object_attributes);
+			const auto handle = open_namespace_object(std::make_shared<directory_host>(),
+				name, desired_access);
+
+			if (!handle)
+				return STATUS_INSUFFICIENT_RESOURCES;
+
+			directory_handle.write(handle);
+
+			THREAD_LOG_WARN("NtOpenDirectoryObject('{}') -> handle=0x{:X}: the directory is "
+				"empty, because nothing here puts anything in one", name, handle);
+
+			return STATUS_SUCCESS;
+		});
+
+	// A link opened here is made the same way, and points where the loader
+	// expects the one it actually asks for -- KnownDllPath -- to point.
+	state.redirect_ntzw(mod, "OpenSymbolicLinkObject",
+		[attribute_name, open_namespace_object](vcpu& cpu, emu_object<std::uint64_t> link_handle,
+			const std::uint32_t desired_access,
+			emu_object<_OBJECT_ATTRIBUTES> object_attributes) -> NTSTATUS
+		{
+			if (!link_handle)
+				return STATUS_INVALID_PARAMETER;
+
+			const auto name = attribute_name(cpu, object_attributes);
+
+			auto host = std::make_shared<symbolic_link_host>();
+			host->target = system32_dir_narrow;
+
+			// Windows spells a device path without the trailing separator.
+			if (host->target.size() > 1 && host->target.back() == '\\')
+				host->target.pop_back();
+
+			const auto handle = open_namespace_object(std::move(host), name, desired_access);
+
+			if (!handle)
+				return STATUS_INSUFFICIENT_RESOURCES;
+
+			link_handle.write(handle);
+
+			THREAD_LOG_WARN("NtOpenSymbolicLinkObject('{}') -> handle=0x{:X}: nothing here "
+				"creates a link, so it points at System32", name, handle);
+
+			return STATUS_SUCCESS;
+		});
+
+	state.redirect_ntzw(mod, "QuerySymbolicLinkObject",
+		[st = &state](vcpu&, const std::uint64_t link_handle,
+			emu_object<_UNICODE_STRING> link_target,
+			emu_object<std::uint32_t> returned_length) -> NTSTATUS
+		{
+			const auto host =
+				st->sys_proc->handle_table().get_object<symbolic_link_host>(link_handle);
+
+			if (!host)
+			{
+				THREAD_LOG_WARN("NtQuerySymbolicLinkObject: handle 0x{:X} is not a symbolic link",
+					link_handle);
+				return STATUS_OBJECT_TYPE_MISMATCH;
+			}
+
+			const auto target = widen_string(host->target);
+			const auto needed = static_cast<std::uint16_t>(target.size() * sizeof(wchar_t));
+
+			if (returned_length)
+				returned_length.write(needed);
+
+			if (!link_target)
+				return STATUS_INVALID_PARAMETER;
+
+			auto value = link_target.read();
+
+			if (value.MaximumLength < needed || !value.Buffer)
+				return STATUS_BUFFER_TOO_SMALL;
+
+			link_target.space()->write_mem(guest_va(value.Buffer), target.data(), needed);
+
+			value.Length = needed;
+			link_target.write(value);
+
+			THREAD_LOG_INFO("NtQuerySymbolicLinkObject(0x{:X}) -> '{}'", link_handle, host->target);
+
+			return STATUS_SUCCESS;
 		});
 }

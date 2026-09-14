@@ -8,7 +8,11 @@
 #include "../types.hpp"
 #include "../../../util/log.hpp"
 #include "../../../util/string.hpp"
+#include <array>
+#include <limits>
+#include <mutex>
 #include <string_view>
+#include <unordered_map>
 
 namespace
 {
@@ -90,6 +94,52 @@ resolved resolve(win_kernel_state& state, const std::uint64_t handle,
 	return { entry->body_addr, std::move(host) };
 }
 
+constexpr std::size_t keyed_event_body_size = 0x40;
+
+// The two semaphores one key's waiters and releasers meet on.
+struct keyed_event_host final : win_object
+{
+	struct gate
+	{
+		addr_t arrivals = 0;
+		addr_t releases = 0;
+	};
+
+	gate gate_for(win_kernel_state& state, const addr_t key)
+	{
+		std::scoped_lock lock(mtx_);
+
+		auto& found = gates_[key];
+
+		if (!found.arrivals)
+			found = { make_semaphore(state), make_semaphore(state) };
+
+		return found;
+	}
+
+private:
+	static addr_t make_semaphore(win_kernel_state& state)
+	{
+		const _KSEMAPHORE zeroed{};
+		const auto addr = state.objs.create_object(0, &zeroed, sizeof(zeroed),
+			{}, prot_rw | prot_supervisor);
+
+		if (!addr)
+			return 0;
+
+		const emu_object<_KSEMAPHORE> obj(
+			*state.emulator()->emu().default_addr_space(), addr);
+
+		win::init_dispatcher(obj, win::semaphore_object, 0);
+		obj.field(&_KSEMAPHORE::Limit).write(std::numeric_limits<std::int32_t>::max());
+
+		return addr;
+	}
+
+	std::mutex mtx_;
+	std::unordered_map<addr_t, gate> gates_;
+};
+
 std::string attribute_name(vcpu& cpu, const emu_object<_OBJECT_ATTRIBUTES>& object_attributes)
 {
 	auto& space = *cpu.curr_addr_space();
@@ -104,12 +154,8 @@ std::string attribute_name(vcpu& cpu, const emu_object<_OBJECT_ATTRIBUTES>& obje
 }
 
 // The dispatcher objects a driver makes by handle rather than by pointer. The
-// body behind each handle is the real KEVENT, KSEMAPHORE or KMUTANT, so the
-// Ke* handlers and these two see the same state.
-//
-// Waiting is what is missing: nothing here blocks on a dispatcher object, so
-// the handlers that wait are left unregistered rather than returning as though
-// the wait had been satisfied.
+// body behind each is the real KEVENT, KSEMAPHORE or KMUTANT, so the Ke*
+// handlers and the waits in nt_wait_ops.cpp see the same state.
 void modules::register_ntoskrnl_dispatch_ops(win_kernel_state& state, proc_module& mod)
 {
 	auto* st = &state;
@@ -403,4 +449,123 @@ void modules::register_ntoskrnl_dispatch_ops(win_kernel_state& state, proc_modul
 	state.redirect_ntzw(mod, "ReleaseSemaphore", release_semaphore);
 	state.redirect_ntzw(mod, "CreateMutant", create_mutant);
 	state.redirect_ntzw(mod, "ReleaseMutant", release_mutant);
+
+	// A wait and a release meet on a key: whichever arrives first blocks until
+	// the other turns up. Two counted semaphores per key is exactly that, and
+	// they are ordinary dispatcher objects, so the ordinary wait carries them.
+	auto default_keyed_event = std::make_shared<keyed_event_host>();
+
+	auto keyed_event_from_handle = [st, default_keyed_event](const std::uint64_t handle)
+		-> std::shared_ptr<keyed_event_host>
+	{
+		// A null handle is the one the system provides for everybody.
+		if (!handle)
+			return default_keyed_event;
+
+		return st->sys_proc->handle_table().get_object<keyed_event_host>(handle);
+	};
+
+	auto create_keyed_event = [st](vcpu& cpu, emu_object<std::uint64_t> keyed_event_handle,
+		const std::uint32_t desired_access, emu_object<_OBJECT_ATTRIBUTES> object_attributes,
+		const std::uint32_t flags) -> NTSTATUS
+	{
+		if (!keyed_event_handle)
+			return STATUS_INVALID_PARAMETER;
+
+		// Zero is the only documented value, and the real one refuses the rest.
+		if (flags)
+			return STATUS_INVALID_PARAMETER_4;
+
+		const auto name = attribute_name(cpu, object_attributes);
+
+		// Opaque: a keyed event is reached only by handle.
+		const std::array<std::uint8_t, keyed_event_body_size> body{};
+		const auto addr = st->objs.create_object(0, body.data(), body.size(),
+			std::make_shared<keyed_event_host>(), prot_rw | prot_supervisor);
+
+		if (!addr)
+			return STATUS_INSUFFICIENT_RESOURCES;
+
+		if (!name.empty())
+			st->objs.register_named_object(name, addr);
+
+		const auto handle = st->sys_proc->handle_table().create_handle(addr, desired_access);
+		keyed_event_handle.write(handle);
+
+		THREAD_LOG_INFO("NtCreateKeyedEvent('{}') -> handle=0x{:X}", name, handle);
+
+		return STATUS_SUCCESS;
+	};
+
+	// Both halves are the same two steps in opposite order.
+	auto rendezvous = [st, keyed_event_from_handle](vcpu& cpu, const std::uint64_t handle,
+		const addr_t key, const bool alertable, const emu_object<std::int64_t>& timeout,
+		const bool releasing) -> NTSTATUS
+	{
+		const auto host = keyed_event_from_handle(handle);
+
+		if (!host)
+		{
+			THREAD_LOG_WARN("{}: handle 0x{:X} is not a keyed event",
+				releasing ? "NtReleaseKeyedEvent" : "NtWaitForKeyedEvent", handle);
+			return STATUS_INVALID_HANDLE;
+		}
+
+		const auto t = std::dynamic_pointer_cast<win_thread>(cpu.thread());
+
+		if (!t)
+			return STATUS_INVALID_PARAMETER;
+
+		const auto gate = host->gate_for(*st, key);
+
+		if (!gate.arrivals || !gate.releases)
+			return STATUS_INSUFFICIENT_RESOURCES;
+
+		auto& space = *cpu.curr_addr_space();
+
+		const auto post = releasing ? gate.releases : gate.arrivals;
+		const auto wait_on = releasing ? gate.arrivals : gate.releases;
+
+		win::set_state_at(space, post, win::state_at(space, post) + 1);
+		st->sys_proc->wake_waiters(space, post);
+
+		if (alertable)
+			THREAD_LOG_WARN("{}: nothing delivers an APC, so an alertable wait runs its course",
+				releasing ? "NtReleaseKeyedEvent" : "NtWaitForKeyedEvent");
+
+		const auto when = win::read_timeout(timeout);
+
+		win_thread::wait_state wait{};
+		wait.objects = { wait_on };
+		wait.deadline = when.deadline;
+		wait.timed = when.timed;
+
+		THREAD_LOG_INFO("{}(handle=0x{:X}, key=0x{:X}): posted 0x{:X}, waiting on 0x{:X}",
+			releasing ? "NtReleaseKeyedEvent" : "NtWaitForKeyedEvent",
+			handle, key, post, wait_on);
+
+		t->begin_wait(std::move(wait));
+		t->try_satisfy(space);
+
+		thread_scheduler::yield_current(cpu);
+
+		// Overwritten by the scheduler once it decides the wait.
+		return STATUS_SUCCESS;
+	};
+
+	state.redirect_ntzw(mod, "CreateKeyedEvent", create_keyed_event);
+
+	state.redirect_ntzw(mod, "WaitForKeyedEvent",
+		[rendezvous](vcpu& cpu, const std::uint64_t handle, const addr_t key,
+			const bool alertable, emu_object<std::int64_t> timeout) -> NTSTATUS
+		{
+			return rendezvous(cpu, handle, key, alertable, timeout, false);
+		});
+
+	state.redirect_ntzw(mod, "ReleaseKeyedEvent",
+		[rendezvous](vcpu& cpu, const std::uint64_t handle, const addr_t key,
+			const bool alertable, emu_object<std::int64_t> timeout) -> NTSTATUS
+		{
+			return rendezvous(cpu, handle, key, alertable, timeout, true);
+		});
 }

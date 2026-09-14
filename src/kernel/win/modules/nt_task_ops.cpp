@@ -1,5 +1,6 @@
 #include "nt_task_ops.hpp"
 #include "../win_kernel.hpp"
+#include "../dispatcher.hpp"
 #include "../objects.hpp"
 #include "../status.hpp"
 #include "../string.hpp"
@@ -449,10 +450,8 @@ void modules::register_ntoskrnl_task_ops(win_kernel_state& state, proc_module& m
 		}
 	};
 
-	// A suspend count the scheduler honours: it passes over a thread that has
-	// one until the matching resume brings it back to zero. Suspending the
-	// calling thread therefore has to give the cpu up on the way out, or it
-	// would run on to the end of its quantum after asking to stop.
+	// The scheduler passes over a suspended thread, so suspending the calling
+	// one has to give the cpu up on the way out.
 	auto suspend_thread = [st](vcpu& cpu, const std::uint64_t thread_handle,
 		emu_object<std::uint32_t> previous_count) -> NTSTATUS
 	{
@@ -503,10 +502,8 @@ void modules::register_ntoskrnl_task_ops(win_kernel_state& state, proc_module& m
 		return STATUS_SUCCESS;
 	};
 
-	// The alert pair. The address the waiter passes names nothing here -- it is
-	// the guest's own way of telling one wait from another, and the alert is
-	// aimed at the thread rather than at the address -- so the wait names no
-	// object and only an alert or its timeout ends it.
+	// The alert is aimed at the thread rather than at the address the waiter
+	// passes, so the wait names no object and only an alert or a timeout ends it.
 	auto alert_thread = [st](vcpu& cpu, const std::uint64_t thread_id) -> NTSTATUS
 	{
 		const auto t = std::dynamic_pointer_cast<win_thread>(
@@ -540,17 +537,11 @@ void modules::register_ntoskrnl_task_ops(win_kernel_state& state, proc_module& m
 			return STATUS_SUCCESS;
 		}
 
+		const auto when = win::read_timeout(timeout);
+
 		win_thread::wait_state wait{};
-
-		if (timeout)
-		{
-			const auto ticks = timeout.read();
-
-			wait.timed = true;
-			wait.deadline = ticks < 0
-				? static_cast<std::int64_t>(win_system_time()) - ticks
-				: ticks;
-		}
+		wait.deadline = when.deadline;
+		wait.timed = when.timed;
 
 		THREAD_LOG_INFO("NtWaitForAlertByThreadId(0x{:X}): parked {}",
 			address, wait.timed ? "with a timeout" : "with no timeout");
@@ -561,9 +552,7 @@ void modules::register_ntoskrnl_task_ops(win_kernel_state& state, proc_module& m
 		return STATUS_SUCCESS;
 	};
 
-	// A thread token is a security context, and nothing here has one to hand
-	// out -- so this is the status a thread that has not impersonated anyone
-	// gets on real Windows, which is the same thing for the same reason.
+	// The status a thread that has not impersonated anyone gets on real Windows.
 	auto open_thread_token = [](vcpu&, const std::uint64_t thread_handle,
 		const std::uint32_t desired_access, const bool open_as_self,
 		emu_object<std::uint64_t> token_handle) -> NTSTATUS
@@ -586,8 +575,7 @@ void modules::register_ntoskrnl_task_ops(win_kernel_state& state, proc_module& m
 			std::move(token_handle));
 	};
 
-	// Ending a process ends every thread in it, including the one asking, which
-	// is why this does not return when the caller names its own process.
+	// Ends the thread asking too, so it does not return.
 	auto terminate_process = [st](vcpu& cpu, const std::uint64_t process_handle,
 		const NTSTATUS exit_status) -> NTSTATUS
 	{
@@ -600,8 +588,7 @@ void modules::register_ntoskrnl_task_ops(win_kernel_state& state, proc_module& m
 
 		const auto self = cpu.thread();
 
-		// Collected first: terminate_thread takes the process's thread lock,
-		// which for_each_thread is holding while it walks.
+		// Collected first: terminate_thread takes the lock for_each_thread holds.
 		std::vector<process::thread_id_type> ids;
 
 		st->sys_proc->for_each_thread([&](win_thread& t)
