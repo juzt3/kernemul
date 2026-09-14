@@ -15,10 +15,6 @@ namespace {
 constexpr int reg_fp = 29;
 constexpr int reg_lr = 30;
 
-// ARM64_NT_CONTEXT comes from the PDB as _CONTEXT, so CONTEXT_ARM64_FULL is the
-// only part that has to be spelled out here.
-constexpr std::uint32_t context_arm64_full = 0x00400000 | 0x1 | 0x2 | 0x4;
-
 struct xdata_header
 {
 	std::uint32_t function_length;  // bytes

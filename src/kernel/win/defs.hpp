@@ -64,6 +64,41 @@ static_assert(sizeof(_RTL_OSVERSIONINFOEXW) == 0x11C);
 inline constexpr std::uint32_t ver_platform_win32_nt = 2;
 inline constexpr std::uint8_t ver_nt_workstation = 1;
 
+// Which halves of the register set a CONTEXT is being asked for, and which it
+// came back with. Every CONTEXT_* is the architecture's own tag or'd with one
+// bit per half, so a half is named only when both are there -- which is why
+// there is no operator& to test against zero: that would read CONTEXT_CONTROL
+// on its own as naming every other half as well, and on the way back in means
+// writing registers out of a buffer the caller never filled.
+struct context_flags
+{
+	std::uint32_t bits = 0;
+
+	[[nodiscard]] constexpr bool has(const context_flags part) const
+	{
+		return (bits & part.bits) == part.bits;
+	}
+
+	// The tag with one more bit set, which is how every CONTEXT_* past the tag
+	// itself is spelled.
+	[[nodiscard]] constexpr context_flags with(const std::uint32_t bit) const
+	{
+		return { bits | bit };
+	}
+
+	constexpr context_flags& operator|=(const context_flags other)
+	{
+		bits |= other.bits;
+		return *this;
+	}
+
+	[[nodiscard]] friend constexpr context_flags operator|(context_flags a,
+		const context_flags b)
+	{
+		return a |= b;
+	}
+};
+
 // Windows counts 100ns ticks from 1601-01-01 and the host clock counts seconds
 // from 1970-01-01, so a guest timestamp is the host's plus the gap.
 inline constexpr std::int64_t win_epoch_delta_100ns = 116444736000000000;

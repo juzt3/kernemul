@@ -445,10 +445,10 @@ public:
 	// shape belongs to the architecture, so both halves live there. `flags` is
 	// what was asked for; ContextFlags comes back saying what was filled in.
 	virtual void capture_context(const reg_view& regs, emu_object<_CONTEXT> out,
-		std::uint32_t flags) = 0;
+		context_flags flags) = 0;
 
 	// Everything the architecture can fill in, for a caller with no request.
-	static constexpr std::uint32_t context_all = ~0u;
+	static constexpr context_flags context_all{ ~0u };
 
 	virtual void apply_context(const reg_view& regs, emu_object<_CONTEXT> in) = 0;
 

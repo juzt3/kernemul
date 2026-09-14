@@ -8,14 +8,14 @@
 #include <span>
 
 // CONTEXT_*, the x86-64 tag and the halves asked for on top of it.
-inline constexpr std::uint32_t context_amd64    = 0x00100000;
-inline constexpr std::uint32_t context_control  = context_amd64 | 0x1;
-inline constexpr std::uint32_t context_integer  = context_amd64 | 0x2;
-inline constexpr std::uint32_t context_segments = context_amd64 | 0x4;
-inline constexpr std::uint32_t context_float    = context_amd64 | 0x8;
+inline constexpr context_flags context_amd64    { 0x00100000 };
+inline constexpr context_flags context_control  = context_amd64.with(0x1);
+inline constexpr context_flags context_integer  = context_amd64.with(0x2);
+inline constexpr context_flags context_segments = context_amd64.with(0x4);
+inline constexpr context_flags context_float    = context_amd64.with(0x8);
 
 // CONTEXT_FULL: what ntdll stamps on a context it means to continue through.
-inline constexpr std::uint32_t context_full =
+inline constexpr context_flags context_full =
 	context_control | context_integer | context_float;
 
 // The service number is in eax, and every usermode stub opens the same way.
@@ -125,7 +125,7 @@ public:
 		const addr_t context_addr = (stack_top - sizeof(_CONTEXT)) & ~addr_t(0xF);
 
 		_CONTEXT ctx{};
-		ctx.ContextFlags = context_full;
+		ctx.ContextFlags = context_full.bits;
 		ctx.MxCsr = 0x1F80;
 		ctx.SegCs = x86_win_seg::user_cs;
 		ctx.SegSs = x86_win_seg::user_ds;
@@ -201,21 +201,12 @@ public:
 		const addr_t context_addr = (cpu.sp() - 0x100 - frame) & ~addr_t(0xF);
 		const addr_t record_addr = context_addr + exception_record_offset;
 
-		// The floating point half is not captured, and ntdll unwinds through
-		// this context: a zeroed one has an MxCsr with every exception
-		// unmasked and an x87 control word no real thread ever has.
-		_CONTEXT blank{};
-		blank.MxCsr = 0x1F80;
-		blank.FltSave.ControlWord = 0x27F;
-		blank.FltSave.MxCsr = 0x1F80;
-
+		// Everything the architecture can say, because ntdll both dispatches and
+		// unwinds through this one: what is left out here is what a handler
+		// taking the frame restores over the registers the fault came in with.
 		emu_object<_CONTEXT> context(space, context_addr);
-		context.write(blank);
+		context.write(_CONTEXT{});
 		capture_context({cpu}, context, context_all);
-
-		// Everything the dispatcher and the unwinder may copy out of it.
-		context.field(&_CONTEXT::ContextFlags).write(
-			context_amd64 | context_control | context_integer | context_segments | context_float);
 
 		_EXCEPTION_RECORD record{};
 		record.ExceptionCode = static_cast<std::int32_t>(info.code);
@@ -247,23 +238,28 @@ public:
 		return true;
 	}
 
-	// The floating point half is not filled in -- a CONTEXT keeps the xmm
-	// registers in an XSAVE area -- and is left out of ContextFlags too.
+	// x87 and sse control words. The backend has no register for either, so
+	// these are what a thread runs with rather than what the cpu holds -- but a
+	// zero is worse than a stand-in: an MxCsr of zero unmasks every sse
+	// exception, and ntdll continues through a captured context with ldmxcsr.
+	static constexpr std::uint32_t default_mxcsr = 0x1F80;
+	static constexpr std::uint16_t default_fpcw  = 0x27F;
+
 	void capture_context(const reg_view& regs, emu_object<_CONTEXT> out,
-		const std::uint32_t flags) override
+		const context_flags flags) override
 	{
 		if (!out)
 			return;
 
 		auto ctx = out.read();
-		std::uint32_t filled = context_amd64;
+		auto filled = context_amd64;
 
 		// Or whoever continues through this context does it in the wrong mode.
 		const bool user = regs.is_user();
 		const auto code_sel = user ? x86_win_seg::user_cs : x86_win_seg::kernel_cs;
 		const auto data_sel = user ? x86_win_seg::user_ds : x86_win_seg::kernel_ds;
 
-		if (flags & context_integer)
+		if (flags.has(context_integer))
 		{
 			filled |= context_integer;
 
@@ -283,7 +279,7 @@ public:
 			ctx.R15 = regs.get(x86::r15);
 		}
 
-		if (flags & context_control)
+		if (flags.has(context_control))
 		{
 			filled |= context_control;
 
@@ -295,7 +291,7 @@ public:
 			ctx.SegSs = data_sel;
 		}
 
-		if (flags & context_segments)
+		if (flags.has(context_segments))
 		{
 			filled |= context_segments;
 
@@ -305,7 +301,28 @@ public:
 			ctx.SegGs = data_sel;
 		}
 
-		ctx.ContextFlags = filled;
+		// xmm6-15 are nonvolatile, and this is the only place they reach a
+		// CONTEXT: a frame that spilled one and is then unwound past gets it
+		// back out of here. Leaving the half out meant ntdll restoring zeroes
+		// over every one of them on the way out of an exception.
+		if (flags.has(context_float))
+		{
+			filled |= context_float;
+
+			ctx.MxCsr = default_mxcsr;
+			ctx.FltSave.MxCsr = default_mxcsr;
+			ctx.FltSave.ControlWord = default_fpcw;
+
+			for (int i = 0; i < 16; ++i)
+			{
+				const auto value = regs.get_reg<x86::xmm_t>(x86::xmm0 + i);
+
+				ctx.FltSave.XmmRegisters[i].Low = value.low;
+				ctx.FltSave.XmmRegisters[i].High = static_cast<std::int64_t>(value.high);
+			}
+		}
+
+		ctx.ContextFlags = filled.bits;
 		out.write(ctx);
 	}
 
@@ -315,8 +332,9 @@ public:
 			return;
 
 		const auto ctx = in.read();
+		const context_flags flags{ ctx.ContextFlags };
 
-		if (ctx.ContextFlags & context_integer)
+		if (flags.has(context_integer))
 		{
 			regs.set(x86::rax, ctx.Rax);
 			regs.set(x86::rcx, ctx.Rcx);
@@ -334,7 +352,20 @@ public:
 			regs.set(x86::r15, ctx.R15);
 		}
 
-		if (ctx.ContextFlags & context_control)
+		if (flags.has(context_float))
+		{
+			for (int i = 0; i < 16; ++i)
+			{
+				const auto& saved = ctx.FltSave.XmmRegisters[i];
+
+				regs.set_reg(x86::xmm0 + i, x86::xmm_t{
+					.low = saved.Low,
+					.high = static_cast<std::uint64_t>(saved.High),
+				});
+			}
+		}
+
+		if (flags.has(context_control))
 		{
 			regs.set(x86::rsp, ctx.Rsp);
 			regs.set(x86::rbp, ctx.Rbp);

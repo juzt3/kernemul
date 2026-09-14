@@ -108,13 +108,13 @@ void modules::register_ntoskrnl_ctx_ops(win_kernel_state& state, proc_module& mo
 			if (!emulator)
 				return STATUS_NOT_IMPLEMENTED;
 
-			const auto wanted = context.field(&_CONTEXT::ContextFlags).read();
+			const context_flags wanted{ context.field(&_CONTEXT::ContextFlags).read() };
 			const reg_view regs{cpu, target.is_current ? nullptr : target.thread.get()};
 
 			emulator->capture_context(regs, context, wanted);
 
 			THREAD_LOG_INFO("NtGetContextThread(tid={}, flags=0x{:X}) -> 0x{:X}",
-				target.thread->id(), wanted,
+				target.thread->id(), wanted.bits,
 				context.field(&_CONTEXT::ContextFlags).read());
 
 			return STATUS_SUCCESS;

@@ -3,9 +3,10 @@
 #include "../../emu/arm64/arch.hpp"
 
 // CONTEXT_*, the AArch64 tag and the halves asked for on top of it.
-inline constexpr std::uint32_t context_arm64   = 0x00400000;
-inline constexpr std::uint32_t context_control = context_arm64 | 0x1;
-inline constexpr std::uint32_t context_integer = context_arm64 | 0x2;
+inline constexpr context_flags context_arm64   { 0x00400000 };
+inline constexpr context_flags context_control = context_arm64.with(0x1);
+inline constexpr context_flags context_integer = context_arm64.with(0x2);
+inline constexpr context_flags context_float   = context_arm64.with(0x4);
 
 // Windows on ARM64. There is no GDT, no TSS and no IDT: the TEB lives in
 // TPIDR_EL0, the KPCR in TPIDR_EL1, and the exception vectors are found through
@@ -27,17 +28,22 @@ public:
 		t.set_reg(cpu, arm64::tpidr_el0, teb_addr);
 	}
 
-	// The Neon half is not filled in, and is left out of ContextFlags too.
+	// fpcr and fpsr are registers the backend has, but not ones a thread's
+	// context is saved from -- see arm64::arch::regs() -- so a banked thread
+	// has no copy of them to give. These are what a thread runs with instead.
+	static constexpr std::uint32_t default_fpcr = 0;
+	static constexpr std::uint32_t default_fpsr = 0;
+
 	void capture_context(const reg_view& regs, emu_object<_CONTEXT> out,
-		const std::uint32_t flags) override
+		const context_flags flags) override
 	{
 		if (!out)
 			return;
 
 		auto ctx = out.read();
-		std::uint32_t filled = context_arm64;
+		auto filled = context_arm64;
 
-		if (flags & context_integer)
+		if (flags.has(context_integer))
 		{
 			filled |= context_integer;
 
@@ -45,7 +51,26 @@ public:
 				ctx.X[i] = regs.get(arm64::x0 + i);
 		}
 
-		if (flags & context_control)
+		// d8-d15 are nonvolatile, and this is the only place they reach a
+		// CONTEXT: a frame that spilled one and is then unwound past gets it
+		// back out of here.
+		if (flags.has(context_float))
+		{
+			filled |= context_float;
+
+			ctx.Fpcr = default_fpcr;
+			ctx.Fpsr = default_fpsr;
+
+			for (int i = 0; i < 32; ++i)
+			{
+				const auto value = regs.get_reg<arm64::vec_t>(arm64::q0 + i);
+
+				ctx.V[i].Low = value.low;
+				ctx.V[i].High = static_cast<std::int64_t>(value.high);
+			}
+		}
+
+		if (flags.has(context_control))
 		{
 			filled |= context_control;
 
@@ -56,7 +81,7 @@ public:
 			ctx.Cpsr = static_cast<std::uint32_t>(regs.get(arm64::pstate));
 		}
 
-		ctx.ContextFlags = filled;
+		ctx.ContextFlags = filled.bits;
 		out.write(ctx);
 	}
 
@@ -66,14 +91,28 @@ public:
 			return;
 
 		const auto ctx = in.read();
+		const context_flags flags{ ctx.ContextFlags };
 
-		if (ctx.ContextFlags & context_integer)
+		if (flags.has(context_integer))
 		{
 			for (int i = 0; i <= 28; ++i)
 				regs.set(arm64::x0 + i, ctx.X[i]);
 		}
 
-		if (ctx.ContextFlags & context_control)
+		if (flags.has(context_float))
+		{
+			for (int i = 0; i < 32; ++i)
+			{
+				const auto& saved = ctx.V[i];
+
+				regs.set_reg(arm64::q0 + i, arm64::vec_t{
+					.low = saved.Low,
+					.high = static_cast<std::uint64_t>(saved.High),
+				});
+			}
+		}
+
+		if (flags.has(context_control))
 		{
 			regs.set(arm64::x29, ctx.Fp);
 			regs.set(arm64::lr, ctx.Lr);

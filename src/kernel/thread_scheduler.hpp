@@ -89,6 +89,24 @@ public:
 		}
 	}
 
+	template <typename T>
+	[[nodiscard]] T get_reg_val(vcpu& cpu, const reg_t r) const
+	{
+		static_assert(sizeof(T) <= sizeof(reg_val), "a banked register is kept in a reg_val");
+
+		const auto regs = cpu.arch()->regs();
+		for (std::size_t i = 0; i < regs.size(); ++i)
+		{
+			if (regs[i] == r)
+			{
+				T value{};
+				std::memcpy(&value, &values_[i], sizeof(T));
+				return value;
+			}
+		}
+		return T{};
+	}
+
 	// A thread waits by staying on the ready queue with a time on it, rather
 	// than by leaving the queue: nothing has to remember to put it back, and a
 	// cpu looking for work passes over it until that time comes round.
@@ -144,7 +162,8 @@ struct reg_view
 			cpu.reg(r, value);
 	}
 
-	// A register too wide for get() and set() to carry, such as a segment.
+	// A register too wide for get() and set() to carry, such as a segment or an
+	// xmm.
 	template <typename T>
 	void set_reg(const reg_t r, const T& value) const
 	{
@@ -152,6 +171,12 @@ struct reg_view
 			banked->set_reg_val(cpu, r, value);
 		else
 			cpu.reg(r, value);
+	}
+
+	template <typename T>
+	[[nodiscard]] T get_reg(const reg_t r) const
+	{
+		return banked ? banked->get_reg_val<T>(cpu, r) : cpu.reg<T>(r);
 	}
 
 	[[nodiscard]] bool is_user() const
