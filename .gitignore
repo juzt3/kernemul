@@ -423,3 +423,6 @@ fs_x86_64/
 
 tools/*
 fs_arm64/
+
+# Symbol server cache (PDBs downloaded from msdl.microsoft.com)
+symbols/

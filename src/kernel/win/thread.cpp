@@ -72,7 +72,9 @@ void win_thread::begin_wait(wait_state w)
 		const auto remaining = std::max<std::int64_t>(
 			0, w.deadline - static_cast<std::int64_t>(win_system_time()));
 
-		sleep_for(std::chrono::duration_cast<std::chrono::milliseconds>(win_ticks(remaining)));
+		// Rounded up: truncating here would arm the host sleep to run out
+		// before the guest deadline it stands in for.
+		sleep_for(std::chrono::ceil<std::chrono::milliseconds>(win_ticks(remaining)));
 	}
 
 	wait_ = std::move(w);
@@ -213,10 +215,23 @@ bool win_thread::is_ready(vcpu& cpu)
 		return true;
 	}
 
-	if (wait_->timed && static_cast<std::int64_t>(win_system_time()) >= wait_->deadline)
+	if (wait_->timed)
 	{
-		finish(STATUS_TIMEOUT);
-		return true;
+		const auto remaining = wait_->deadline - static_cast<std::int64_t>(win_system_time());
+
+		if (remaining <= 0)
+		{
+			finish(STATUS_TIMEOUT);
+			return true;
+		}
+
+		// Still time to go, so put it back to sleep for what is left of it.
+		// The deadline is guest time and the sleep the scheduler paces itself
+		// by is host time, so the two do not run out at the same instant: a cpu
+		// that wakes even a tick early would otherwise find this thread neither
+		// ready nor sleeping, and go back to waiting with no time to wake at --
+		// which is nothing at all to wake it when it is the last thread left.
+		sleep_for(std::chrono::ceil<std::chrono::milliseconds>(win_ticks(remaining)));
 	}
 
 	return false;
