@@ -499,7 +499,7 @@ void x86_whp_emu::remove_hook(const hook_handle handle)
 	std::erase_if(hooks_, [handle](const auto& hook) { return hook.get() == handle; });
 }
 
-void x86_whp_emu::map_phys_mem(const addr_t addr, const std::size_t size, mem_prot)
+void x86_whp_emu::map_phys_mem(const addr_t addr, const std::size_t size)
 {
 	// Physical pages are mapped wide open on purpose. What a page may be used
 	// for is decided by the guest page tables the mmu writes, and the physical
