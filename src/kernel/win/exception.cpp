@@ -103,7 +103,21 @@ bool win_exception::handle(vcpu& cpu, const cpu_exception ex)
 		if (!result.handler)
 			continue;
 
-		const auto hr = unwinder_->evaluate_handler(cpu, *mod, result, control_pc, info);
+		auto* emulator = kernel_.emulator();
+
+		if (!emulator)
+			break;
+
+		const auto pointers = build_exception_pointers(cpu, *emulator, info);
+
+		const auto hr = search_scope_table(cpu, kernel_.calls, {
+			.image_base = mod->addr,
+			.handler_data = result.handler_data,
+			.control_pc = control_pc,
+			.establisher_frame = result.establisher_frame,
+			.exception_pointers = pointers.address,
+			.scratch = pointers.scratch,
+		});
 
 		if (hr.disposition == exception_execute_handler)
 		{
