@@ -7,6 +7,7 @@
 #include <functional>
 #include <memory>
 #include <span>
+#include <string_view>
 #include <variant>
 #include <vector>
 
@@ -128,6 +129,21 @@ enum class cpu_exception : std::uint8_t
 	other,
 };
 
+constexpr std::string_view to_string(const cpu_exception ex)
+{
+	switch (ex)
+	{
+	case cpu_exception::divide_by_zero:      return "divide by zero";
+	case cpu_exception::debug:               return "debug trap";
+	case cpu_exception::breakpoint:          return "breakpoint";
+	case cpu_exception::illegal_instruction: return "illegal instruction";
+	case cpu_exception::page_fault:          return "page fault";
+	case cpu_exception::other:               return "exception";
+	}
+
+	return "exception";
+}
+
 using mem_hk_cb = std::function<void(vcpu&, addr_t, std::size_t, mem_prot)>;
 using insn_hk_cb = std::function<bool(vcpu&)>;
 using code_hk_cb = std::function<void(vcpu&, addr_t, std::size_t)>;
@@ -199,7 +215,9 @@ public:
 	// over being changed underneath it.
 	virtual void run_on_all(const std::function<void()>& fn) { fn(); }
 
-	virtual void map_phys_mem(addr_t addr, std::size_t size, mem_prot prot) = 0;
+	// Always mapped rwx: the guest page tables decide access, and a narrower
+	// permission here would sit under them and refuse what they allow.
+	virtual void map_phys_mem(addr_t addr, std::size_t size) = 0;
 	virtual void unmap_phys_mem(addr_t addr, std::size_t size, mem_prot prot) = 0;
 	virtual void read_phys_mem(addr_t addr, void* buf, std::size_t size) = 0;
 	virtual void write_phys_mem(addr_t addr, const void* buf, std::size_t size) = 0;

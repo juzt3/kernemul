@@ -27,6 +27,11 @@ public:
 		{
 			uc_x86_mmr mmr{};
 			uc_reg_read(uc_, to_uc_reg(reg), &mmr);
+
+			// A selector register hands back only the selector.
+			if (const auto base_reg = to_uc_base_reg(reg); base_reg >= 0)
+				uc_reg_read(uc_, base_reg, &mmr.base);
+
 			const x86::seg_reg sr{ mmr.selector, mmr.base, mmr.limit, mmr.flags };
 			std::memcpy(value, &sr, std::min(size, sizeof(sr)));
 			return;
@@ -59,6 +64,11 @@ public:
 			std::memcpy(&sr, value, std::min(size, sizeof(sr)));
 			uc_x86_mmr mmr{ sr.selector, sr.base, sr.limit, sr.flags };
 			uc_reg_write(uc_, to_uc_reg(reg), &mmr);
+
+			// Writing a selector loads the gdt descriptor over our base.
+			if (const auto base_reg = to_uc_base_reg(reg); base_reg >= 0)
+				uc_reg_write(uc_, base_reg, &sr.base);
+
 			return;
 		}
 		if (is_xmm_reg(reg))
@@ -96,6 +106,17 @@ public:
 	static constexpr bool is_xmm_reg(reg_t reg)
 	{
 		return reg >= x86::xmm0 && reg <= x86::xmm15;
+	}
+
+	// Where a segment's base lives, or -1 for one with no base in long mode.
+	static constexpr int to_uc_base_reg(reg_t reg)
+	{
+		switch (reg)
+		{
+		case x86::fs: return UC_X86_REG_FS_BASE;
+		case x86::gs: return UC_X86_REG_GS_BASE;
+		default: return -1;
+		}
 	}
 
 	static constexpr int to_uc_reg(reg_t reg)
