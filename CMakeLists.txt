@@ -350,6 +350,7 @@ target_compile_features(kernemul PRIVATE
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU") # gnu
 	target_compile_options(kernemul PRIVATE
 		-Wno-changes-meaning
+		-mms-bitfields
 	)
 endif()
 

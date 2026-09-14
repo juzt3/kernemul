@@ -75,8 +75,8 @@ endif()
 
 [conditions]
 windows = "WIN32"
-# -Wno-changes-meaning is gcc's own spelling; clang rejects it as an unknown
-# warning option and msvc as an unknown flag.
+# Both of these are gcc's own spelling: clang rejects -Wno-changes-meaning as an
+# unknown warning option, and msvc takes neither.
 gnu = "CMAKE_CXX_COMPILER_ID STREQUAL \"GNU\""
 arch-x64 = "KERNEMUL_ARCH STREQUAL \"x64\""
 arch-arm64 = "KERNEMUL_ARCH STREQUAL \"arm64\""
@@ -103,7 +103,15 @@ include-directories = ["src", "vendor/pe/src", "vendor/ia32-doc/out"]
 compile-features = ["cxx_std_23"]
 link-libraries = ["spdlog::spdlog", "unicorn", "raw_pdb", "Boost::beast", "OpenSSL::SSL", "OpenSSL::Crypto"]
 windows.link-libraries = ["ws2_32"]
-gnu.compile-options = ["-Wno-changes-meaning"]
+# The generated Windows types put every struct under #pragma pack(1) and lean on
+# ms_struct for the rest of the layout, so a bitfield keeps a whole allocation
+# unit of its declared type. gcc ignores "#pragma ms_struct on" everywhere it is
+# not the native convention and packs the bitfield down to the bits it uses
+# instead, which leaves 78 of the generated structs short of the size pdbex
+# recorded for them. -mms-bitfields is the flag behind that pragma. clang honours
+# the pragma unaided and mingw already defaults to this, so gcc is the only one
+# that has to be told.
+gnu.compile-options = ["-Wno-changes-meaning", "-mms-bitfields"]
 arch-x64.compile-definitions = ["KERNEMUL_ARCH_X64=1"]
 arch-arm64.compile-definitions = ["KERNEMUL_ARCH_ARM64=1"]
 whp.sources = ["vendor/hypermulator/src/**.cpp", "vendor/hypermulator/src/**.hpp"]
