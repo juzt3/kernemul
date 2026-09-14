@@ -143,6 +143,25 @@ struct reg_view
 		else
 			cpu.reg(r, value);
 	}
+
+	// A register too wide for get() and set() to carry, such as a segment.
+	template <typename T>
+	void set_reg(const reg_t r, const T& value) const
+	{
+		if (banked)
+			banked->set_reg_val(cpu, r, value);
+		else
+			cpu.reg(r, value);
+	}
+
+	[[nodiscard]] bool is_user() const
+	{
+		if (banked)
+			return banked->is_user_mode();
+
+		const auto curr = cpu.thread();
+		return curr && curr->is_user_mode();
+	}
 };
 
 class thread_scheduler
