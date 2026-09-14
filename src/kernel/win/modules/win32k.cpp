@@ -2,23 +2,23 @@
 #include "../types.hpp"
 #include "../win_kernel.hpp"
 #include "../../../util/log.hpp"
-#include "../../../util/string.hpp"
 
-// No desktop, so the message goes to the log and the caller is told the user
-// pressed the default button.
+// The window manager's message dispatch. There is no desktop and no window, so
+// the message goes to the log and the caller is told it was handled.
+//
+// ResultInfo is where a message that answers with more than a return value puts
+// it, and nothing here writes one.
 void modules::register_win32k(win_kernel_state& state, proc_module& mod)
 {
 	state.redirect(mod, "NtUserMessageCall",
-		[](vcpu& cpu, const std::uint64_t window, const addr_t text,
-			const addr_t caption, const std::uint32_t type) -> std::uint64_t
+		[](vcpu&, const addr_t window, const std::uint32_t message,
+			const std::uint64_t wparam, const std::uint64_t lparam,
+			const addr_t result_info, const std::uint32_t type,
+			const bool ansi) -> std::uint64_t
 		{
-			auto& space = *cpu.curr_addr_space();
-
-			const auto message = text ? narrow_wstring(guest::read_wstring(space, text)) : "";
-			const auto title = caption ? narrow_wstring(guest::read_wstring(space, caption)) : "";
-
-			THREAD_LOG_WARN("NtUserMessageCall(window=0x{:X}, type=0x{:X}): '{}' / '{}'",
-				window, type, title, message);
+			THREAD_LOG_WARN("NtUserMessageCall(window=0x{:X}, message=0x{:X}, wparam=0x{:X}, "
+				"lparam=0x{:X}, result=0x{:X}, type=0x{:X}, ansi={}): there is no window to "
+				"send it to", window, message, wparam, lparam, result_info, type, ansi);
 
 			return 1;
 		});
