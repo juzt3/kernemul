@@ -34,7 +34,25 @@ public:
 		: emu_(std::move(emu))
 	{
 		emu_->hook_exception([this](vcpu& cpu, cpu_exception ex) {
-			return handle_exception(cpu, ex);
+			if (handle_exception(cpu, ex))
+				return true;
+
+			// Only the trap path reaches this: callers that merely ask whether
+			// an exception would be handled go through handle_exception.
+			const auto t = cpu.thread();
+
+			LOG_ERR("unhandled {} on cpu {}: nothing anywhere claimed it, so the "
+				"machine stops here", to_string(ex), cpu.id());
+			LOG_ERR("  pc      0x{:X}", cpu.pc());
+			LOG_ERR("  address 0x{:X}", cpu.arch()->fault_addr(cpu));
+
+			if (t)
+				LOG_ERR("  thread  {} of process {}", t->id(), t->proc()->id());
+
+			scheduler_.stop();
+			cpu.stop();
+
+			return false;
 		});
 	}
 
@@ -238,6 +256,12 @@ struct kernel_state
 	void redirect(proc_module& mod, const std::string_view name, F&& fn)
 	{
 		redirect(mod, name, make_redirect(emu_->call_conv(), std::forward<F>(fn)));
+	}
+
+	[[nodiscard]] const redirect_fn* find_redirect(const addr_t addr) const
+	{
+		const auto it = redirections_.find(addr);
+		return it != redirections_.end() ? &it->second : nullptr;
 	}
 
 protected:

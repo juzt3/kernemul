@@ -32,6 +32,25 @@ std::shared_ptr<::addr_space> mmu::create_addr_space()
 	auto space = std::make_shared<addr_space>();
 	space->pml4_pa = alloc_phys_locked(page_size(), prot_rw);
 	space->mmu_ = this;
+
+	// The first space made is the kernel's; every one after it aliases the
+	// kernel half, which is where the gdt, idt and tss a thread needs on a
+	// context switch live. Copying the entries shares the tables below them, so
+	// a kernel mapping made later shows up here too.
+	if (!kernel_pml4_pa_)
+	{
+		kernel_pml4_pa_ = space->pml4_pa;
+	}
+	else
+	{
+		for (std::size_t i = 256; i < 512; ++i)
+		{
+			const auto off = i * sizeof(ia32::pt_entry_64);
+			write_phys(space->pml4_pa + off,
+				read_phys<ia32::pt_entry_64>(kernel_pml4_pa_ + off));
+		}
+	}
+
 	spaces_[space->pml4_pa] = space;
 	return space;
 }
@@ -215,11 +234,16 @@ void mmu::copy_virt(const addr_space& space, addr_t va, void* buf, std::size_t s
 		std::size_t page_off = cur_va - page;
 		std::size_t chunk = std::min(size - done, page_size() - page_off);
 
-		auto it = space.shadow.find(page);
-		if (it == space.shadow.end())
+		const auto it = space.shadow.find(page);
+
+		const auto frame = it != space.shadow.end()
+			? std::optional<addr_t>(it->second)
+			: translate_virt(space, page);
+
+		if (!frame)
 			throw std::runtime_error("unmapped virtual address");
 
-		addr_t pa = it->second + page_off;
+		const addr_t pa = *frame + page_off;
 
 		if (write)
 			write_phys(pa, bytes + done, chunk);
@@ -283,6 +307,32 @@ void mmu::prot_virt(::addr_space& space, addr_t va, std::size_t size, mem_prot p
 	flush_all_tlb();
 }
 
+// The shadow only records mappings made *in* a space, and a space aliases the
+// kernel half without ever having made those -- so a shadow miss is a question
+// for the tables. Unlocked: both callers hold mtx_ already.
+std::optional<addr_t> mmu::translate_virt(const addr_space& s, const addr_t page)
+{
+	const virt_addr v{ .val = page };
+
+	const auto pml4e = read_phys<ia32::pt_entry_64>(
+		s.pml4_pa + v.pml4 * sizeof(ia32::pt_entry_64));
+	if (!pml4e.present) return std::nullopt;
+
+	const auto pdpte = read_phys<ia32::pt_entry_64>(
+		pfn_to_pa(pml4e.page_frame_number) + v.pdpt * sizeof(ia32::pt_entry_64));
+	if (!pdpte.present) return std::nullopt;
+
+	const auto pde = read_phys<ia32::pt_entry_64>(
+		pfn_to_pa(pdpte.page_frame_number) + v.pd * sizeof(ia32::pt_entry_64));
+	if (!pde.present) return std::nullopt;
+
+	const auto pte = read_phys<ia32::pte_64>(
+		pfn_to_pa(pde.page_frame_number) + v.pt * sizeof(ia32::pte_64));
+	if (!pte.present) return std::nullopt;
+
+	return pfn_to_pa(pte.page_frame_number);
+}
+
 std::optional<addr_t> mmu::virt_to_phys(const ::addr_space& space, addr_t va)
 {
 	auto& s = as_x86(space);
@@ -290,10 +340,14 @@ std::optional<addr_t> mmu::virt_to_phys(const ::addr_space& space, addr_t va)
 
 	addr_t page = page_align(va);
 	auto it = s.shadow.find(page);
-	if (it == s.shadow.end())
-		return std::nullopt;
 
-	return it->second + (va - page);
+	if (it != s.shadow.end())
+		return it->second + (va - page);
+
+	if (const auto pa = translate_virt(s, page))
+		return *pa + (va - page);
+
+	return std::nullopt;
 }
 
 std::optional<addr_t> mmu::phys_to_virt(const ::addr_space& space, addr_t pa)
