@@ -91,6 +91,23 @@ std::vector<std::uint8_t> read_message(vcpu& cpu, const emu_object<_PORT_MESSAGE
 	return bytes;
 }
 
+// Nothing answers a connect, so the reply buffer would come back holding the
+// caller's own stack garbage. Zeroed is what a silent server leaves behind.
+void clear_connection_information(vcpu& cpu, const addr_t information,
+	const emu_object<std::uint32_t>& information_length)
+{
+	if (!information || !information_length)
+		return;
+
+	const auto length = information_length.read();
+
+	if (!length || length > maximum_message_length)
+		return;
+
+	const std::vector<std::uint8_t> zeros(length, 0);
+	cpu.curr_addr_space()->write_mem(information, zeros.data(), zeros.size());
+}
+
 std::string attribute_name(vcpu& cpu, const emu_object<_OBJECT_ATTRIBUTES>& object_attributes)
 {
 	auto& space = *cpu.curr_addr_space();
@@ -335,10 +352,11 @@ void modules::register_ntoskrnl_lpc_ops(win_kernel_state& state, proc_module& mo
 			}
 		}
 
+		// No server maps a view, but a zero size reads as a broken connection.
 		if (server_view)
 		{
 			auto value = server_view.read();
-			value.ViewSize = 0;
+			value.ViewSize = maximum_port_view_size;
 			value.ViewBase = nullptr;
 			server_view.write(value);
 		}
@@ -358,12 +376,11 @@ void modules::register_ntoskrnl_lpc_ops(win_kernel_state& state, proc_module& mo
 			[[maybe_unused]] const addr_t security_qos, const addr_t client_view,
 			emu_object<_REMOTE_PORT_VIEW> server_view,
 			emu_object<std::uint32_t> maximum_message_length,
-			[[maybe_unused]] const addr_t connection_information,
+			const addr_t connection_information,
 			emu_object<std::uint32_t> connection_information_length) -> NTSTATUS
 		{
-			// Nothing answered, so none of the connection information came back.
-			if (connection_information_length)
-				connection_information_length.write(0);
+			clear_connection_information(cpu, connection_information,
+				connection_information_length);
 
 			return connect_port(cpu, std::move(port_handle), std::move(port_name), client_view,
 				std::move(server_view), std::move(maximum_message_length), "NtConnectPort");
@@ -376,11 +393,11 @@ void modules::register_ntoskrnl_lpc_ops(win_kernel_state& state, proc_module& mo
 			[[maybe_unused]] const addr_t server_sid,
 			emu_object<_REMOTE_PORT_VIEW> server_view,
 			emu_object<std::uint32_t> maximum_message_length,
-			[[maybe_unused]] const addr_t connection_information,
+			const addr_t connection_information,
 			emu_object<std::uint32_t> connection_information_length) -> NTSTATUS
 		{
-			if (connection_information_length)
-				connection_information_length.write(0);
+			clear_connection_information(cpu, connection_information,
+				connection_information_length);
 
 			return connect_port(cpu, std::move(port_handle), std::move(port_name), client_view,
 				std::move(server_view), std::move(maximum_message_length),
