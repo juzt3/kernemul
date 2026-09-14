@@ -14,6 +14,9 @@
 #include "modules/cng.hpp"
 #include "modules/ci.hpp"
 #include "modules/ndis.hpp"
+#include "modules/tbs.hpp"
+#include "modules/tdi.hpp"
+#include "modules/win32k.hpp"
 #include "pool.hpp"
 #include "../../emu/guest_call.hpp"
 #include "../../target.hpp"
@@ -33,6 +36,9 @@ struct win_kernel_state : kernel_state
 	loaded_module_list_t loaded_module_list;
 	active_process_list_t active_process_list;
 	emu_object<_KUSER_SHARED_DATA> kuser_shared_data;
+
+	// One per machine: the trampoline it returns through is a single address.
+	guest_caller calls;
 
 	// Views mapped into system space, by base address, so unmapping one knows
 	// how much to take down. Small and touched only by the two handlers that
@@ -71,6 +77,9 @@ struct win_kernel_state : kernel_state
 			map_redirect_module("cng.sys", modules::register_cng);
 			map_redirect_module("ci.dll", modules::register_ci);
 			map_redirect_module("ndis.sys", modules::register_ndis);
+			map_redirect_module("tbs.sys", modules::register_tbs);
+			map_redirect_module("tdi.sys", modules::register_tdi);
+			map_redirect_module("win32k.sys", modules::register_win32k);
 
 			if (const auto ps_list = ntoskrnl->find_export("PsLoadedModuleList"))
 			{
@@ -324,19 +333,13 @@ public:
 	// there the KPCR is the only copy and this does nothing.
 	virtual void set_hw_irql(vcpu&, irql_t) {}
 
-	// A thread's registers as the guest's own CONTEXT, and the way back from
-	// one. Which fields a CONTEXT holds, and which bit of ContextFlags asks for
-	// them, belong to the architecture -- so both halves live with the rest of
-	// what an architecture has to say about itself.
-	//
-	// `flags` is what the caller asked for; what comes back in ContextFlags is
-	// what was actually filled in, which is how a caller asking for floating
-	// point finds out it did not get any.
+	// A thread's registers as the guest's own CONTEXT, and the way back. Its
+	// shape belongs to the architecture, so both halves live there. `flags` is
+	// what was asked for; ContextFlags comes back saying what was filled in.
 	virtual void capture_context(const reg_view& regs, emu_object<_CONTEXT> out,
 		std::uint32_t flags) = 0;
 
-	// Every part of a CONTEXT the architecture can fill in, for a caller with
-	// no particular request -- what comes back says which parts those were.
+	// Everything the architecture can fill in, for a caller with no request.
 	static constexpr std::uint32_t context_all = ~0u;
 
 	virtual void apply_context(const reg_view& regs, emu_object<_CONTEXT> in) = 0;

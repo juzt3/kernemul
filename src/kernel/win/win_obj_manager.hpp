@@ -40,9 +40,8 @@ public:
 
 	void register_object(addr_t body_addr, std::shared_ptr<win_object> host);
 
-	// The object namespace. It holds exactly what the guest put in it: nothing
-	// here builds \Device or \BaseNamedObjects up front, so a name that was
-	// never created is a name that does not exist.
+	// The object namespace, holding exactly what the guest put in it: nothing
+	// here builds \Device or \BaseNamedObjects up front.
 	void register_named_object(std::string name, addr_t body_addr);
 
 	[[nodiscard]] addr_t lookup_named_object(std::string_view name) const;
