@@ -17,6 +17,10 @@ class win_thread;
 constexpr std::string_view kernel_thread_startup = "PspSystemThreadStartup";
 constexpr std::string_view user_thread_startup   = "RtlUserThreadStart";
 
+constexpr std::string_view loader_thread_startup = "LdrInitializeThunk";
+
+constexpr std::string_view ntdll_name = "ntdll.dll";
+
 class windows_process : public process
 {
 public:
@@ -90,6 +94,8 @@ public:
 		const auto wide_dir = win::dir_from_path(wide_path);
 		current_dir_ = narrow_wstring(wide_dir);
 
+		image_name_ = ascii_lower(image_path.substr(wide_dir.size()));
+
 		const auto peb_addr = mem_.alloc(peb64_alloc_size, prot_rw);
 		peb_ = emu_object<_PEB64>(sp, peb_addr);
 		peb_.write(make_default_peb());
@@ -110,6 +116,11 @@ public:
 		peb.ApiSetMap = win::init_api_set_map(mem_, fs);
 		peb.GdiSharedHandleTable = mem_.alloc(0x1000, prot_rw);
 		peb_.write(peb);
+
+		// A thread starts in ntdll's loader, so without it there is nothing to
+		// start. Last, because mapping writes the loader list set up above.
+		if (!win_user_proc::load_module(ntdll_name, false))
+			LOG_ERR("{} is not in the guest filesystem", ntdll_name);
 	}
 
 	std::shared_ptr<proc_module> load_module(std::string_view name, bool supervisor) override;
@@ -119,19 +130,32 @@ public:
 	std::shared_ptr<thread> create_thread(vcpu& cpu, addr_t start_addr,
 		std::span<const std::uint64_t> args = {}) override;
 
+	// The loader reads the image's PE headers through this; creating the
+	// process heap needs the subsystem version out of them.
+	void set_image_base(const addr_t base)
+	{
+		peb_.field(&_PEB64::ImageBaseAddress).write(base);
+	}
+
 	addr_t thread_exit_addr() const override
 	{
-		return find_symbol("ntdll.dll", user_thread_startup);
+		return find_symbol(ntdll_name, user_thread_startup);
 	}
 
 	win_user_mem& mem() { return mem_; }
 	const win_user_mem& mem() const { return mem_; }
+
+	[[nodiscard]] bool is_process_image(const proc_module& mod) const
+	{
+		return mod.lookup_name == image_name_;
+	}
 
 private:
 	win_user_mem mem_;
 	ldr_module_list ldr_;
 	emu_object<_RTL_USER_PROCESS_PARAMETERS> params_;
 	std::string current_dir_;
+	std::string image_name_;
 };
 
 class win_kernel_proc : public windows_process

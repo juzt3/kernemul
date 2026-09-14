@@ -159,7 +159,8 @@ void windows_process::terminate_thread(const thread_id_type id)
 	process::terminate_thread(id);
 }
 
-std::shared_ptr<proc_module> windows_process::load_module(const std::string_view name, const bool supervisor)
+std::shared_ptr<proc_module> windows_process::load_module(const std::string_view name,
+	const bool supervisor)
 {
 	const auto path = std::string(system32_dir_narrow) + std::string(name);
 	const auto file = fs_.open(path);
@@ -170,7 +171,8 @@ std::shared_ptr<proc_module> windows_process::load_module(const std::string_view
 	return krnl::map_img(*this, name, file->data(), supervisor);
 }
 
-std::shared_ptr<proc_module> win_user_proc::load_module(const std::string_view name, const bool supervisor)
+std::shared_ptr<proc_module> win_user_proc::load_module(const std::string_view name,
+	const bool supervisor)
 {
 	if (const auto file = fs_.open(current_dir_ + std::string(name)))
 		return krnl::map_img(*this, name, file->data(), supervisor);
@@ -182,8 +184,12 @@ void win_user_proc::module_add_cb(proc_module& mod)
 {
 	mem_.register_image(mod.addr, mod.size);
 
-	ldr_.add_module(mem_, mod.addr, mod.entry_point,
-		mod.size, mod.name, true);
+	// The exe stays off the initialisation order list: that is what the loader
+	// walks to call DllMain, and an exe has none.
+	const bool image = is_process_image(mod);
+
+	ldr_.add_module(mem_, mod.addr, mod.entry_point, mod.size, mod.name,
+		!image, image ? ldr_module_list::image_flags : ldr_module_list::dll_flags);
 }
 
 void win_kernel_proc::module_add_cb(proc_module& mod)
