@@ -1,10 +1,14 @@
 #include "nt_sysinfo_ops.hpp"
 #include "../win_kernel.hpp"
 #include "../objects.hpp"
+#include "../filesystem.hpp"
+#include "../process_params.hpp"
 #include "../status.hpp"
 #include "../types.hpp"
 #include "../../../util/log.hpp"
 #include <chrono>
+#include <string>
+#include <string_view>
 
 namespace
 {
@@ -313,4 +317,91 @@ void modules::register_ntoskrnl_sysinfo_ops(win_kernel_state& state, proc_module
 
 	state.redirect_ntzw(mod, "QuerySystemInformation", query_system_information);
 	state.redirect_ntzw(mod, "QuerySystemInformationEx", query_system_information_ex);
+
+	// The NLS tables are files in System32, so they come out of the guest
+	// filesystem -- and one that does not carry them says so rather than
+	// handing back a mapping of nothing.
+	auto map_nls_file = [st](vcpu& cpu, const std::string& path,
+		emu_object<addr_t> base_out, const std::string_view who) -> NTSTATUS
+	{
+		const auto file = st->fs.open(path);
+
+		if (!file)
+		{
+			THREAD_LOG_WARN("{}: {} is not in the guest filesystem", who, path);
+			return STATUS_OBJECT_NAME_NOT_FOUND;
+		}
+
+		auto& space = *cpu.curr_addr_space();
+		const auto data = file->data();
+		const auto base = space.alloc(data.size(), prot_rw);
+
+		if (!base)
+		{
+			THREAD_LOG_ERR("{}: no room for {} ({} bytes)", who, path, data.size());
+			return STATUS_NO_MEMORY;
+		}
+
+		space.write_mem(base, data.data(), data.size());
+
+		if (base_out)
+			base_out.write(base);
+
+		THREAD_LOG_INFO("{}: mapped {} ({} bytes) at 0x{:X}", who, path, data.size(), base);
+
+		return STATUS_SUCCESS;
+	};
+
+	state.redirect_ntzw(mod, "InitializeNlsFiles",
+		[map_nls_file](vcpu& cpu, emu_object<addr_t> base_address,
+			emu_object<std::uint32_t> default_locale_id,
+			emu_object<std::int64_t> default_casing_table_size) -> NTSTATUS
+		{
+			const auto status = map_nls_file(cpu, std::string(system32_dir_narrow) + "locale.nls",
+				base_address, "NtInitializeNlsFiles");
+
+			if (status != STATUS_SUCCESS)
+				return status;
+
+			// en-US, as everything else here reports.
+			if (default_locale_id)
+				default_locale_id.write(0x0409);
+
+			if (default_casing_table_size)
+				default_casing_table_size.write(0);
+
+			return STATUS_SUCCESS;
+		});
+
+	// NlsSectionCodePage is the only kind of section there is a file for.
+	state.redirect_ntzw(mod, "GetNlsSectionPtr",
+		[st, map_nls_file](vcpu& cpu, const std::uint32_t section_type,
+			const std::uint32_t section_data, [[maybe_unused]] const addr_t context_data,
+			emu_object<addr_t> section_pointer, emu_object<std::uint32_t> section_size) -> NTSTATUS
+		{
+			constexpr std::uint32_t nls_section_code_page = 11;
+
+			if (section_type != nls_section_code_page)
+			{
+				THREAD_LOG_WARN("NtGetNlsSectionPtr: section type {} is not a code page",
+					section_type);
+				return STATUS_NOT_SUPPORTED;
+			}
+
+			const auto path = std::string(system32_dir_narrow) + "c_"
+				+ std::to_string(section_data) + ".nls";
+
+			const auto status = map_nls_file(cpu, path, section_pointer, "NtGetNlsSectionPtr");
+
+			if (status != STATUS_SUCCESS)
+				return status;
+
+			if (section_size)
+			{
+				const auto file = st->fs.open(path);
+				section_size.write(static_cast<std::uint32_t>(file ? file->size() : 0));
+			}
+
+			return STATUS_SUCCESS;
+		});
 }
