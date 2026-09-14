@@ -38,12 +38,18 @@ message(STATUS "kernemul backend: ${KERNEMUL_BACKEND}")
 # Unicorn is declared here rather than in [fetch-content] because it needs a
 # PATCH_COMMAND, which cmkr has no key for.
 #
-# The patch makes an AArch64 fault record its address and syndrome in FAR_ELn /
-# ESR_ELn. Unicorn calls the UC_HOOK_INTR callback in place of
-# arm_cpu_do_interrupt, and it is do_interrupt that would normally latch them,
-# so without this arm64::arch::fault_addr has no way to learn which address
-# faulted -- no Unicorn API exposes it. Pinned to a commit rather than master so
-# the patch keeps applying.
+# Both patches are one hole: Unicorn calls the UC_HOOK_INTR callback in place of
+# the target's do_interrupt, so whatever that function would have done to the
+# cpu state never happens. AArch64 never latches the faulting address and
+# syndrome into FAR_ELn / ESR_ELn, which is the only way arm64::arch::fault_addr
+# can learn which address faulted -- no Unicorn API exposes it. x86 leaves the
+# delivered exception pending, and the next fault combines with it into a double
+# fault. Pinned to a commit rather than master so the patches keep applying.
+set(unicorn_patches
+	"${CMAKE_CURRENT_SOURCE_DIR}/patches/unicorn-arm64-fault-regs.patch"
+	"${CMAKE_CURRENT_SOURCE_DIR}/patches/unicorn-x86-clear-old-exception.patch"
+)
+
 include(FetchContent)
 message(STATUS "Fetching unicorn (patched)...")
 FetchContent_Declare(unicorn
@@ -51,7 +57,7 @@ FetchContent_Declare(unicorn
 	GIT_TAG 7c5db94191defc1e04a4f66f4eb1220903cba837
 	PATCH_COMMAND "${CMAKE_COMMAND}"
 		"-DSRC=<SOURCE_DIR>"
-		"-DPATCH=${CMAKE_CURRENT_SOURCE_DIR}/patches/unicorn-arm64-fault-regs.patch"
+		"-DPATCHES=${unicorn_patches}"
 		-P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/apply_patch.cmake"
 )
 FetchContent_MakeAvailable(unicorn)
