@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <vector>
 
 namespace
 {
@@ -36,6 +37,15 @@ enum page_protection : std::uint32_t
 	page_execute_readwrite = 0x40,
 	page_execute_writecopy = 0x80,
 };
+
+// The memory manager for the calling thread's process, or null for a kernel
+// thread: kernel memory comes straight off the address space.
+win_user_mem* user_mem(vcpu& cpu)
+{
+	const auto t = cpu.thread();
+	auto* const proc = t ? dynamic_cast<win_user_proc*>(t->proc().get()) : nullptr;
+	return proc ? &proc->mem() : nullptr;
+}
 
 mem_prot prot_from_page(const std::uint32_t protect)
 {
@@ -69,12 +79,16 @@ std::uint32_t page_from_prot(const mem_prot prot)
 	return w ? page_readwrite : page_readonly;
 }
 
-// MEMORY_INFORMATION_CLASS, of which only the basic one is answerable from the
-// page tables alone.
 constexpr std::uint32_t memory_basic_information = 0;
+constexpr std::uint32_t memory_working_set_ex_information = 4;
+constexpr std::uint32_t memory_image_information = 6;
 
 // SECTION_INFORMATION_CLASS.
 constexpr std::uint32_t section_basic_information = 0;
+
+// kernel32 maps this while it is initialising.
+constexpr std::string_view shared_section_name = "\\Windows\\SharedSection";
+constexpr std::uint64_t shared_section_size = 0x10000;
 
 #pragma pack(push, 8)
 struct memory_basic_information_t
@@ -90,6 +104,24 @@ struct memory_basic_information_t
 	std::uint32_t padding;
 };
 
+struct memory_image_information_t
+{
+	addr_t        image_base;
+	std::uint64_t size_of_image;
+	std::uint32_t image_flags;
+	std::uint32_t padding;
+};
+
+// MEMORY_WORKING_SET_EX_INFORMATION: an address in, the page's state out.
+struct memory_working_set_ex_information_t
+{
+	addr_t        virtual_address;
+	std::uint64_t attributes;
+};
+
+constexpr std::uint64_t working_set_valid = 1;
+constexpr int working_set_protection_shift = 4;
+
 struct section_basic_information_t
 {
 	addr_t        base_address;
@@ -100,6 +132,7 @@ struct section_basic_information_t
 #pragma pack(pop)
 
 static_assert(sizeof(memory_basic_information_t) == 0x30);
+static_assert(sizeof(memory_image_information_t) == 0x18);
 static_assert(sizeof(section_basic_information_t) == 0x18);
 
 // MEM_COMMIT / MEM_FREE as MEMORY_BASIC_INFORMATION reports them.
@@ -157,6 +190,30 @@ void modules::register_ntoskrnl_vm_ops(win_kernel_state& state, proc_module& mod
 		// the same range would otherwise be handed two different bases.
 		if (!(allocation_type & (mem_commit | mem_reserve)))
 			return STATUS_INVALID_PARAMETER;
+
+		// The address space's own cursor hands out supervisor pages in the
+		// kernel half, which ring 3 cannot touch.
+		if (auto* const mem = user_mem(cpu))
+		{
+			addr_t base = wanted;
+			auto region = static_cast<std::size_t>(size);
+			const auto status = mem->allocate(base, region, allocation_type, protect);
+
+			if (status != STATUS_SUCCESS)
+			{
+				THREAD_LOG_WARN("{}: cannot allocate {} bytes at 0x{:X}: 0x{:X}",
+					who, size, wanted, static_cast<std::uint32_t>(status));
+				return status;
+			}
+
+			base_address.write(base);
+			region_size.write(region);
+
+			THREAD_LOG_INFO("{}(size={}, type=0x{:X}, protect=0x{:X}) -> 0x{:X}",
+				who, region, allocation_type, protect, base);
+
+			return STATUS_SUCCESS;
+		}
 
 		auto& space = *cpu.curr_addr_space();
 		addr_t addr = 0;
@@ -224,6 +281,23 @@ void modules::register_ntoskrnl_vm_ops(win_kernel_state& state, proc_module& mod
 		const auto base = mdl_page_base(base_address.read());
 		auto size = region_size ? region_size.read() : 0;
 
+		if (auto* const mem = user_mem(cpu))
+		{
+			addr_t start = base;
+			auto region = static_cast<std::size_t>(size);
+			const auto status = mem->free(start, region, free_type);
+
+			if (status != STATUS_SUCCESS)
+				return status;
+
+			base_address.write(start);
+
+			if (region_size)
+				region_size.write(region);
+
+			return STATUS_SUCCESS;
+		}
+
 		// MEM_RELEASE takes down the whole allocation and demands a size of
 		// zero; MEM_DECOMMIT takes down what the caller names.
 		if (free_type & mem_release)
@@ -274,6 +348,25 @@ void modules::register_ntoskrnl_vm_ops(win_kernel_state& state, proc_module& mod
 		const auto size = (region_size.read() + (requested - base) + mdl_page_size - 1)
 			& ~static_cast<std::uint64_t>(mdl_page_size - 1);
 
+		if (auto* const mem = user_mem(cpu))
+		{
+			addr_t start = base;
+			auto region = static_cast<std::size_t>(size);
+			std::uint32_t previous = page_readwrite;
+			const auto status = mem->protect(start, region, new_protect, previous);
+
+			if (status != STATUS_SUCCESS)
+				return status;
+
+			if (old_protect)
+				old_protect.write(previous);
+
+			base_address.write(start);
+			region_size.write(region);
+
+			return STATUS_SUCCESS;
+		}
+
 		auto& space = *cpu.curr_addr_space();
 
 		// The old protection is per page on real Windows and the caller is told
@@ -313,6 +406,75 @@ void modules::register_ntoskrnl_vm_ops(win_kernel_state& state, proc_module& mod
 		if (!is_current_process(process_handle))
 			return STATUS_INVALID_HANDLE;
 
+		if (memory_information_class == memory_working_set_ex_information)
+		{
+			using entry_t = memory_working_set_ex_information_t;
+
+			const auto count = memory_information_length / sizeof(entry_t);
+
+			if (return_length)
+				return_length.write(count * sizeof(entry_t));
+
+			if (!count)
+				return STATUS_INFO_LENGTH_MISMATCH;
+
+			auto& space = *cpu.curr_addr_space();
+
+			for (std::uint64_t i = 0; i < count; ++i)
+			{
+				emu_object<entry_t> entry(space, memory_information + i * sizeof(entry_t));
+
+				auto info = entry.read();
+				const auto page = mdl_page_base(info.virtual_address);
+				const auto pa = space.mmu_->virt_to_phys(space, page);
+
+				info.attributes = pa
+					? working_set_valid
+						| (std::uint64_t{page_execute_readwrite} << working_set_protection_shift)
+					: 0;
+
+				entry.write(info);
+			}
+
+			THREAD_LOG_INFO("NtQueryVirtualMemory(MemoryWorkingSetExInformation): {} page(s)",
+				count);
+
+			return STATUS_SUCCESS;
+		}
+
+		// Which image an address belongs to, from the process's module list.
+		if (memory_information_class == memory_image_information)
+		{
+			if (return_length)
+				return_length.write(sizeof(memory_image_information_t));
+
+			if (memory_information_length < sizeof(memory_image_information_t))
+				return STATUS_INFO_LENGTH_MISMATCH;
+
+			const auto t = cpu.thread();
+			const auto proc = t ? t->proc() : nullptr;
+			const auto mod = proc ? proc->find_module_by_addr(base_address) : nullptr;
+
+			if (!mod)
+			{
+				THREAD_LOG_INFO("NtQueryVirtualMemory(MemoryImageInformation, 0x{:X}): "
+					"not in an image", base_address);
+				return STATUS_INVALID_ADDRESS;
+			}
+
+			memory_image_information_t info{};
+			info.image_base = mod->addr;
+			info.size_of_image = mod->size;
+
+			emu_object<memory_image_information_t>(*cpu.curr_addr_space(),
+				memory_information).write(info);
+
+			THREAD_LOG_INFO("NtQueryVirtualMemory(MemoryImageInformation, 0x{:X}) -> {} at 0x{:X}",
+				base_address, mod->name, mod->addr);
+
+			return STATUS_SUCCESS;
+		}
+
 		if (memory_information_class != memory_basic_information)
 		{
 			THREAD_LOG_WARN("NtQueryVirtualMemory: unhandled class {}", memory_information_class);
@@ -326,6 +488,25 @@ void modules::register_ntoskrnl_vm_ops(win_kernel_state& state, proc_module& mod
 			return STATUS_INFO_LENGTH_MISMATCH;
 
 		auto& space = *cpu.curr_addr_space();
+
+		// The manager knows the whole run, not just the one page the tables
+		// can speak for.
+		if (auto* const mem = user_mem(cpu))
+		{
+			win::memory_basic_info info{};
+			const auto status = mem->query(base_address, info);
+
+			if (status != STATUS_SUCCESS)
+				return status;
+
+			emu_object<win::memory_basic_info>(space, memory_information).write(info);
+
+			THREAD_LOG_INFO("NtQueryVirtualMemory(0x{:X}) -> base 0x{:X}, {} bytes, state 0x{:X}",
+				base_address, info.base_address, info.region_size, info.state);
+
+			return STATUS_SUCCESS;
+		}
+
 		const auto base = mdl_page_base(base_address);
 		const bool mapped = space.mmu_->virt_to_phys(space, base).has_value();
 
@@ -414,7 +595,7 @@ void modules::register_ntoskrnl_vm_ops(win_kernel_state& state, proc_module& mod
 	// Nothing gives a section a name, so there is no namespace to open one out
 	// of -- which is the same answer the real one gives for a name that is not
 	// there.
-	auto open_section = [](vcpu& cpu, emu_object<std::uint64_t> section_handle,
+	auto open_section = [st](vcpu& cpu, emu_object<std::uint64_t> section_handle,
 		const std::uint32_t desired_access,
 		emu_object<_OBJECT_ATTRIBUTES> object_attributes) -> NTSTATUS
 	{
@@ -427,8 +608,40 @@ void modules::register_ntoskrnl_vm_ops(win_kernel_state& state, proc_module& mod
 			? guest_va(object_attributes.field(&_OBJECT_ATTRIBUTES::ObjectName).read())
 			: 0);
 
-		THREAD_LOG_WARN("NtOpenSection('{}', access=0x{:X}): nothing here gives a section a name",
-			narrow_wstring(win::read_unicode_string(name_obj)), desired_access);
+		const auto name = narrow_wstring(win::read_unicode_string(name_obj));
+
+		// kernel32 will not finish starting without this, so it gets the memory
+		// and nobody to share it with.
+		if (name == shared_section_name)
+		{
+			auto host = std::make_shared<section_host>();
+			host->path = name;
+			host->size = shared_section_size;
+
+			const auto size = static_cast<std::int64_t>(host->size);
+
+			std::array<std::uint8_t, section_body_size> body{};
+			std::memcpy(body.data() + section_body_size_offset, &size, sizeof(size));
+
+			const auto addr = st->objs.create_object(0, body.data(), body.size(),
+				std::move(host), prot_rw | prot_supervisor);
+
+			if (!addr)
+				return STATUS_INSUFFICIENT_RESOURCES;
+
+			const auto handle = st->sys_proc->handle_table().create_handle(addr, desired_access);
+
+			if (section_handle)
+				section_handle.write(handle);
+
+			THREAD_LOG_INFO("NtOpenSection('{}') -> handle=0x{:X} ({} bytes)",
+				name, handle, size);
+
+			return STATUS_SUCCESS;
+		}
+
+		THREAD_LOG_WARN("NtOpenSection('{}', access=0x{:X}): nothing here gives a section "
+			"that name", name, desired_access);
 
 		return STATUS_OBJECT_NAME_NOT_FOUND;
 	};
@@ -501,12 +714,72 @@ void modules::register_ntoskrnl_vm_ops(win_kernel_state& state, proc_module& mod
 			size = std::min<std::uint64_t>(size, host->size - offset);
 
 			auto& space = *cpu.curr_addr_space();
-			const auto base = space.alloc(size, prot_from_page(win32_protect) | prot_supervisor);
+
+			// An image section maps the image laid out the way it is run. The
+			// guest's loader does the relocations and imports itself.
+			std::vector<std::uint8_t> image;
+
+			if (host->is_image)
+			{
+				if (!host->file)
+					return STATUS_INVALID_FILE_FOR_SECTION;
+
+				image = krnl::pe_virtual_image(host->file->data());
+
+				if (image.empty())
+					return STATUS_INVALID_IMAGE_FORMAT;
+
+				if (offset)
+					return STATUS_INVALID_PARAMETER;
+
+				size = image.size();
+			}
+
+			auto* const mem = user_mem(cpu);
+
+			// STATUS_IMAGE_NOT_AT_BASE, not an error, is how the loader learns
+			// it has relocating to do.
+			addr_t preferred = 0;
+
+			if (!image.empty())
+				preferred = static_cast<addr_t>(
+					reinterpret_cast<const pe::image*>(image.data())
+						->nt_hdrs()->optional_hdr.image_base);
+
+			addr_t base = 0;
+
+			if (mem)
+			{
+				if (preferred)
+				{
+					addr_t at = preferred;
+					auto region = static_cast<std::size_t>(size);
+
+					if (mem->allocate(at, region, mem_commit | mem_reserve,
+							page_execute_readwrite) == STATUS_SUCCESS && at == preferred)
+						base = at;
+				}
+
+				if (!base)
+					base = mem->alloc_pages(size, host->is_image
+						? page_execute_readwrite : win32_protect);
+			}
+			else
+			{
+				base = space.alloc(size, prot_from_page(win32_protect) | prot_supervisor);
+			}
 
 			if (!base)
 				return STATUS_INSUFFICIENT_RESOURCES;
 
-			if (host->file)
+			if (!image.empty())
+			{
+				space.write_mem(base, image.data(), image.size());
+
+				if (mem)
+					mem->register_image(base, size);
+			}
+			else if (host->file)
 			{
 				const auto data = host->file->data();
 				const auto available = data.size() > offset ? data.size() - offset : 0;
@@ -524,12 +797,14 @@ void modules::register_ntoskrnl_vm_ops(win_kernel_state& state, proc_module& mod
 
 			st->views[base] = size;
 
-			THREAD_LOG_INFO("NtMapViewOfSection(0x{:X}, '{}', offset={}, inherit={}, "
-				"allocation=0x{:X}, protect=0x{:X}) -> 0x{:X}, {} bytes",
-				section_handle, host->path, offset, inherit_disposition, allocation_type,
-				win32_protect, base, size);
+			const bool rebased = preferred && base != preferred;
 
-			return STATUS_SUCCESS;
+			THREAD_LOG_INFO("NtMapViewOfSection(0x{:X}, '{}', offset={}, inherit={}, "
+				"allocation=0x{:X}, protect=0x{:X}) -> 0x{:X}, {} bytes{}",
+				section_handle, host->path, offset, inherit_disposition, allocation_type,
+				win32_protect, base, size, rebased ? " (not at its base)" : "");
+
+			return rebased ? STATUS_IMAGE_NOT_AT_BASE : STATUS_SUCCESS;
 		});
 
 	state.redirect_ntzw(mod, "UnmapViewOfSection",
