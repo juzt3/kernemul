@@ -155,6 +155,98 @@ public:
 			thread_start, entry_point);
 	}
 
+	// KiUserExceptionDispatcher reads both of its arguments off its own stack:
+	//
+	//   mov rcx, rsp ; add rcx, 4F0h    -- the record
+	//   mov rdx, rsp                    -- the context
+	//   call RtlDispatchException
+	//
+	// so rsp is the context and the record sits at a fixed offset above it.
+	// Taken from the ntdll in the guest filesystem rather than assumed.
+	static constexpr addr_t exception_record_offset = 0x4F0;
+	static_assert(sizeof(_CONTEXT) <= exception_record_offset,
+		"a CONTEXT has to fit under the record the dispatcher expects above it");
+
+	// Unwinding back out of the dispatcher is the other half of the contract,
+	// and its unwind codes end with
+	//
+	//   UWOP_ALLOC_LARGE 0x590
+	//   UWOP_PUSH_MACHFRAME
+	//
+	// so above the record there is a machine frame -- rip, cs, eflags, rsp, ss
+	// -- and that is what the faulting frame is rebuilt from. Without it the
+	// unwinder reads a zero rsp and pops a return address off address zero.
+	static constexpr addr_t machine_frame_offset = 0x590;
+	static_assert(exception_record_offset + sizeof(_EXCEPTION_RECORD) <= machine_frame_offset,
+		"the record has to fit under the machine frame");
+
+	struct machine_frame
+	{
+		addr_t rip;
+		addr_t cs;
+		addr_t eflags;
+		addr_t rsp;
+		addr_t ss;
+	};
+
+	bool setup_exception_frame(vcpu& cpu, const addr_t dispatcher,
+		const win::exception_info& info) override
+	{
+		auto& space = *cpu.curr_addr_space();
+
+		constexpr addr_t frame = machine_frame_offset + sizeof(machine_frame);
+
+		// Below the faulting frame, clear of anything it may read past its own
+		// stack pointer, and aligned the way a call would have left it.
+		const addr_t context_addr = (cpu.sp() - 0x100 - frame) & ~addr_t(0xF);
+		const addr_t record_addr = context_addr + exception_record_offset;
+
+		// The floating point half is not captured, and ntdll unwinds through
+		// this context: a zeroed one has an MxCsr with every exception
+		// unmasked and an x87 control word no real thread ever has.
+		_CONTEXT blank{};
+		blank.MxCsr = 0x1F80;
+		blank.FltSave.ControlWord = 0x27F;
+		blank.FltSave.MxCsr = 0x1F80;
+
+		emu_object<_CONTEXT> context(space, context_addr);
+		context.write(blank);
+		capture_context({cpu}, context, context_all);
+
+		// Everything the dispatcher and the unwinder may copy out of it.
+		context.field(&_CONTEXT::ContextFlags).write(
+			context_amd64 | context_control | context_integer | context_segments | context_float);
+
+		_EXCEPTION_RECORD record{};
+		record.ExceptionCode = static_cast<std::int32_t>(info.code);
+		record.ExceptionAddress = reinterpret_cast<void*>(
+			static_cast<std::uintptr_t>(info.exception_address));
+
+		if (info.code == win::status_access_violation)
+		{
+			record.NumberParameters = 2;
+			record.ExceptionInformation[1] = info.fault_address;
+		}
+
+		space.write_mem(record_addr, record);
+
+		// The faulting frame, as the machine frame an interrupt would have left.
+		const machine_frame mframe{
+			.rip = info.exception_address,
+			.cs = x86_win_seg::user_cs,
+			.eflags = reg_view{cpu}.get(x86::rflags),
+			.rsp = cpu.sp(),
+			.ss = x86_win_seg::user_ds,
+		};
+
+		space.write_mem(context_addr + machine_frame_offset, mframe);
+
+		cpu.set_sp(context_addr);
+		cpu.set_pc(dispatcher);
+
+		return true;
+	}
+
 	// The floating point half is not filled in -- a CONTEXT keeps the xmm
 	// registers in an XSAVE area -- and is left out of ContextFlags too.
 	void capture_context(const reg_view& regs, emu_object<_CONTEXT> out,

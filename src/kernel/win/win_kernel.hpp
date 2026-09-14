@@ -484,6 +484,12 @@ public:
 	// The CONTEXT and frame ntdll's LdrInitializeThunk starts on.
 	virtual void setup_loader_frame(thread&, vcpu&, addr_t, addr_t) {}
 
+	// Puts a faulted user thread on ntdll's exception dispatcher, with the
+	// record and the context where that dispatcher looks for them -- which is
+	// architecture's own business. False if this one cannot yet, and the fault
+	// is then dispatched here instead.
+	virtual bool setup_exception_frame(vcpu&, addr_t, const win::exception_info&) { return false; }
+
 	struct user_process_args
 	{
 		std::shared_ptr<win_user_proc> proc;

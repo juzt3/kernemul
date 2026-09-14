@@ -19,6 +19,8 @@ constexpr std::string_view user_thread_startup   = "RtlUserThreadStart";
 
 constexpr std::string_view loader_thread_startup = "LdrInitializeThunk";
 
+constexpr std::string_view user_exception_dispatcher = "KiUserExceptionDispatcher";
+
 constexpr std::string_view ntdll_name = "ntdll.dll";
 
 class windows_process : public process

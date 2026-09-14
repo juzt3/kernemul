@@ -94,6 +94,20 @@ struct filter_pointers
 filter_pointers build_exception_pointers(vcpu& cpu, windows_emulator& emulator,
 	const exception_info& info);
 
+// What a language handler is called with. The record and the context are what
+// it reads, the dispatcher context is what it answers through, and the scratch
+// is the room all three need above the frame the call itself runs in.
+struct dispatch_frame
+{
+	addr_t record = 0;
+	addr_t context = 0;
+	addr_t dispatcher = 0;
+	std::size_t scratch = 0;
+};
+
+dispatch_frame build_dispatch_frame(vcpu& cpu, windows_emulator& emulator,
+	const exception_info& info);
+
 struct win_unwinder
 {
 	virtual ~win_unwinder() = default;

@@ -124,6 +124,41 @@ filter_pointers build_exception_pointers(vcpu& cpu, windows_emulator& emulator,
 	return { pointers_addr, scratch };
 }
 
+dispatch_frame build_dispatch_frame(vcpu& cpu, windows_emulator& emulator,
+	const exception_info& info)
+{
+	auto& space = *cpu.curr_addr_space();
+
+	constexpr std::size_t scratch = sizeof(_EXCEPTION_RECORD) + sizeof(_CONTEXT)
+		+ sizeof(dispatcher_context64) + 0x40;
+
+	const auto record_addr = guest_caller::scratch_base(cpu, scratch);
+	const auto context_addr = (record_addr + sizeof(_EXCEPTION_RECORD) + 0xF) & ~addr_t(0xF);
+	const auto dispatcher_addr = (context_addr + sizeof(_CONTEXT) + 0xF) & ~addr_t(0xF);
+
+	const auto ptr = [](const addr_t a) { return reinterpret_cast<void*>(static_cast<std::uintptr_t>(a)); };
+
+	_EXCEPTION_RECORD record{};
+	record.ExceptionCode = static_cast<std::int32_t>(info.code);
+	record.ExceptionAddress = ptr(info.exception_address);
+
+	if (info.code == status_access_violation)
+	{
+		record.NumberParameters = 2;
+		record.ExceptionInformation[1] = info.fault_address;
+	}
+
+	space.write_mem(record_addr, record);
+
+	// The cpu still holds the faulting registers, so this is the context the
+	// handler and its filters should see.
+	emu_object<_CONTEXT> context(space, context_addr);
+	context.write(_CONTEXT{});
+	emulator.capture_context({cpu}, context, windows_emulator::context_all);
+
+	return { record_addr, context_addr, dispatcher_addr, scratch };
+}
+
 std::vector<stack_frame> walk_stack(
 	win_unwinder& unwinder, addr_space& mem, const process& proc,
 	unwind_context ctx, const std::size_t max_frames)

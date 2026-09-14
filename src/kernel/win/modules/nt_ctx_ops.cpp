@@ -254,10 +254,15 @@ void modules::register_ntoskrnl_ctx_ops(win_kernel_state& state, proc_module& mo
 			if (found.disposition != win::exception_execute_handler)
 				return found.disposition;
 
-			// Real Windows unwinds, running the __finally blocks in between;
-			// nothing here walks those frames, so this is a jump.
-			cpu.set_sp(found.establisher_frame);
-			cpu.set_pc(found.target_ip);
+			// Where the frame was taken goes back through the dispatcher
+			// context, which is what the caller acts on. A language handler
+			// does not move the cpu itself: real Windows leaves here through
+			// RtlUnwindEx, and moving it from inside a guest call would run the
+			// handler body in that call rather than returning from it.
+			dispatcher_context.field(&win::dispatcher_context64::target_ip)
+				.write(found.target_ip);
+			dispatcher_context.field(&win::dispatcher_context64::establisher_frame)
+				.write(found.establisher_frame);
 
 			return win::exception_execute_handler;
 		});
