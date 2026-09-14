@@ -188,4 +188,92 @@ void modules::register_ntoskrnl_timer_ops(win_kernel_state& state, proc_module& 
 
 		return signalled;
 	});
+
+	// The body is a real KTIMER, so a wait on the handle reads the same state a
+	// wait on the object would -- which, as above, nothing ever moves.
+	state.redirect_ntzw(mod, "CreateTimer2",
+		[st](vcpu& cpu, emu_object<std::uint64_t> timer_handle,
+			[[maybe_unused]] const addr_t reserved1, [[maybe_unused]] const addr_t reserved2,
+			const std::uint32_t attributes, const std::uint32_t desired_access) -> NTSTATUS
+		{
+			if (!timer_handle)
+				return STATUS_INVALID_PARAMETER;
+
+			const _KTIMER zeroed{};
+			const auto addr = st->objs.create_object(0, &zeroed, sizeof(zeroed),
+				{}, prot_rw | prot_supervisor);
+
+			if (!addr)
+				return STATUS_INSUFFICIENT_RESOURCES;
+
+			const emu_object<_KTIMER> timer(*cpu.curr_addr_space(), addr);
+
+			// TIMER_TYPE is the low bit of the attributes.
+			win::init_dispatcher(timer, (attributes & 1)
+				? win::timer_synchronization_object : win::timer_notification_object, 0);
+
+			const auto handle = st->sys_proc->handle_table().create_handle(addr, desired_access);
+			timer_handle.write(handle);
+
+			THREAD_LOG_INFO("NtCreateTimer2(attributes=0x{:X}) -> handle=0x{:X}",
+				attributes, handle);
+
+			return STATUS_SUCCESS;
+		});
+
+	state.redirect_ntzw(mod, "SetTimer2",
+		[st](vcpu& cpu, const std::uint64_t timer_handle, emu_object<std::int64_t> due_time,
+			emu_object<std::int64_t> period, const addr_t parameters) -> NTSTATUS
+		{
+			const auto entry = st->sys_proc->handle_table().lookup_handle(timer_handle);
+
+			if (!entry)
+			{
+				THREAD_LOG_WARN("NtSetTimer2: handle 0x{:X} is not open", timer_handle);
+				return STATUS_INVALID_HANDLE;
+			}
+
+			if (!due_time)
+				return STATUS_INVALID_PARAMETER;
+
+			const auto when = win::read_timeout(due_time);
+			const auto interval = period ? period.read() : 0;
+
+			const emu_object<_KTIMER> timer(*cpu.curr_addr_space(), entry->body_addr);
+
+			timer.field(&_KTIMER::DueTime).field(&_ULARGE_INTEGER::QuadPart)
+				.write(static_cast<unsigned __int64>(when.deadline));
+			timer.field(&_KTIMER::Period).write(static_cast<unsigned long>(
+				interval / 10000));
+
+			THREAD_LOG_WARN("NtSetTimer2(0x{:X}, due={}, period={}, parameters=0x{:X}): nothing "
+				"here walks a timer list, so it will not go off",
+				timer_handle, due_time.read(), interval, parameters);
+
+			return STATUS_SUCCESS;
+		});
+
+	state.redirect_ntzw(mod, "CancelTimer2",
+		[st](vcpu& cpu, const std::uint64_t timer_handle, const addr_t parameters) -> NTSTATUS
+		{
+			const auto entry = st->sys_proc->handle_table().lookup_handle(timer_handle);
+
+			if (!entry)
+			{
+				THREAD_LOG_WARN("NtCancelTimer2: handle 0x{:X} is not open", timer_handle);
+				return STATUS_INVALID_HANDLE;
+			}
+
+			const emu_object<_KTIMER> timer(*cpu.curr_addr_space(), entry->body_addr);
+			const auto due = timer.field(&_KTIMER::DueTime)
+				.field(&_ULARGE_INTEGER::QuadPart).read();
+
+			timer.field(&_KTIMER::DueTime).field(&_ULARGE_INTEGER::QuadPart).write(0);
+			timer.field(&_KTIMER::Period).write(0);
+
+			THREAD_LOG_INFO("NtCancelTimer2(0x{:X}, parameters=0x{:X}) -> was {}",
+				timer_handle, parameters, due ? "set" : "not set");
+
+			return STATUS_SUCCESS;
+		});
 }

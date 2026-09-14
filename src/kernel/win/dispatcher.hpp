@@ -1,4 +1,5 @@
 #pragma once
+#include "defs.hpp"
 #include "types.hpp"
 #include "../../emu/object.hpp"
 #include <chrono>
@@ -87,6 +88,25 @@ inline void set_state_at(addr_space& space, const addr_t object, const std::int3
 	header_at(space, object).field(&_DISPATCHER_HEADER::SignalState).write(state);
 }
 
+// A null pointer is no timeout, a negative value an interval from now in 100ns
+// ticks, and a positive one an absolute guest time. Worked out where the caller
+// asked rather than where the wait is decided, because "from now" means then.
+struct timeout
+{
+	std::int64_t deadline = 0;
+	bool timed = false;
+};
+
+[[nodiscard]] inline timeout read_timeout(const emu_object<std::int64_t>& value)
+{
+	if (!value)
+		return {};
+
+	const auto ticks = value.read();
+
+	return { ticks < 0 ? static_cast<std::int64_t>(win_system_time()) - ticks : ticks, true };
+}
+
 // Waiting on a dispatcher object.
 //
 // Nothing here keeps a wait queue: a thread that cannot proceed gives up its
@@ -138,12 +158,15 @@ inline void take(addr_space& space, const addr_t object, const addr_t waiter)
 		break;
 
 	case semaphore_object:
+	case queue_object:
+		// Counted: a queue's state is its entry count, so whoever took it goes
+		// on to take the entry that goes with it.
 		set_state_at(space, object, state - 1);
 		break;
 
 	default:
-		// A synchronization event, a gate, a queue: one waiter takes it and it
-		// goes back to unsignalled behind them.
+		// A synchronization event or a gate: one waiter takes it and it goes
+		// back to unsignalled behind them.
 		set_state_at(space, object, 0);
 		break;
 	}

@@ -19,25 +19,16 @@ constexpr std::uint32_t wait_all = 0;
 // pass and what bounds the work the scheduler does per look.
 constexpr std::size_t maximum_wait_objects = 64;
 
-// A null pointer is a wait with no timeout, a negative value an interval from
-// now, and a positive one an absolute guest time. The deadline is worked out
-// once, here, because it is relative to when the caller asked.
 win_thread::wait_state make_wait(std::vector<addr_t> objects,
 	const std::uint32_t wait_type, const emu_object<std::int64_t>& timeout)
 {
+	const auto when = win::read_timeout(timeout);
+
 	win_thread::wait_state w{};
 	w.objects = std::move(objects);
 	w.all = wait_type == wait_all;
-
-	if (!timeout)
-		return w;
-
-	const auto ticks = timeout.read();
-
-	w.timed = true;
-	w.deadline = ticks < 0
-		? static_cast<std::int64_t>(win_system_time()) - ticks
-		: ticks;
+	w.deadline = when.deadline;
+	w.timed = when.timed;
 
 	return w;
 }
