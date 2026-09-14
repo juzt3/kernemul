@@ -121,5 +121,5 @@ int main()
 
 	guest::win_emulator win(e);
 
-	return run_user(win, "test_user.exe");
+	return run_user(win, "test_printf.exe");
 }
