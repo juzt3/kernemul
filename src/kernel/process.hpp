@@ -79,6 +79,28 @@ struct proc_module
 
 		return addr + rva;
 	}
+
+	// What an export names instead of pointing at code, as text like
+	// "NTDLL.RtlAllocateHeap". Kept out of the exports so that nothing reads a
+	// forwarder's rva as an address -- it points into the export directory, at
+	// the name -- and looked up here rather than stored, because the only
+	// caller is the one an export lookup has already missed for.
+	[[nodiscard]] std::string_view find_forward(const std::string_view exp_name) const
+	{
+		const auto* const img = pe();
+
+		if (!img)
+			return {};
+
+		for (const auto exp : img->exports())
+		{
+			if (exp.forwarded && exp.name == exp_name)
+				return exp.loc.addr<const char*>();
+		}
+
+		return {};
+	}
+
 	[[nodiscard]] std::optional<addr_t> find_symbol(const std::string_view sym_name) const
 	{
 		if (!symbols.empty())
@@ -115,6 +137,20 @@ public:
 	std::shared_ptr<proc_module> add_module(std::string_view name, addr_t addr, const pe::image* pe);
 	[[nodiscard]] std::shared_ptr<proc_module> find_module(std::string_view name) const;
 	[[nodiscard]] std::shared_ptr<proc_module> find_module_by_addr(addr_t addr) const;
+
+	// A module an image imports from and this process does not have yet. The
+	// base process has nowhere to look; the windows ones have a filesystem.
+	virtual std::shared_ptr<proc_module> load_module(std::string_view, bool) { return nullptr; }
+
+	// What a module an image names is really called. Only windows user
+	// processes have an answer of their own -- api-ms-* and ext-ms-* are names
+	// of contracts rather than of files, and the schema says which file keeps
+	// each one, sometimes differently depending on who is asking.
+	[[nodiscard]] virtual std::string resolve_module_name(const std::string_view name,
+		std::string_view /*importer*/) const
+	{
+		return std::string(name);
+	}
 
 	[[nodiscard]] std::shared_ptr<addr_space> addr_space() const;
 	[[nodiscard]] id_type id() const { return id_; }
