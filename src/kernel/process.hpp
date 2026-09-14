@@ -46,6 +46,39 @@ struct proc_module
 		return it->second;
 	}
 
+	// The only way to reach an export that carries no name -- ntdll has one,
+	// and kernelbase imports it. An ordinal is the function table's own index
+	// counted from the directory's base, so this is a bounds check and a read
+	// rather than anything the module has to be walked for.
+	[[nodiscard]] std::optional<addr_t> find_ordinal(const std::uint32_t ordinal) const
+	{
+		const auto* const img = pe();
+
+		if (!img)
+			return std::nullopt;
+
+		const auto& dir = img->nt_hdrs()->optional_hdr.data_dirs.exports;
+
+		if (!dir.used())
+			return std::nullopt;
+
+		const auto* const bytes = img->as<const std::uint8_t*>();
+		const auto* const exp = reinterpret_cast<const pe::export_directory*>(
+			bytes + dir.virtual_address);
+
+		if (ordinal < exp->base || ordinal - exp->base >= exp->number_of_functions)
+			return std::nullopt;
+
+		const auto rva = reinterpret_cast<const std::uint32_t*>(
+			bytes + exp->address_of_functions)[ordinal - exp->base];
+
+		// Inside the directory it is a forwarder string rather than code, and
+		// an unused slot is zero.
+		if (!rva || (rva >= dir.virtual_address && rva < dir.virtual_address + dir.size))
+			return std::nullopt;
+
+		return addr + rva;
+	}
 	[[nodiscard]] std::optional<addr_t> find_symbol(const std::string_view sym_name) const
 	{
 		if (!symbols.empty())
