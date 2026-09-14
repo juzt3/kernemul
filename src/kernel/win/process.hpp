@@ -46,8 +46,6 @@ public:
 	// do that -- it only notices that the answer is in.
 	void wake_waiters(struct addr_space& space, addr_t object) const;
 
-	virtual std::shared_ptr<proc_module> load_module(std::string_view name, bool supervisor);
-
 	win_handle_table& handle_table() { return handle_table_; }
 
 	const emu_object<_PEB64>& peb() const { return peb_; }
@@ -61,6 +59,9 @@ public:
 	[[nodiscard]] const emu_object<_EPROCESS>& eprocess() const { return eprocess_; }
 
 protected:
+	// Where a module is looked for when the process has nowhere of its own.
+	[[nodiscard]] std::shared_ptr<win_file> open_system_image(std::string_view name) const;
+
 	// 0 if the module is not mapped or has no such symbol, logging either way.
 	addr_t find_symbol(std::string_view mod_name, std::string_view sym) const;
 
@@ -195,6 +196,8 @@ public:
 	{
 		return find_symbol("ntoskrnl.exe", kernel_thread_startup);
 	}
+
+	std::shared_ptr<proc_module> load_module(std::string_view name, bool supervisor) override;
 
 	void module_add_cb(proc_module& mod) override;
 

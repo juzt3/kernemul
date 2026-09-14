@@ -159,11 +159,17 @@ void windows_process::terminate_thread(const thread_id_type id)
 	process::terminate_thread(id);
 }
 
-std::shared_ptr<proc_module> windows_process::load_module(const std::string_view name,
+std::shared_ptr<win_file> windows_process::open_system_image(const std::string_view name) const
+{
+	return fs_.open(std::string(system32_dir_narrow) + std::string(name));
+}
+
+// A driver is what MiLoadSystemImage would have loaded, and there is no loader
+// in the guest behind it -- so the imports are resolved here.
+std::shared_ptr<proc_module> win_kernel_proc::load_module(const std::string_view name,
 	const bool supervisor)
 {
-	const auto path = std::string(system32_dir_narrow) + std::string(name);
-	const auto file = fs_.open(path);
+	const auto file = open_system_image(name);
 
 	if (!file)
 		return nullptr;
@@ -171,13 +177,22 @@ std::shared_ptr<proc_module> windows_process::load_module(const std::string_view
 	return krnl::map_img(*this, name, file->data(), supervisor);
 }
 
+// A user image is what ntdll's loader would have loaded, and it resolves its
+// own: it maps what it needs through sections the guest can see and runs each
+// DllMain. Doing it here as well would map every module a second time, under
+// loader entries for copies that were never initialised.
 std::shared_ptr<proc_module> win_user_proc::load_module(const std::string_view name,
 	const bool supervisor)
 {
-	if (const auto file = fs_.open(current_dir_ + std::string(name)))
-		return krnl::map_img(*this, name, file->data(), supervisor);
+	auto file = fs_.open(current_dir_ + std::string(name));
 
-	return windows_process::load_module(name, supervisor);
+	if (!file)
+		file = open_system_image(name);
+
+	if (!file)
+		return nullptr;
+
+	return krnl::map_img(*this, name, file->data(), supervisor, true);
 }
 
 void win_user_proc::module_add_cb(proc_module& mod)
