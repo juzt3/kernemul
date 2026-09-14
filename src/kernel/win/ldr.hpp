@@ -26,8 +26,13 @@ public:
 		ldr_.write(data);
 	}
 
+	// LDR_DATA_TABLE_ENTRY::Flags. An exe is not a loaded-and-initialised dll.
+	static constexpr std::uint32_t dll_flags = 0x001C4004;
+	static constexpr std::uint32_t image_flags = 0x00004000;
+
 	void add_module(win_user_mem& mem, addr_t base, addr_t entry_point,
-		std::uint32_t size, const std::string& name, bool in_init_order)
+		std::uint32_t size, const std::string& name, bool in_init_order,
+		std::uint32_t flags = dll_flags)
 	{
 		const auto entry_addr = mem.alloc(sizeof(_LDR_DATA_TABLE_ENTRY), prot_rw);
 
@@ -38,7 +43,7 @@ public:
 		entry.DllBase = guest_ptr(base);
 		entry.EntryPoint = guest_ptr(entry_point);
 		entry.SizeOfImage = size;
-		entry.Flags = 0x001C4004;
+		entry.Flags = flags;
 		entry.ObsoleteLoadCount = 0xFFFF;
 
 		entry.FullDllName = win::init_unicode_string(mem, full_path);

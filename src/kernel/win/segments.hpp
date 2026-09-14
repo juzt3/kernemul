@@ -33,6 +33,10 @@ namespace x86_win_seg
 
 	x86::seg_reg make_usermode_gs(std::uint64_t teb_addr);
 
+	// As values, for a thread that is not on a cpu yet.
+	x86::seg_reg make_usermode_cs();
+	x86::seg_reg make_usermode_ss();
+
 	void swap_to_kernel_segments(vcpu& cpu);
 	void swap_to_usermode_segments(vcpu& cpu);
 }

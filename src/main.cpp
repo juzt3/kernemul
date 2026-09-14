@@ -44,16 +44,10 @@
 	}
 #endif
 
-int main()
+// A driver: mapped into the system process and entered on a system thread.
+[[maybe_unused]] static int run_driver(guest::win_emulator& win,
+	const std::shared_ptr<guest::calling_conv>& conv)
 {
-	LOG_INFO("kernemul targeting {}", target::name);
-
-	auto mem = std::make_shared<guest::mmu>();
-	auto conv = std::make_shared<guest::calling_conv>();
-	auto e = std::make_shared<guest_emu>(mem, conv);
-
-	guest::win_emulator win(e);
-
 	auto& kernel = win.kernel();
 	auto& proc = *kernel.sys_proc;
 
@@ -90,4 +84,42 @@ int main()
 	LOG_INFO("driver returned, status=0x{:X}", conv->read_ret(*cpu, *entry));
 
 	return 0;
+}
+
+// An application: its own process and address space, with a thread that starts
+// inside ntdll's loader. The cpus come first here, unlike the driver path --
+// building the process queues a thread, which needs a cpu to be built against.
+static int run_user(guest::win_emulator& win, const std::string_view exe_name)
+{
+	win.create_vcpus(vcpu_count);
+
+	auto cpu = win.cpus().front();
+	set_log_cpu(cpu.get());
+
+	const auto app = win.create_user_process(*cpu, exe_name);
+
+	if (!app.thread)
+	{
+		LOG_ERR("failed to create a process for {}", exe_name);
+		return 1;
+	}
+
+	win.run_all();
+
+	LOG_INFO("{} finished", exe_name);
+
+	return 0;
+}
+
+int main()
+{
+	LOG_INFO("kernemul targeting {}", target::name);
+
+	auto mem = std::make_shared<guest::mmu>();
+	auto conv = std::make_shared<guest::calling_conv>();
+	auto e = std::make_shared<guest_emu>(mem, conv);
+
+	guest::win_emulator win(e);
+
+	return run_user(win, "test_user.exe");
 }
