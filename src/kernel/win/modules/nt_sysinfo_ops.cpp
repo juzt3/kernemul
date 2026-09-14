@@ -9,6 +9,7 @@
 #include <chrono>
 #include <string>
 #include <string_view>
+#include <cstddef>
 
 namespace
 {
@@ -19,6 +20,10 @@ enum system_information_class : std::uint32_t
 {
 	system_basic_information        = 0,
 	system_time_of_day_information  = 3,
+	system_numa_processor_map       = 55,
+
+	// Nothing is emulated here, so this is the basic information verbatim.
+	system_emulation_basic_information = 62,
 };
 
 #pragma pack(push, 4)
@@ -35,6 +40,22 @@ struct system_basic_information_t
 	std::uint64_t maximum_user_mode_address;
 	std::uint64_t active_processors_affinity_mask;
 	std::int8_t   number_of_processors;
+};
+
+// GROUP_AFFINITY.
+struct group_affinity_t
+{
+	std::uint64_t mask;
+	std::uint16_t group;
+	std::uint16_t reserved[3];
+};
+
+// SYSTEM_NUMA_INFORMATION, cut to the one node this machine has.
+struct system_numa_information_t
+{
+	std::uint32_t   highest_node_number;
+	std::uint32_t   reserved;
+	group_affinity_t node[1];
 };
 
 struct system_time_of_day_information_t
@@ -113,6 +134,7 @@ void modules::register_ntoskrnl_sysinfo_ops(win_kernel_state& state, proc_module
 		switch (system_information_class)
 		{
 		case system_basic_information:
+		case system_emulation_basic_information:
 		{
 			if (return_length)
 				return_length.write(sizeof(system_basic_information_t));
@@ -162,6 +184,31 @@ void modules::register_ntoskrnl_sysinfo_ops(win_kernel_state& state, proc_module
 
 			THREAD_LOG_INFO("NtQuerySystemInformation(SystemTimeOfDayInformation): up {}s",
 				win_ticks(now - st->boot_time) / std::chrono::seconds(1));
+
+			return STATUS_SUCCESS;
+		}
+
+		// ntdll treats a failure here as fatal. One node, every processor in it.
+		case system_numa_processor_map:
+		{
+			system_numa_information_t info{};
+			info.highest_node_number = 0;
+			const auto cpus = cpu.emu()->cpus().size();
+			info.node[0].mask = cpus >= 64 ? ~0ull : (1ull << cpus) - 1;
+			info.node[0].group = 0;
+
+			const auto written = std::min<std::size_t>(length, sizeof(info));
+
+			if (return_length)
+				return_length.write(static_cast<std::uint32_t>(written));
+
+			if (written < offsetof(system_numa_information_t, node))
+				return STATUS_INFO_LENGTH_MISMATCH;
+
+			cpu.curr_addr_space()->write_mem(system_information, &info, written);
+
+			THREAD_LOG_INFO("NtQuerySystemInformation(SystemNumaProcessorMap): "
+				"1 node, processor mask 0x{:X}", info.node[0].mask);
 
 			return STATUS_SUCCESS;
 		}
@@ -357,6 +404,8 @@ void modules::register_ntoskrnl_sysinfo_ops(win_kernel_state& state, proc_module
 			emu_object<std::uint32_t> default_locale_id,
 			emu_object<std::int64_t> default_casing_table_size) -> NTSTATUS
 		{
+			// Without this file kernelbase cannot resolve LOCALE_INVARIANT and
+			// its DllMain fails, taking the process down before it runs.
 			const auto status = map_nls_file(cpu, std::string(system32_dir_narrow) + "locale.nls",
 				base_address, "NtInitializeNlsFiles");
 
