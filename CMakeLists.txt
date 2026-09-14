@@ -266,6 +266,8 @@ set(kernemul_SOURCES
 	"src/kernel/win/segments.hpp"
 	"src/kernel/win/status.hpp"
 	"src/kernel/win/string.hpp"
+	"src/kernel/win/syscalls.cpp"
+	"src/kernel/win/syscalls.hpp"
 	"src/kernel/win/thread.cpp"
 	"src/kernel/win/thread.hpp"
 	"src/kernel/win/types.hpp"
