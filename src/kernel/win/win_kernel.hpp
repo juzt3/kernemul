@@ -358,11 +358,33 @@ struct win_kernel_state : kernel_state
 			proc->set_eprocess(eproc);
 		}
 
+		const auto console = open_console();
+		proc->set_std_handles(console, console, console);
+
 		return proc;
 	}
 
 private:
 	windows_emulator* emulator_ = nullptr;
+
+	// The one handle a process's standard input, output and error all name.
+	// Nothing reads from it, and everything written to it lands on the
+	// emulator's own stdout.
+	[[nodiscard]] win_handle_table::handle_t open_console()
+	{
+		auto host = std::make_shared<file_host>();
+		host->console = true;
+		host->path = "\\Device\\ConDrv";
+
+		const std::uint8_t body[sizeof(addr_t)] = {};
+		const auto addr = objs.create_object(0, body, sizeof(body),
+			std::move(host), prot_rw | prot_supervisor);
+
+		if (!addr)
+			return 0;
+
+		return sys_proc->handle_table().create_handle(addr, 0);
+	}
 
 	// One KPCR per cpu, indexed by a cpu's id. A deque rather than a vector
 	// because each block is handed out by pointer as its cpu is added.

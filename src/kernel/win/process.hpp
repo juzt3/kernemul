@@ -137,6 +137,21 @@ public:
 		peb_.field(&_PEB64::ImageBaseAddress).write(base);
 	}
 
+	// Where GetStdHandle reads from, and with it everything the crt writes
+	// through: a process handed none of these prints into nowhere.
+	void set_std_handles(const win_handle_table::handle_t in,
+		const win_handle_table::handle_t out, const win_handle_table::handle_t err)
+	{
+		const auto handle = [](const win_handle_table::handle_t h)
+		{
+			return reinterpret_cast<void*>(static_cast<std::uintptr_t>(h));
+		};
+
+		params_.field(&_RTL_USER_PROCESS_PARAMETERS::StandardInput).write(handle(in));
+		params_.field(&_RTL_USER_PROCESS_PARAMETERS::StandardOutput).write(handle(out));
+		params_.field(&_RTL_USER_PROCESS_PARAMETERS::StandardError).write(handle(err));
+	}
+
 	addr_t thread_exit_addr() const override
 	{
 		return find_symbol(ntdll_name, user_thread_startup);
