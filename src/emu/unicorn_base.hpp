@@ -1,5 +1,6 @@
 #pragma once
 #include "emu.hpp"
+#include "../util/log.hpp"
 
 #include <unicorn/unicorn.h>
 #include <atomic>
@@ -73,9 +74,13 @@ public:
 			// not at a hook's safe point, whatever the hook around it says.
 			const auto hooks = in_hook_.exchange(0);
 			++running_;
-			uc_emu_start(uc_, pc, 0, 0, 0);
+			const auto res = uc_emu_start(uc_, pc, 0, 0, 0);
 			--running_;
 			in_hook_ = hooks;
+
+			// Nothing downstream can tell an engine error from an ordinary stop.
+			if (res != UC_ERR_OK)
+				LOG_ERR("cpu {}: emulation stopped at 0x{:X}: {}", id(), pc, uc_strerror(res));
 
 			if (redirect_.exchange(false))
 			{
@@ -150,7 +155,7 @@ public:
 	unicorn_emu_base(std::shared_ptr<struct arch> arch, std::shared_ptr<mmu> mem, std::shared_ptr<calling_conv> call_conv = {})
 		:	emu(std::move(arch), std::move(mem), std::move(call_conv)) { }
 
-	void map_phys_mem(addr_t addr, std::size_t size, mem_prot prot) override
+	void map_phys_mem(addr_t addr, std::size_t size) override
 	{
 		std::unique_lock mem_lk(mem_mtx_);
 
@@ -165,7 +170,7 @@ public:
 			{
 				if (old_size)
 					uc_mem_unmap(engine(cpu), addr, old_size);
-				uc_mem_map_ptr(engine(cpu), addr, size, prot, buf.data());
+				uc_mem_map_ptr(engine(cpu), addr, size, prot_rwx, buf.data());
 			}
 		});
 	}
