@@ -2,8 +2,7 @@
 #include "win_kernel.hpp"
 #include "../../emu/arm64/arch.hpp"
 
-// CONTEXT_*, the architecture bit that tags an AArch64 CONTEXT and the halves a
-// caller asks for on top of it.
+// CONTEXT_*, the AArch64 tag and the halves asked for on top of it.
 inline constexpr std::uint32_t context_arm64   = 0x00400000;
 inline constexpr std::uint32_t context_control = context_arm64 | 0x1;
 inline constexpr std::uint32_t context_integer = context_arm64 | 0x2;
@@ -28,11 +27,7 @@ public:
 		t.set_reg(cpu, arm64::tpidr_el0, teb_addr);
 	}
 
-	// The integer and control halves of a CONTEXT. The Neon half is not filled
-	// in: nothing asking for a thread's context here has wanted it, and what is
-	// left out is left out of ContextFlags too. X29 and X30 are the frame
-	// pointer and the link register, which is why the control half rather than
-	// the integer one carries them.
+	// The Neon half is not filled in, and is left out of ContextFlags too.
 	void capture_context(const reg_view& regs, emu_object<_CONTEXT> out,
 		const std::uint32_t flags) override
 	{

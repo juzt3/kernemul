@@ -1,11 +1,15 @@
 #include "nt_crt_ops.hpp"
 #include "../win_kernel.hpp"
+#include "../../../emu/guest_call.hpp"
 #include "../../../util/format.hpp"
 #include "../../../util/log.hpp"
 #include "../../../util/string.hpp"
+#include <algorithm>
 #include <cstring>
 #include <cwchar>
 #include <cwctype>
+#include <numeric>
+#include <vector>
 
 namespace
 {
@@ -29,6 +33,8 @@ constexpr std::int32_t crt_erange = 34;
 // copy lives.
 void modules::register_ntoskrnl_crt_ops(win_kernel_state& state, proc_module& mod)
 {
+	auto* st = &state;
+
 	state.redirect(mod, "wcslen", [](vcpu&, std::wstring str) -> std::uint64_t
 	{
 		THREAD_LOG_INFO("wcslen('{}') -> {}", narrow_wstring(str), str.size());
@@ -313,5 +319,46 @@ void modules::register_ntoskrnl_crt_ops(win_kernel_state& state, proc_module& mo
 				destination, size_in_words, max_count, narrow_wstring(text), written);
 
 			return written;
+		});
+
+	// Sorted over indices, so the array the guest comparator reads does not move
+	// until the write back. A merge sort because std::sort answers a comparator
+	// that is not a strict weak ordering by running off the end of the array.
+	state.redirect(mod, "qsort",
+		[st](vcpu& cpu, const addr_t base, const std::uint64_t count,
+			const std::uint64_t width, const addr_t comparator)
+		{
+			THREAD_LOG_INFO("qsort(base=0x{:X}, count={}, width={}, comparator=0x{:X})",
+				base, count, width, comparator);
+
+			if (!base || !width || !comparator || count < 2)
+				return;
+
+			auto& space = *cpu.curr_addr_space();
+
+			std::vector<std::uint8_t> elements(count * width);
+			space.read_mem(base, elements.data(), elements.size());
+
+			std::vector<std::size_t> order(count);
+			std::iota(order.begin(), order.end(), 0);
+
+			std::stable_sort(order.begin(), order.end(),
+				[&](const std::size_t a, const std::size_t b)
+				{
+					const std::uint64_t args[] = { base + a * width, base + b * width };
+
+					return static_cast<std::int32_t>(
+						st->calls.call(cpu, comparator, args)) < 0;
+				});
+
+			std::vector<std::uint8_t> sorted(elements.size());
+
+			for (std::size_t i = 0; i < count; ++i)
+				std::memcpy(sorted.data() + i * width,
+					elements.data() + order[i] * width, width);
+
+			space.write_mem(base, sorted.data(), sorted.size());
+
+			THREAD_LOG_INFO("qsort: {} elements sorted", count);
 		});
 }

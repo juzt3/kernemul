@@ -123,13 +123,12 @@ private:
 	bool finished_{false};
 };
 
-// A thread's registers, whether or not it is the one on the cpu. A thread that
-// is off a cpu holds its own context, so asking about another thread and asking
-// about yourself are otherwise two different pieces of code for one question.
+// A thread's registers, whether or not it is the one on the cpu -- one off a
+// cpu holds its own context.
 struct reg_view
 {
 	vcpu& cpu;
-	// Null for the thread the cpu is running, whose registers are the cpu's.
+	// Null for the thread the cpu is running.
 	thread* banked = nullptr;
 
 	[[nodiscard]] std::uint64_t get(const reg_t r) const
