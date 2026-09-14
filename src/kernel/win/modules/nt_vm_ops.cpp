@@ -564,4 +564,21 @@ void modules::register_ntoskrnl_vm_ops(win_kernel_state& state, proc_module& mod
 	state.redirect_ntzw(mod, "CreateSection", create_section);
 	state.redirect_ntzw(mod, "OpenSection", open_section);
 	state.redirect_ntzw(mod, "QuerySection", query_section);
+
+	// Every class is a hint, and there is no pager here to take one. Nothing
+	// enforces control flow guard either, so a caller that registered its call
+	// targets and one that did not are in the same position.
+	state.redirect_ntzw(mod, "SetInformationVirtualMemory",
+		[](vcpu&, const std::uint64_t process_handle,
+			const std::uint32_t information_class, const std::uint64_t entry_count,
+			const addr_t addresses, const addr_t information,
+			const std::uint32_t information_length) -> NTSTATUS
+		{
+			THREAD_LOG_INFO("NtSetInformationVirtualMemory(handle=0x{:X}, class={}, entries={}, "
+				"addresses=0x{:X}, information=0x{:X}/{}): accepted, and nothing here acts on it",
+				process_handle, information_class, entry_count, addresses, information,
+				information_length);
+
+			return STATUS_SUCCESS;
+		});
 }
