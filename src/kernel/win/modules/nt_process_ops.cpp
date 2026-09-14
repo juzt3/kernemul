@@ -467,4 +467,81 @@ void modules::register_ntoskrnl_process_ops(win_kernel_state& state, proc_module
 		{
 			return remove_notify(notify->image, "PsRemoveLoadImageNotifyRoutine", notify_routine);
 		});
+
+	// A driver attaches for the target's user address space, and there is one
+	// address space here -- so the pair below only move the thread's ApcState,
+	// and a driver reading the target's memory silently gets its own.
+	auto apc_state_of = [](vcpu& cpu) -> emu_object<_KAPC_STATE>
+	{
+		const auto t = std::dynamic_pointer_cast<win_thread>(cpu.thread());
+
+		if (!t || !t->ethread())
+			return {};
+
+		return t->ethread().field(&_ETHREAD::Tcb).field(&_KTHREAD::ApcState);
+	};
+
+	state.redirect(mod, "KeStackAttachProcess",
+		[apc_state_of](vcpu& cpu, emu_object<_KPROCESS> process,
+			emu_object<_KAPC_STATE> apc_state)
+		{
+			const auto current = apc_state_of(cpu);
+
+			if (!current)
+			{
+				THREAD_LOG_ERR("KeStackAttachProcess: nothing is running, so nothing can attach");
+				return;
+			}
+
+			const auto previous = guest_va(current.field(&_KAPC_STATE::Process).read());
+
+			if (apc_state)
+			{
+				_KAPC_STATE saved{};
+				saved.Process = reinterpret_cast<_KPROCESS*>(
+					static_cast<std::uintptr_t>(previous));
+				apc_state.write(saved);
+
+				const auto head = apc_state.address() + offsetof(_KAPC_STATE, ApcListHead);
+				apc_state.field(&_KAPC_STATE::ApcListHead)
+					.write(guest_links(head, head), 0);
+				apc_state.field(&_KAPC_STATE::ApcListHead)
+					.write(guest_links(head + sizeof(_LIST_ENTRY), head + sizeof(_LIST_ENTRY)), 1);
+			}
+
+			current.field(&_KAPC_STATE::Process).write(guest_ptr<_KPROCESS>(process.address()));
+
+			if (process.address() != previous)
+				THREAD_LOG_WARN("KeStackAttachProcess(0x{:X}): there is one address space here, "
+					"so the attach moves the thread's apc state and nothing else",
+					process.address());
+			else
+				THREAD_LOG_INFO("KeStackAttachProcess(0x{:X}): already in that process",
+					process.address());
+		});
+
+	state.redirect(mod, "KeUnstackDetachProcess",
+		[apc_state_of](vcpu& cpu, emu_object<_KAPC_STATE> apc_state)
+		{
+			const auto current = apc_state_of(cpu);
+
+			if (!current)
+			{
+				THREAD_LOG_ERR("KeUnstackDetachProcess: nothing is running");
+				return;
+			}
+
+			if (!apc_state)
+			{
+				THREAD_LOG_ERR("KeUnstackDetachProcess: null apc state, so there is nothing to "
+					"go back to");
+				return;
+			}
+
+			const auto previous = apc_state.field(&_KAPC_STATE::Process).read();
+
+			current.field(&_KAPC_STATE::Process).write(previous);
+
+			THREAD_LOG_INFO("KeUnstackDetachProcess: back in 0x{:X}", guest_va(previous));
+		});
 }
