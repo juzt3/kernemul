@@ -827,4 +827,35 @@ void modules::register_ntoskrnl_reg_ops(win_kernel_state& state, proc_module& mo
 		THREAD_LOG_INFO("CmUnRegisterCallback(cookie={})", cookie);
 		return STATUS_SUCCESS;
 	});
+
+	// Nothing here notices a registry write, so the notification never arrives:
+	// the watch is accepted, the event stays unset and a synchronous caller is
+	// told the wait is already over.
+	state.redirect_ntzw(mod, "NotifyChangeKey",
+		[st](vcpu&, const std::uint64_t key_handle, const addr_t event, const addr_t apc_routine,
+			const addr_t apc_context, emu_object<_IO_STATUS_BLOCK> io_status_block,
+			const std::uint32_t completion_filter, const bool watch_tree, const addr_t buffer,
+			const std::uint32_t buffer_size, const bool asynchronous) -> NTSTATUS
+		{
+			if (!st->sys_proc->handle_table().lookup_handle(key_handle))
+			{
+				THREAD_LOG_WARN("NtNotifyChangeKey: handle 0x{:X} is not open", key_handle);
+				return STATUS_INVALID_HANDLE;
+			}
+
+			if (io_status_block)
+			{
+				_IO_STATUS_BLOCK status{};
+				status.Status = static_cast<long>(STATUS_SUCCESS);
+				io_status_block.write(status);
+			}
+
+			THREAD_LOG_WARN("NtNotifyChangeKey(0x{:X}, filter=0x{:X}, tree={}, async={}, "
+				"event=0x{:X}, apc=0x{:X}/0x{:X}, buffer=0x{:X}/{}): nothing here notices a "
+				"registry write, so no notification ever arrives",
+				key_handle, completion_filter, watch_tree, asynchronous, event, apc_routine,
+				apc_context, buffer, buffer_size);
+
+			return asynchronous ? STATUS_PENDING : STATUS_SUCCESS;
+		});
 }
