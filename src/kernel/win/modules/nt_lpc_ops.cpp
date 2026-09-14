@@ -26,6 +26,10 @@ constexpr std::size_t alpc_port_body_size = 0x20;
 // Bounds what a caller claiming an enormous TotalLength can make this allocate.
 constexpr std::size_t maximum_message_length = 0x10000;
 
+// What an LPC connect reports back, and the largest view it will map.
+constexpr std::uint32_t default_maximum_message_length = 0x148;
+constexpr std::uint64_t maximum_port_view_size = 0x100000;
+
 // A name resolves to a server port; connecting to one makes a client port. The
 // two point at each other, so a send goes to the peer's queue.
 struct alpc_port_host final : win_object
@@ -285,45 +289,101 @@ void modules::register_ntoskrnl_lpc_ops(win_kernel_state& state, proc_module& mo
 			return copied < message->size() ? STATUS_BUFFER_TOO_SMALL : STATUS_SUCCESS;
 		});
 
-	// NtCreatePort is never called here, so there is never a port to find.
-	auto connect_port = [](vcpu&, emu_object<std::uint64_t> port_handle,
-		emu_object<_UNICODE_STRING> port_name, const std::string_view who) -> NTSTATUS
+	// NtCreatePort is never called here, so there is never a port to find and
+	// never a server to answer. The connection is made anyway: the handle is a
+	// real handle to a real port, the caller is told how long a message may be,
+	// and its view is mapped -- so everything but a reply works.
+	auto connect_port = [st, create_port_object](vcpu& cpu,
+		emu_object<std::uint64_t> port_handle, emu_object<_UNICODE_STRING> port_name,
+		const addr_t client_view, emu_object<_REMOTE_PORT_VIEW> server_view,
+		emu_object<std::uint32_t> maximum_message_length,
+		const std::string_view who) -> NTSTATUS
 	{
-		if (port_handle)
-			port_handle.write(0);
+		if (!port_handle)
+			return STATUS_INVALID_PARAMETER;
 
-		THREAD_LOG_WARN("{}('{}'): nothing here runs an LPC server", who,
-			narrow_wstring(win::read_unicode_string(port_name)));
+		const auto name = narrow_wstring(win::read_unicode_string(port_name));
 
-		return STATUS_OBJECT_NAME_NOT_FOUND;
+		auto client = std::make_shared<alpc_port_host>();
+		client->name = name;
+
+		const auto handle = create_port_object(client, PORT_ALL_ACCESS);
+
+		if (!handle)
+			return STATUS_INSUFFICIENT_RESOURCES;
+
+		port_handle.write(handle);
+
+		auto& space = *cpu.curr_addr_space();
+
+		// PORT_VIEW is not in the generated types: ViewSize and the two bases
+		// sit past the section handle and offset, at the same offsets on both
+		// architectures.
+		if (client_view)
+		{
+			const auto view_size = space.read_mem<std::uint64_t>(client_view + 0x18);
+
+			if (view_size && view_size <= maximum_port_view_size)
+			{
+				const auto base = space.alloc(static_cast<std::size_t>(view_size), prot_rw);
+
+				space.write_mem<std::uint64_t>(client_view + 0x20, base);
+				space.write_mem<std::uint64_t>(client_view + 0x28, base);
+
+				THREAD_LOG_INFO("{}: client view of 0x{:X} bytes at 0x{:X}",
+					who, view_size, base);
+			}
+		}
+
+		if (server_view)
+		{
+			auto value = server_view.read();
+			value.ViewSize = 0;
+			value.ViewBase = nullptr;
+			server_view.write(value);
+		}
+
+		if (maximum_message_length)
+			maximum_message_length.write(default_maximum_message_length);
+
+		THREAD_LOG_WARN("{}('{}') -> handle=0x{:X}: nothing here runs an LPC server, so nothing "
+			"will answer a message sent to it", who, name, handle);
+
+		return STATUS_SUCCESS;
 	};
 
 	state.redirect_ntzw(mod, "ConnectPort",
 		[connect_port](vcpu& cpu, emu_object<std::uint64_t> port_handle,
 			emu_object<_UNICODE_STRING> port_name,
-			[[maybe_unused]] const addr_t security_qos,
-			[[maybe_unused]] const addr_t client_view,
-			[[maybe_unused]] const addr_t server_view,
-			[[maybe_unused]] emu_object<std::uint32_t> maximum_message_length,
+			[[maybe_unused]] const addr_t security_qos, const addr_t client_view,
+			emu_object<_REMOTE_PORT_VIEW> server_view,
+			emu_object<std::uint32_t> maximum_message_length,
 			[[maybe_unused]] const addr_t connection_information,
-			[[maybe_unused]] emu_object<std::uint32_t> connection_information_length) -> NTSTATUS
+			emu_object<std::uint32_t> connection_information_length) -> NTSTATUS
 		{
-			return connect_port(cpu, std::move(port_handle), std::move(port_name),
-				"NtConnectPort");
+			// Nothing answered, so none of the connection information came back.
+			if (connection_information_length)
+				connection_information_length.write(0);
+
+			return connect_port(cpu, std::move(port_handle), std::move(port_name), client_view,
+				std::move(server_view), std::move(maximum_message_length), "NtConnectPort");
 		});
 
 	state.redirect_ntzw(mod, "SecureConnectPort",
 		[connect_port](vcpu& cpu, emu_object<std::uint64_t> port_handle,
 			emu_object<_UNICODE_STRING> port_name,
-			[[maybe_unused]] const addr_t security_qos,
-			[[maybe_unused]] const addr_t client_view,
+			[[maybe_unused]] const addr_t security_qos, const addr_t client_view,
 			[[maybe_unused]] const addr_t server_sid,
-			[[maybe_unused]] const addr_t server_view,
-			[[maybe_unused]] emu_object<std::uint32_t> maximum_message_length,
+			emu_object<_REMOTE_PORT_VIEW> server_view,
+			emu_object<std::uint32_t> maximum_message_length,
 			[[maybe_unused]] const addr_t connection_information,
-			[[maybe_unused]] emu_object<std::uint32_t> connection_information_length) -> NTSTATUS
+			emu_object<std::uint32_t> connection_information_length) -> NTSTATUS
 		{
-			return connect_port(cpu, std::move(port_handle), std::move(port_name),
+			if (connection_information_length)
+				connection_information_length.write(0);
+
+			return connect_port(cpu, std::move(port_handle), std::move(port_name), client_view,
+				std::move(server_view), std::move(maximum_message_length),
 				"NtSecureConnectPort");
 		});
 }

@@ -913,4 +913,59 @@ void modules::register_ntoskrnl_io_ops(win_kernel_state& state, proc_module& mod
 		{
 			return query_attributes_file(cpu, object_attributes, file_information, true);
 		});
+
+	// Nothing builds an irp, so there is no dispatch routine to send the code to
+	// and no driver to write the output buffer. The call is reported as having
+	// worked with nothing returned, which is what a control code the target
+	// ignores looks like.
+	auto control_file = [st](vcpu& cpu, const std::uint64_t file_handle, const addr_t event,
+		const addr_t apc_routine, const addr_t apc_context,
+		emu_object<_IO_STATUS_BLOCK> io_status_block, const std::uint32_t control_code,
+		const addr_t input_buffer, const std::uint32_t input_length,
+		const addr_t output_buffer, const std::uint32_t output_length,
+		const std::string_view who) -> NTSTATUS
+	{
+		const auto host = st->sys_proc->handle_table().get_object<file_host>(file_handle);
+
+		if (!host)
+		{
+			THREAD_LOG_WARN("{}: handle 0x{:X} is not open", who, file_handle);
+			write_status_block(io_status_block, {STATUS_INVALID_HANDLE, 0});
+			return STATUS_INVALID_HANDLE;
+		}
+
+		THREAD_LOG_WARN("{}('{}', code=0x{:X}, in=0x{:X}/{}, out=0x{:X}/{}, event=0x{:X}, "
+			"apc=0x{:X}/0x{:X}): nothing here builds an irp, so nothing wrote the output "
+			"buffer",
+			who, host->path, control_code, input_buffer, input_length,
+			output_buffer, output_length, event, apc_routine, apc_context);
+
+		write_status_block(io_status_block, {STATUS_SUCCESS, 0});
+
+		return STATUS_SUCCESS;
+	};
+
+	state.redirect_ntzw(mod, "DeviceIoControlFile",
+		[control_file](vcpu& cpu, const std::uint64_t file_handle, const addr_t event,
+			const addr_t apc_routine, const addr_t apc_context,
+			emu_object<_IO_STATUS_BLOCK> io_status_block, const std::uint32_t control_code,
+			const addr_t input_buffer, const std::uint32_t input_length,
+			const addr_t output_buffer, const std::uint32_t output_length) -> NTSTATUS
+		{
+			return control_file(cpu, file_handle, event, apc_routine, apc_context,
+				std::move(io_status_block), control_code, input_buffer, input_length,
+				output_buffer, output_length, "NtDeviceIoControlFile");
+		});
+
+	state.redirect_ntzw(mod, "FsControlFile",
+		[control_file](vcpu& cpu, const std::uint64_t file_handle, const addr_t event,
+			const addr_t apc_routine, const addr_t apc_context,
+			emu_object<_IO_STATUS_BLOCK> io_status_block, const std::uint32_t control_code,
+			const addr_t input_buffer, const std::uint32_t input_length,
+			const addr_t output_buffer, const std::uint32_t output_length) -> NTSTATUS
+		{
+			return control_file(cpu, file_handle, event, apc_routine, apc_context,
+				std::move(io_status_block), control_code, input_buffer, input_length,
+				output_buffer, output_length, "NtFsControlFile");
+		});
 }
