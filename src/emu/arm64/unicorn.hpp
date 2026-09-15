@@ -53,6 +53,22 @@ public:
 		std::uint64_t tmp{};
 		std::memcpy(&tmp, value, std::min(size, sizeof(tmp)));
 		uc_reg_write(uc_, to_uc_reg(reg), &tmp);
+
+		if (reg == arm64::pstate)
+			rebuild_hflags();
+	}
+
+	// QEMU caches the exception level and its mmu index in env->hflags, and
+	// Unicorn's PSTATE write does not rebuild them -- only the CP_REG path
+	// does. Without this a thread moved to EL0 keeps EL1's mmu index, so it
+	// runs with no protection at all while every register reads back correctly.
+	// Rewriting a system register with its own value rebuilds them and, since
+	// sctlr_write returns early when nothing changed, does nothing else.
+	void rebuild_hflags()
+	{
+		std::uint64_t sctlr{};
+		reg_read(arm64::sctlr_el1, &sctlr, sizeof(sctlr));
+		reg_write(arm64::sctlr_el1, &sctlr, sizeof(sctlr));
 	}
 
 	// Both of these classify by enum range, so the order of arm64::regs matters.
