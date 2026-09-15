@@ -139,10 +139,27 @@ public:
 	[[nodiscard]] id_type id() const { return id_; }
 
 	void set_scheduler(thread_scheduler* s) { scheduler_ = s; }
+	[[nodiscard]] thread_scheduler* scheduler() const noexcept { return scheduler_; }
 
-	// Arguments go in before queueing: queued is runnable, and another cpu will start it.
-	virtual std::shared_ptr<thread> create_thread(vcpu& cpu, addr_t start_addr,
-		std::span<const std::uint64_t> args = {});
+	// Made but held off the cpu, so whoever asked for it can finish it -- write the frame it
+	// starts on, put an argument in place -- before start() lets a cpu pick it up. Arguments
+	// passed here go in before that, since a started thread is another cpu's to run.
+	virtual std::shared_ptr<thread> create_suspended_thread(vcpu& cpu, addr_t start_addr,
+		std::span<const std::uint64_t> args = {}, std::size_t stack_size = 0);
+
+	// The same thread, started: nothing else needs to happen to it before it runs.
+	std::shared_ptr<thread> create_thread(vcpu& cpu, addr_t start_addr,
+		std::span<const std::uint64_t> args = {}, std::size_t stack_size = 0);
+
+	// What a thread stack ends up being: what was asked for, rounded up to a page, never below
+	// the default and never above the cap, since the whole of it is committed up front.
+	static constexpr std::size_t max_stack_size = 0x100000;
+
+	static constexpr std::size_t thread_stack_size(const std::size_t wanted)
+	{
+		const auto pages = (std::max(wanted, default_stack_size) + 0xFFF) & ~std::size_t(0xFFF);
+		return std::min(pages, max_stack_size);
+	}
 
 	// Windows starts a thread inside one of these and it ends the thread when the routine returns.
 	[[nodiscard]] virtual addr_t thread_exit_addr() const { return 0; }

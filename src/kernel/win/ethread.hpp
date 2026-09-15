@@ -2,6 +2,7 @@
 #include "../../emu/object.hpp"
 #include "defs.hpp"
 #include "types.hpp"
+#include "status.hpp"
 
 
 inline constexpr std::size_t kprocess_thread_list_off =
@@ -76,6 +77,9 @@ inline _ETHREAD make_default_ethread(const ethread_params& p)
 
 	et.CreateTime.QuadPart = win_system_time();
 
+	// What a thread that has not ended exits with, which is how a caller tells it is still there.
+	et.ExitStatus = static_cast<int>(STATUS_PENDING);
+
 	return et;
 }
 
@@ -108,4 +112,9 @@ inline void count_thread_switch(const emu_object<_ETHREAD>& et)
 inline void set_thread_exit_time(const emu_object<_ETHREAD>& et, const std::int64_t time)
 {
 	et.field(&_ETHREAD::ExitTime).field(&_LARGE_INTEGER::QuadPart).write(time);
+}
+
+inline void set_thread_exit_status(const emu_object<_ETHREAD>& et, const std::uint32_t status)
+{
+	et.field(&_ETHREAD::ExitStatus).write(static_cast<int>(status));
 }

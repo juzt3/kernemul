@@ -59,14 +59,26 @@ std::shared_ptr<addr_space> process::addr_space() const
 	return addr_space_;
 }
 
-std::shared_ptr<thread> process::create_thread(vcpu& cpu, const addr_t start_addr,
-	const std::span<const std::uint64_t> args)
+// The generic thread has one stack size, so what was asked for is the windows side's to honour.
+std::shared_ptr<thread> process::create_suspended_thread(vcpu& cpu, const addr_t start_addr,
+	const std::span<const std::uint64_t> args, std::size_t /*stack_size*/)
 {
 	const auto id = alloc_thread_id();
 	auto t = scheduler_->create_thread(cpu, start_addr, shared_from_this(), id, args);
 
 	std::unique_lock lock(thread_mtx_);
 	threads_[t->id()] = t;
+	return t;
+}
+
+std::shared_ptr<thread> process::create_thread(vcpu& cpu, const addr_t start_addr,
+	const std::span<const std::uint64_t> args, const std::size_t stack_size)
+{
+	auto t = create_suspended_thread(cpu, start_addr, args, stack_size);
+
+	if (t)
+		t->start();
+
 	return t;
 }
 

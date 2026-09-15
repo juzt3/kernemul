@@ -8,6 +8,7 @@
 #include "registry.hpp"
 #include "filesystem.hpp"
 #include "ethread.hpp"
+#include "thread.hpp"
 #include "driver.hpp"
 #include "per_cpu.hpp"
 #include "objects.hpp"
@@ -441,7 +442,49 @@ public:
 
 	virtual void init_thread_teb(thread&, vcpu&, addr_t) {}
 
-	virtual void setup_loader_frame(thread&, vcpu&, addr_t, addr_t) {}
+	virtual void setup_loader_frame(thread&, vcpu&, addr_t, addr_t, addr_t) {}
+
+	// A thread the guest asked for, started the way Windows starts one: in ntdll's loader, on a
+	// context that continues into RtlUserThreadStart(start_addr, argument). It belongs to the
+	// process that asked for it -- its start address is a user va, and only that process's
+	// address space maps it, so a thread of the system process would fault on the first fetch.
+	std::shared_ptr<thread> create_user_thread(vcpu& cpu, win_user_proc& proc,
+		const addr_t start_addr, const addr_t argument, const std::size_t stack_size,
+		const bool suspended)
+	{
+		const auto ntdll = proc.find_module(ntdll_name);
+
+		if (!ntdll)
+		{
+			LOG_ERR("{} is not mapped in pid={}, so it has no loader to start a thread in",
+				ntdll_name, proc.id());
+			return {};
+		}
+
+		const auto ldr_init = ntdll->find_symbol(loader_thread_startup);
+
+		if (!ldr_init)
+		{
+			LOG_ERR("{}!{} not found", ntdll_name, loader_thread_startup);
+			return {};
+		}
+
+		auto t = proc.create_suspended_thread(cpu, *ldr_init, {}, stack_size);
+
+		if (!t)
+			return {};
+
+		setup_loader_frame(*t, cpu, start_addr, ntdll->addr, argument);
+
+		// A thread the guest asked to start suspended is started all the same: started is what
+		// the scheduler looks at, and the suspend count is what holds it until a resume.
+		if (suspended)
+			std::static_pointer_cast<win_thread>(t)->suspend();
+
+		t->start();
+
+		return t;
+	}
 
 	// False if this one cannot yet, and the fault is then dispatched here instead.
 	virtual bool setup_exception_frame(vcpu&, addr_t, const win::exception_info&) { return false; }
@@ -494,13 +537,13 @@ public:
 			return {};
 		}
 
-		// Writing the frame after create_thread is safe only because no cpu is running yet.
-		auto t = proc->create_thread(cpu, *ldr_init);
+		auto t = proc->create_suspended_thread(cpu, *ldr_init);
 
 		if (!t)
 			return {};
 
-		setup_loader_frame(*t, cpu, image->entry_point, ntdll->addr);
+		setup_loader_frame(*t, cpu, image->entry_point, ntdll->addr, 0);
+		t->start();
 
 		LOG_INFO("user process {} (pid={}): image at 0x{:X}, entry 0x{:X}, loader at 0x{:X}",
 			exe_name, proc->id(), image->addr, image->entry_point, *ldr_init);

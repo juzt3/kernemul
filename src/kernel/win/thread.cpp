@@ -159,6 +159,13 @@ std::uint32_t win_thread::resume()
 		ethread_.field(&_ETHREAD::Tcb).field(&_KTHREAD::SuspendCount)
 			.write(static_cast<char>(suspend_count_));
 
+	// Runnable again without being queued, so a cpu parked on an empty answer is told to look.
+	if (!suspend_count_ && previous)
+	{
+		if (const auto p = proc(); p && p->scheduler())
+			p->scheduler()->wake();
+	}
+
 	return previous;
 }
 

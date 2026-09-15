@@ -28,8 +28,10 @@ void modules::register_ntoskrnl_thread_ops(win_kernel_state& state, proc_module&
 			THREAD_LOG_INFO("PsCreateSystemThread(handle_out=0x{:X}, start=0x{:X}, ctx=0x{:X})",
 				thread_handle_out.address(), start_routine, start_context);
 
-			auto t = sys_proc->create_thread(cpu, start_routine);
+			// The context goes in before the thread starts: a started thread is another cpu's.
+			auto t = sys_proc->create_suspended_thread(cpu, start_routine);
 			cpu.emu()->call_conv()->set_arg(cpu, *t, 0, start_context);
+			t->start();
 
 			const auto ethread = std::static_pointer_cast<win_thread>(t)->ethread().address();
 

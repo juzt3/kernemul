@@ -108,7 +108,12 @@ public:
 	void sleep_for(const std::chrono::milliseconds ms) { sleep_until_ = clock::now() + ms; }
 	[[nodiscard]] bool is_sleeping() const { return clock::now() < sleep_until_; }
 
-	[[nodiscard]] virtual bool is_ready(vcpu&) { return !is_sleeping(); }
+	// Queued but not yet started stays off every cpu: the thread is not finished being built.
+	[[nodiscard]] virtual bool is_ready(vcpu&) { return started_ && !is_sleeping(); }
+
+	// Runnable from here on. Defined below, where the scheduler it wakes is a complete type.
+	void start();
+	[[nodiscard]] bool is_started() const noexcept { return started_; }
 	[[nodiscard]] time_point sleep_until() const { return sleep_until_; }
 
 	void finish() { finished_ = true; }
@@ -122,6 +127,7 @@ public:
 protected:
 	id_type id_;
 	std::shared_ptr<class process> process_;
+	bool started_ = false;
 	std::vector<reg_val> values_;
 
 private:
@@ -211,6 +217,10 @@ public:
 
 		cv_.notify_one();
 	}
+
+	// A thread that became runnable without being queued -- one being started, or coming off a
+	// suspend -- is not noticed by a cpu already parked, so whoever made it runnable says so.
+	void wake() { cv_.notify_all(); }
 
 	void remove(const thread::id_type id)
 	{
@@ -371,3 +381,14 @@ private:
 	std::condition_variable cv_;
 	bool stopped_ = false;
 };
+
+// Here rather than in the class: waking the scheduler needs it to be a complete type.
+inline void thread::start()
+{
+	started_ = true;
+
+	// The thread is already on the queue, so nothing enqueues it -- but a cpu parked because
+	// nothing was ready has to be told to look again.
+	if (const auto p = process_; p && p->scheduler())
+		p->scheduler()->wake();
+}

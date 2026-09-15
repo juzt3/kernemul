@@ -20,40 +20,42 @@ addr_t windows_process::find_symbol(const std::string_view mod_name,
 	return 0;
 }
 
-std::shared_ptr<thread> windows_process::create_thread(vcpu& cpu, const addr_t start_addr,
-	const std::span<const std::uint64_t> args)
+std::shared_ptr<thread> windows_process::create_suspended_thread(vcpu& cpu,
+	const addr_t start_addr, const std::span<const std::uint64_t> args,
+	const std::size_t stack_size)
 {
 	const auto id = static_cast<thread_id_type>(objs_.allocate_id());
+	const auto size = thread_stack_size(stack_size);
 
-	const addr_t stack_base = addr_space_->alloc(default_stack_size, prot_rw | prot_supervisor);
+	const addr_t stack_base = addr_space_->alloc(size, prot_rw | prot_supervisor);
 	auto self = std::static_pointer_cast<windows_process>(shared_from_this());
 	auto t = std::make_shared<win_kernel_thread>(
-		id, std::move(self), start_addr,
-		stack_base, default_stack_size, cpu);
+		id, std::move(self), start_addr, stack_base, size, cpu);
 
 	t->set_emulator(emulator_);
 	setup_ethread(t, start_addr);
 
-	// On the queue last: another cpu can run it to the end the moment it is there.
 	{
 		std::unique_lock lock(thread_mtx_);
 		threads_[t->id()] = t;
 	}
 
+	// On the queue, but no cpu takes it until it is started.
 	scheduler_->enqueue(cpu, t, args);
 	return t;
 }
 
-std::shared_ptr<thread> win_user_proc::create_thread(vcpu& cpu, const addr_t start_addr,
-	const std::span<const std::uint64_t> args)
+std::shared_ptr<thread> win_user_proc::create_suspended_thread(vcpu& cpu,
+	const addr_t start_addr, const std::span<const std::uint64_t> args,
+	const std::size_t stack_size)
 {
 	const auto id = static_cast<thread_id_type>(objs_.allocate_id());
+	const auto size = thread_stack_size(stack_size);
 
-	const addr_t stack_base = mem_.alloc(default_stack_size, prot_rw);
+	const addr_t stack_base = mem_.alloc(size, prot_rw);
 	auto self = std::static_pointer_cast<windows_process>(shared_from_this());
 	auto t = std::make_shared<win_user_thread>(
-		id, std::move(self), mem_, start_addr,
-		stack_base, default_stack_size, cpu);
+		id, std::move(self), mem_, start_addr, stack_base, size, cpu);
 
 	t->set_emulator(emulator_);
 	setup_ethread(t, start_addr);
@@ -117,6 +119,7 @@ void windows_process::destroy_ethread(const win_thread& t)
 
 	set_thread_state(et, Terminated, false);
 	set_thread_exit_time(et, win_system_time());
+	set_thread_exit_status(et, t.exit_status());
 
 	win::set_state_at(*et.space(), et.address(), 1);
 	wake_waiters(*et.space(), et.address());

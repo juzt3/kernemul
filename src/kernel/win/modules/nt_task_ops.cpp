@@ -118,7 +118,75 @@ std::shared_ptr<win_thread> thread_from_handle(win_kernel_state& state, vcpu& cp
 	if (!entry)
 		return {};
 
+	// Through the object rather than the process's thread list: a thread that has ended is off
+	// that list, and a handle to it still answers -- what it exited with is asked for afterwards.
+	if (const auto obj = state.objs.get_object<thread_object>(entry->body_addr))
+		return std::dynamic_pointer_cast<win_thread>(obj->thread);
+
 	return state.find_ethread(emu_object<_ETHREAD>(*cpu.curr_addr_space(), entry->body_addr));
+}
+
+// THREAD_CREATE_FLAGS_CREATE_SUSPENDED: the thread is made but nothing runs it until a resume.
+constexpr std::uint32_t thread_create_suspended = 0x1;
+
+// PS_ATTRIBUTE_LIST as ntdll builds it: a total length in bytes, this header included, followed
+// by that many attributes. Only the two a thread create is told to fill in are handled.
+constexpr std::uint64_t ps_attribute_client_id   = 0x10003;
+constexpr std::uint64_t ps_attribute_teb_address = 0x10004;
+
+#pragma pack(push, 1)
+struct ps_attribute_t
+{
+	std::uint64_t attribute;
+	std::uint64_t size;
+	std::uint64_t value;         // a buffer to write into, for both attributes here
+	std::uint64_t return_length; // where the length written goes, when the caller wants it
+};
+#pragma pack(pop)
+
+static_assert(sizeof(ps_attribute_t) == 0x20);
+
+// An attribute the caller passed but nothing here fills in is left alone rather than refused:
+// the thread is made either way, and the caller reads back whatever it initialised.
+void write_thread_attributes(vcpu& cpu, const addr_t list, const win_thread& t)
+{
+	if (!list)
+		return;
+
+	auto& space = *cpu.curr_addr_space();
+	const auto total = space.read_mem<std::uint64_t>(list);
+
+	if (total < sizeof(std::uint64_t) + sizeof(ps_attribute_t))
+		return;
+
+	const auto count = (total - sizeof(std::uint64_t)) / sizeof(ps_attribute_t);
+
+	for (std::uint64_t i = 0; i < count; ++i)
+	{
+		const auto at = list + sizeof(std::uint64_t) + i * sizeof(ps_attribute_t);
+		const auto attr = space.read_mem<ps_attribute_t>(at);
+
+		if (!attr.value)
+			continue;
+
+		std::uint64_t written = 0;
+
+		if (attr.attribute == ps_attribute_client_id && attr.size >= sizeof(_CLIENT_ID))
+		{
+			// The ids the ETHREAD already carries, so the two answers cannot disagree.
+			space.write_mem(static_cast<addr_t>(attr.value), t.client_id().read());
+			written = sizeof(_CLIENT_ID);
+		}
+		else if (attr.attribute == ps_attribute_teb_address
+			&& attr.size >= sizeof(addr_t) && t.teb())
+		{
+			space.write_mem<addr_t>(static_cast<addr_t>(attr.value), t.teb().address());
+			written = sizeof(addr_t);
+		}
+
+		if (written && attr.return_length)
+			space.write_mem<std::uint64_t>(static_cast<addr_t>(attr.return_length), written);
+	}
 }
 
 }
@@ -132,8 +200,7 @@ void modules::register_ntoskrnl_task_ops(win_kernel_state& state, proc_module& m
 		[[maybe_unused]] emu_object<_OBJECT_ATTRIBUTES> object_attributes,
 		const std::uint64_t process_handle, const addr_t start_routine, const addr_t argument,
 		const std::uint32_t create_flags, [[maybe_unused]] const std::uint64_t zero_bits,
-		[[maybe_unused]] const std::uint64_t stack_size,
-		[[maybe_unused]] const std::uint64_t maximum_stack_size,
+		const std::uint64_t stack_size, const std::uint64_t maximum_stack_size,
 		const addr_t attribute_list) -> NTSTATUS
 	{
 		if (!thread_handle || !start_routine)
@@ -146,10 +213,44 @@ void modules::register_ntoskrnl_task_ops(win_kernel_state& state, proc_module& m
 			return STATUS_INVALID_HANDLE;
 		}
 
-		const std::uint64_t args[] = { argument };
-		auto t = st->sys_proc->create_thread(cpu, start_routine, args);
+		// A user thread belongs to the process that asked for it: the start routine is a user va,
+		// and only that process's address space maps it. A driver calling Zw gets what it always
+		// got -- a system thread, in the address space its own code runs in.
+		const auto caller = cpu.thread()
+			? std::dynamic_pointer_cast<win_user_proc>(cpu.thread()->proc())
+			: nullptr;
 
-		const auto ethread = std::static_pointer_cast<win_thread>(t)->ethread().address();
+		std::shared_ptr<thread> t;
+
+		if (caller)
+		{
+			auto* const emulator = st->emulator();
+
+			if (!emulator)
+				return STATUS_NOT_IMPLEMENTED;
+
+			// The reserve is what a thread is given, since the stack is committed outright;
+			// the committed size is the smaller of the two and only a hint.
+			const auto stack = maximum_stack_size ? maximum_stack_size : stack_size;
+
+			t = emulator->create_user_thread(cpu, *caller, start_routine, argument,
+				static_cast<std::size_t>(stack), (create_flags & thread_create_suspended) != 0);
+		}
+		else
+		{
+			const std::uint64_t args[] = { argument };
+			t = st->sys_proc->create_thread(cpu, start_routine, args);
+		}
+
+		if (!t)
+		{
+			THREAD_LOG_ERR("NtCreateThreadEx: no thread could be started at 0x{:X}",
+				start_routine);
+			return STATUS_INSUFFICIENT_RESOURCES;
+		}
+
+		const auto wt = std::static_pointer_cast<win_thread>(t);
+		const auto ethread = wt->ethread().address();
 
 		if (!ethread)
 		{
@@ -160,9 +261,14 @@ void modules::register_ntoskrnl_task_ops(win_kernel_state& state, proc_module& m
 		const auto handle = st->sys_proc->handle_table().create_handle(ethread, desired_access);
 		thread_handle.write(handle);
 
+		// What the caller asked to be told about the thread it just made: kernel32 reads the
+		// thread id it returns out of the client id it asks for here.
+		write_thread_attributes(cpu, attribute_list, *wt);
+
 		THREAD_LOG_INFO("NtCreateThreadEx(start=0x{:X}, argument=0x{:X}, flags=0x{:X}, "
-			"attributes=0x{:X}) -> tid={}, handle=0x{:X}",
-			start_routine, argument, create_flags, attribute_list, t->id(), handle);
+			"attributes=0x{:X}) -> tid={}, handle=0x{:X}{}",
+			start_routine, argument, create_flags, attribute_list, t->id(), handle,
+			(create_flags & thread_create_suspended) ? ", suspended" : "");
 
 		return STATUS_SUCCESS;
 	};
@@ -209,8 +315,13 @@ void modules::register_ntoskrnl_task_ops(win_kernel_state& state, proc_module& m
 	auto terminate_thread = [st](vcpu& cpu, const std::uint64_t thread_handle,
 		const NTSTATUS exit_status) -> NTSTATUS
 	{
-		const auto t = thread_from_handle(*st, cpu, thread_handle);
 		const auto self = cpu.thread();
+
+		// A thread ending itself passes no handle at all -- RtlExitUserThread does -- and a
+		// refusal there sends ntdll on to end the whole process instead.
+		const auto t = thread_handle
+			? thread_from_handle(*st, cpu, thread_handle)
+			: std::dynamic_pointer_cast<win_thread>(self);
 
 		if (!t)
 		{
@@ -220,6 +331,8 @@ void modules::register_ntoskrnl_task_ops(win_kernel_state& state, proc_module& m
 
 		THREAD_LOG_INFO("NtTerminateThread(tid={}, status=0x{:X})", t->id(), exit_status);
 
+		t->set_exit_status(exit_status);
+
 		if (t == self)
 		{
 			t->finish();
@@ -227,7 +340,8 @@ void modules::register_ntoskrnl_task_ops(win_kernel_state& state, proc_module& m
 			return STATUS_SUCCESS;
 		}
 
-		st->sys_proc->terminate_thread(t->id());
+		// The thread's own process: a user thread is not on the system process's lists.
+		t->proc()->terminate_thread(t->id());
 
 		return STATUS_SUCCESS;
 	};
@@ -275,7 +389,9 @@ void modules::register_ntoskrnl_task_ops(win_kernel_state& state, proc_module& m
 				return STATUS_INFO_LENGTH_MISMATCH;
 
 			thread_basic_information_t info{};
-			info.unique_process = st->sys_proc->id();
+			info.exit_status = t->exit_status();
+			info.teb_base_address = t->teb().address();
+			info.unique_process = t->proc()->id();
 			info.unique_thread = t->id();
 			info.affinity_mask = 1;
 
@@ -687,10 +803,16 @@ void modules::register_ntoskrnl_task_ops(win_kernel_state& state, proc_module& m
 
 		const auto self = cpu.thread();
 
+		// The threads of whoever asked, which for a user process is not the system process.
+		const auto proc = self
+			? std::dynamic_pointer_cast<windows_process>(self->proc())
+			: nullptr;
+		auto& target = proc ? *proc : *st->sys_proc;
+
 		// Collected first: terminate_thread takes the lock for_each_thread holds.
 		std::vector<process::thread_id_type> ids;
 
-		st->sys_proc->for_each_thread([&](win_thread& t)
+		target.for_each_thread([&](win_thread& t)
 		{
 			if (!self || t.id() != self->id())
 				ids.push_back(t.id());
@@ -699,8 +821,11 @@ void modules::register_ntoskrnl_task_ops(win_kernel_state& state, proc_module& m
 		THREAD_LOG_INFO("NtTerminateProcess(status=0x{:X}): ending {} other thread(s)",
 			exit_status, ids.size());
 
+		// Every thread of the process ends with the status the process was given.
+		target.for_each_thread([exit_status](win_thread& t) { t.set_exit_status(exit_status); });
+
 		for (const auto id : ids)
-			st->sys_proc->terminate_thread(id);
+			target.terminate_thread(id);
 
 		if (self)
 			self->finish();

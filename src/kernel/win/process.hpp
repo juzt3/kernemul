@@ -29,8 +29,8 @@ public:
 		win_obj_manager& objs, const win_filesystem& fs)
 		:	process(id, std::move(space)), objs_(objs), handle_table_(objs), fs_(fs) {}
 
-	std::shared_ptr<thread> create_thread(vcpu& cpu, addr_t start_addr,
-		std::span<const std::uint64_t> args = {}) override;
+	std::shared_ptr<thread> create_suspended_thread(vcpu& cpu, addr_t start_addr,
+		std::span<const std::uint64_t> args = {}, std::size_t stack_size = 0) override;
 	void terminate_thread(thread_id_type id) override;
 
 	[[nodiscard]] std::shared_ptr<win_thread> find_ethread(
@@ -127,8 +127,8 @@ public:
 
 	void module_add_cb(proc_module& mod) override;
 
-	std::shared_ptr<thread> create_thread(vcpu& cpu, addr_t start_addr,
-		std::span<const std::uint64_t> args = {}) override;
+	std::shared_ptr<thread> create_suspended_thread(vcpu& cpu, addr_t start_addr,
+		std::span<const std::uint64_t> args = {}, std::size_t stack_size = 0) override;
 
 	void set_image_base(const addr_t base)
 	{

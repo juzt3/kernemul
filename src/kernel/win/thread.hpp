@@ -2,6 +2,7 @@
 #include "../thread_scheduler.hpp"
 #include "ethread.hpp"
 #include "process.hpp"
+#include "status.hpp"
 #include "user_setup.hpp"
 
 #include <algorithm>
@@ -57,7 +58,13 @@ public:
 
 	std::uint32_t suspend();
 	std::uint32_t resume();
+
 	[[nodiscard]] std::uint32_t suspend_count() const { return suspend_count_; }
+
+	// What the thread ended with. A handle to it is still asked for this after it has gone,
+	// so it outlives the thread rather than being read back out of a running context.
+	void set_exit_status(const NTSTATUS status) { exit_status_ = status; }
+	[[nodiscard]] NTSTATUS exit_status() const noexcept { return exit_status_; }
 
 	// Neither answer needs guest memory, which is why the scheduler can ask.
 	[[nodiscard]] bool is_ready(vcpu& cpu) override;
@@ -92,6 +99,7 @@ protected:
 	std::optional<wait_state> wait_;
 	bool alerted_ = false;
 	std::uint32_t suspend_count_ = 0;
+	NTSTATUS exit_status_ = STATUS_PENDING;
 	addr_t stack_low_;
 	std::size_t stack_size_;
 	emu_object<_TEB64> teb_;

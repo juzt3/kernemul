@@ -78,8 +78,10 @@ public:
 	}
 
 	// LdrInitializeThunk(context, ntdll_base); the thunk keeps x0 and hands it to NtContinue.
+	// The context continues into RtlUserThreadStart(entry_point, argument) -- the argument is
+	// what the guest passed to NtCreateThreadEx, and zero for the thread the process starts on.
 	void setup_loader_frame(thread& t, vcpu& cpu, const addr_t entry_point,
-		const addr_t ntdll_base) override
+		const addr_t ntdll_base, const addr_t argument) override
 	{
 		const auto* const ut = dynamic_cast<const win_thread*>(&t);
 
@@ -98,6 +100,7 @@ public:
 		ctx.Pc = thread_start;
 		ctx.Sp = stack_top;
 		ctx.X[0] = entry_point;
+		ctx.X[1] = argument;
 
 		ctx.Lr = 0;
 		ctx.Fp = 0;
