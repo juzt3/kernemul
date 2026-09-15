@@ -498,6 +498,12 @@ public:
 		return kernel_.sys_proc->create_thread(cpu, start_addr);
 	}
 
+	// An instruction usermode may not execute that the kernel services rather
+	// than reporting. Windows on ARM64 does this for the system registers that
+	// report cpu features; x86-64 needs none of it, cpuid being unprivileged.
+	// True if it was served and the pc has moved past it.
+	virtual bool emulate_privileged_insn(vcpu&) { return false; }
+
 	virtual void init_thread_teb(thread&, vcpu&, addr_t) {}
 
 	// The CONTEXT and frame ntdll's LdrInitializeThunk starts on.

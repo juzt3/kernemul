@@ -26,6 +26,74 @@ public:
 	void init_thread_teb(thread& t, vcpu& cpu, addr_t teb_addr) override
 	{
 		t.set_reg(cpu, arm64::tpidr_el0, teb_addr);
+	// MRS <Xt>, <system register>: 1101 0101 0011 o0 op1 CRn CRm op2 Rt.
+	// Windows services these rather than reporting them, and compiler feature
+	// detection relies on it -- ucrtbase reads CurrentEL to decide whether it
+	// may read the ID registers, and dies before main if neither is answered.
+	static constexpr std::uint32_t mrs_op   = 0xD5300000;
+	static constexpr std::uint32_t mrs_mask = 0xFFF00000;
+
+	bool emulate_privileged_insn(vcpu& cpu) override
+	{
+		const auto pc = cpu.pc();
+		const auto insn = cpu.read_virt_mem<std::uint32_t>(pc);
+
+		if ((insn & mrs_mask) != mrs_op)
+			return false;
+
+		const arm64::sys_reg_enc enc{
+			.op0 = 2u + ((insn >> 19) & 1),
+			.op1 = (insn >> 16) & 7,
+			.crn = (insn >> 12) & 15,
+			.crm = (insn >> 8) & 15,
+			.op2 = (insn >> 5) & 7,
+		};
+
+		std::uint64_t value = 0;
+
+		if (!read_sysreg(cpu, enc, value))
+		{
+			THREAD_LOG_WARN("MRS S{}_{}_C{}_C{}_{} at 0x{:X} is not one usermode is "
+				"answered about", enc.op0, enc.op1, enc.crn, enc.crm, enc.op2, pc);
+			return false;
+		}
+
+		const auto rt = insn & 31;
+
+		// Rt 31 is the zero register on this instruction, not the stack pointer.
+		if (rt != 31)
+			cpu.reg(arm64::x0 + rt, value);
+
+		cpu.set_pc(pc + 4);
+
+		return true;
+	}
+
+	// True if usermode gets an answer. Values come from the backend's own cpu
+	// rather than being invented.
+	static bool read_sysreg(vcpu& cpu, const arm64::sys_reg_enc enc, std::uint64_t& out)
+	{
+		// CurrentEL, bits 3:2. A user thread is at EL0.
+		if (enc.op0 == 3 && enc.op1 == 0 && enc.crn == 4 && enc.crm == 2 && enc.op2 == 2)
+		{
+			out = 0;
+			return true;
+		}
+
+		for (const auto r : { arm64::id_aa64pfr0_el1, arm64::id_aa64isar0_el1,
+			arm64::id_aa64isar1_el1, arm64::id_aa64mmfr0_el1 })
+		{
+			const auto known = arm64::sys_enc(r);
+
+			if (known.op0 == enc.op0 && known.op1 == enc.op1 && known.crn == enc.crn
+				&& known.crm == enc.crm && known.op2 == enc.op2)
+			{
+				out = cpu.reg(r);
+				return true;
+			}
+		}
+
+		return false;
 	}
 
 	// fpcr and fpsr are registers the backend has, but not ones a thread's
@@ -96,7 +164,17 @@ public:
 		if (flags.has(context_integer))
 		{
 			for (int i = 0; i <= 28; ++i)
+			{
+				// x18 is the platform register, not a general one. Restoring it
+				// out of a CONTEXT would put a stale TEB -- or a zero, for a
+				// context built by hand -- in the register every caller
+				// dereferences. Windows does not restore it either: neither
+				// RtlRestoreContext nor NtContinue touches x18.
+				if (i == 18)
+					continue;
+
 				regs.set(arm64::x0 + i, ctx.X[i]);
+			}
 		}
 
 		if (flags.has(context_float))
@@ -118,7 +196,14 @@ public:
 			regs.set(arm64::lr, ctx.Lr);
 			regs.set(arm64::sp, ctx.Sp);
 			regs.set(arm64::pc, ctx.Pc);
-			regs.set(arm64::pstate, ctx.Cpsr);
+
+			// The flag bits come out of the context; the mode does not. A
+			// CONTEXT the guest built carries whatever Cpsr ntdll left in it,
+			// and a kernel thread continued through one of those would find
+			// itself at EL0 -- which is the analogue of the cs check the x86-64
+			// side does before it lets a context pick a ring.
+			const auto mode = regs.is_user() ? pstate_el0t : pstate_el1h;
+			regs.set(arm64::pstate, (ctx.Cpsr & ~pstate_mode_mask) | mode);
 		}
 	}
 };
