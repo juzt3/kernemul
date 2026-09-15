@@ -28,6 +28,26 @@ std::shared_ptr<::addr_space> mmu::create_addr_space()
 	auto space = std::make_shared<addr_space>();
 	space->ttbr_pa = alloc_phys_locked(page_size(), prot_rw);
 	space->mmu_ = this;
+
+	// The kernel is reachable from every address space: a thread that traps
+	// into it does not change tables. Level 0 index is VA[47:39], so sharing
+	// entries 256-511 aliases the whole kernel half and nothing below it.
+	if (!kernel_ttbr_pa_)
+	{
+		kernel_ttbr_pa_ = space->ttbr_pa;
+	}
+	else
+	{
+		const std::size_t entries = page_size() / sizeof(std::uint64_t);
+
+		for (std::size_t i = entries / 2; i < entries; ++i)
+		{
+			const auto off = i * sizeof(std::uint64_t);
+			write_phys<std::uint64_t>(space->ttbr_pa + off,
+				read_phys<std::uint64_t>(kernel_ttbr_pa_ + off));
+		}
+	}
+
 	spaces_[space->ttbr_pa] = space;
 	return space;
 }
@@ -171,6 +191,24 @@ addr_t mmu::walk_to_l3(const addr_space& space, const addr_t va)
 	return step(l2, v.l2);
 }
 
+// The shadow only records mappings made *in* a space, and the kernel half is
+// aliased rather than made -- so a miss there is a question for the tables.
+std::optional<addr_t> mmu::translate_virt(const addr_space& space, const addr_t page)
+{
+	const addr_t l3 = walk_to_l3(space, page);
+
+	if (!l3)
+		return std::nullopt;
+
+	const virt_addr v{ .val = page };
+	const auto entry = read_phys<std::uint64_t>(l3 + v.l3 * sizeof(std::uint64_t));
+
+	if (!(entry & desc_valid))
+		return std::nullopt;
+
+	return entry & desc_addr_mask;
+}
+
 void mmu::unmap_page(addr_space& space, const addr_t va)
 {
 	const virt_addr v{ .val = page_align(va) };
@@ -244,10 +282,15 @@ void mmu::copy_virt(const addr_space& space, const addr_t va, void* buf, const s
 		const std::size_t chunk = std::min(size - done, page_size() - page_off);
 
 		const auto it = space.shadow.find(page);
-		if (it == space.shadow.end())
+
+		const auto frame = it != space.shadow.end()
+			? std::optional<addr_t>(it->second)
+			: translate_virt(space, page);
+
+		if (!frame)
 			throw std::runtime_error("unmapped virtual address");
 
-		const addr_t pa = it->second + page_off;
+		const addr_t pa = *frame + page_off;
 
 		if (write)
 			write_phys(pa, bytes + done, chunk);
@@ -310,10 +353,14 @@ std::optional<addr_t> mmu::virt_to_phys(const ::addr_space& space, const addr_t 
 
 	const addr_t page = page_align(va);
 	const auto it = s.shadow.find(page);
-	if (it == s.shadow.end())
-		return std::nullopt;
 
-	return it->second + (va - page);
+	if (it != s.shadow.end())
+		return it->second + (va - page);
+
+	if (const auto pa = translate_virt(s, page))
+		return *pa + (va - page);
+
+	return std::nullopt;
 }
 
 std::optional<addr_t> mmu::phys_to_virt(const ::addr_space& space, const addr_t pa)

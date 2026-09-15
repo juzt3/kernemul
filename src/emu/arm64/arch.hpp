@@ -39,8 +39,13 @@ namespace arm64
 		// system registers that only exist behind UC_ARM64_REG_CP_REG. Kept in
 		// one contiguous run so the backend can classify them by range.
 		sctlr_el1, tcr_el1, spsr_el1, scr_el3, hcr_el2,
+
+		// The feature registers. Privileged, but usermode reads them anyway --
+		// see arm64_win_emulator::read_sysreg.
+		id_aa64pfr0_el1, id_aa64isar0_el1, id_aa64isar1_el1, id_aa64mmfr0_el1,
+
 		sys_first = sctlr_el1,
-		sys_last  = hcr_el2,
+		sys_last  = id_aa64mmfr0_el1,
 
 		// 128-bit vector registers, contiguous and last for the same reason
 		q0,  q1,  q2,  q3,  q4,  q5,  q6,  q7,
@@ -62,6 +67,12 @@ namespace arm64
 		case spsr_el1:  return { 3, 0, 4, 0, 0 };
 		case scr_el3:   return { 3, 6, 1, 1, 0 };
 		case hcr_el2:   return { 3, 4, 1, 1, 0 };
+
+		case id_aa64pfr0_el1:  return { 3, 0, 0, 4, 0 };
+		case id_aa64isar0_el1: return { 3, 0, 0, 6, 0 };
+		case id_aa64isar1_el1: return { 3, 0, 0, 6, 1 };
+		case id_aa64mmfr0_el1: return { 3, 0, 0, 7, 0 };
+
 		default:        return { 0, 0, 0, 0, 0 };
 		}
 	}

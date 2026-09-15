@@ -31,10 +31,16 @@ namespace arm64
 
 		std::unordered_map<addr_t, std::shared_ptr<::addr_space>> spaces_;
 
+		// The level 0 table of the first address space, which is the kernel's.
+		// Every later space copies its upper half -- see create_addr_space.
+		addr_t kernel_ttbr_pa_ = 0;
+
 		static addr_space& as_arm64(::addr_space& space);
 		static const addr_space& as_arm64(const ::addr_space& space);
 
 		static std::uint64_t page_attrs(mem_prot prot);
+
+		std::optional<addr_t> translate_virt(const addr_space& space, addr_t page);
 
 		addr_t ensure_table(addr_t table_pa, std::size_t index);
 		void map_page(addr_space& space, addr_t va, addr_t pa, mem_prot prot);
