@@ -64,15 +64,16 @@ public:
 		{
 			auto pc = reg<addr_t>(arch_->pc());
 
+			// A nested run executes guest code, so for its duration this cpu is
+			// not at a hook's safe point, whatever the hook around it says.
+			const auto hooks = in_hook_.exchange(0);
+
 			// run_on_all only waits for the cpus that were executing when it
 			// looked. Starting now would have it flush this cpu's tlb, or remap
 			// its memory, while it runs. Before running_, or it would be
 			// waiting on a cpu that is waiting on it.
 			while (pending_pause_.load()) {}
 
-			// A nested run executes guest code, so for its duration this cpu is
-			// not at a hook's safe point, whatever the hook around it says.
-			const auto hooks = in_hook_.exchange(0);
 			++running_;
 			const auto res = uc_emu_start(uc_, pc, 0, 0, 0);
 			--running_;
@@ -217,11 +218,15 @@ public:
 		for (auto& cpu : cpus_)
 			static_cast<unicorn_vcpu_base*>(cpu.get())->pending_pause_ = true;
 
+		// Only cpus that are executing: uc_emu_stop on an idle engine latches a
+		// stop request that its next uc_emu_start consumes, so a cpu parked in
+		// the scheduler would come back from its first real run having run
+		// nothing.
 		for (auto& cpu : cpus_)
 		{
 			auto* uc = static_cast<unicorn_vcpu_base*>(cpu.get());
 
-			if (!uc->in_hook_.load())
+			if (uc->running_.load() && !uc->in_hook_.load())
 				uc->stop();
 		}
 
@@ -468,11 +473,29 @@ private:
 		return false;
 	}
 
+	// Whether a hook_insn request is being served from this exception index --
+	// see insn_as_intr. Both it and hook_exception ride UC_HOOK_INTR and every
+	// callback is called for every index, so without this an AArch64 SVC also
+	// reaches the OS exception handler and becomes an access violation.
+	[[nodiscard]] bool claimed_by_insn_hook(const int intno) const
+	{
+		for (const auto& hk : hooks_)
+		{
+			if (hk.insn_via_intr && hk.uc_insn == intno)
+				return true;
+		}
+
+		return false;
+	}
+
 	static void exception_hook_trampoline(uc_engine* uc, std::uint32_t intno, void* user_data)
 	{
 		auto* hk = static_cast<unicorn_hook*>(user_data);
 		auto* self = static_cast<unicorn_emu_base*>(hk->owner);
 		auto& cb = std::get<exception_hk_cb>(hk->cb);
+
+		if (self->claimed_by_insn_hook(static_cast<int>(intno)))
+			return;
 
 		for (auto& cpu : self->cpus_)
 		{
