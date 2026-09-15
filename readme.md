@@ -31,14 +31,15 @@ state.redirect(mod, "KeSetEvent",
 There are 2 emulator backends: WHP (Windows hypervisor platform) and Unicorn. WHP uses virtualisation to execute instructions a lot faster but is only usable on Windows hosts. Unicorn is regular emulation but will work on different host operating systems too (e.g. Linux). The Unicorn implementation has host multithreading (emulates multiple vCPUs).
 
 # Getting started
-
-First clone the repository.
+## Cloning
 
 ```
 git clone --recurse-submodules https://github.com/noahware/kernemul.git
 ```
 
-Then you need to choose what target you will choose:
+## Building
+
+Choose which guest architecture you want:
 
 x64 targets via WHP/Hyper-V (x64 Windows hosts only):
 
