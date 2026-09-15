@@ -83,6 +83,10 @@ constexpr std::uint32_t memory_basic_information = 0;
 constexpr std::uint32_t memory_working_set_ex_information = 4;
 constexpr std::uint32_t memory_image_information = 6;
 
+// Asked about every image the loader maps, on builds new enough to have it.
+// Nothing here carries an image extension -- the ARM64X and hotpatch metadata.
+constexpr std::uint32_t memory_image_extension_information = 14;
+
 // SECTION_INFORMATION_CLASS.
 constexpr std::uint32_t section_basic_information = 0;
 
@@ -473,6 +477,21 @@ void modules::register_ntoskrnl_vm_ops(win_kernel_state& state, proc_module& mod
 				base_address, mod->name, mod->addr);
 
 			return STATUS_SUCCESS;
+		}
+
+		// Three outcomes here, not two: LdrpProcessMappedModule tests the status
+		// against STATUS_NOT_SUPPORTED and carries on when it matches -- "no
+		// extension" -- before testing for failure. The invalid class below
+		// lands in that failure path and kills the process instead.
+		if (memory_information_class == memory_image_extension_information)
+		{
+			if (return_length)
+				return_length.write(0);
+
+			THREAD_LOG_INFO("NtQueryVirtualMemory(MemoryImageExtensionInformation, 0x{:X}): "
+				"no image here has an extension", base_address);
+
+			return STATUS_NOT_SUPPORTED;
 		}
 
 		if (memory_information_class != memory_basic_information)
