@@ -39,7 +39,7 @@ git clone --recurse-submodules https://github.com/noahware/kernemul.git
 
 ## Building
 
-Choose which guest architecture you want:
+Build for whichever guest architecture/emulation backend you want to target.
 
 x64 targets via WHP/Hyper-V (x64 Windows hosts only):
 
