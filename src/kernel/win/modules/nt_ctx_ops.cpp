@@ -63,6 +63,11 @@ void modules::register_ntoskrnl_ctx_ops(win_kernel_state& state, proc_module& mo
 				context.address(), ret, cpu.sp());
 		});
 
+	// Returns nothing, deliberately: a result is written to the convention's
+	// return register, which on AArch64 is x0 -- one of the registers the
+	// context just restored. Writing STATUS_SUCCESS over it leaves a thread
+	// continuing into RtlUserThreadStart with a zero entry point. x86-64 never
+	// saw this, returning in rax, which no context continues through.
 	state.redirect_ntzw(mod, "Continue",
 		[st](vcpu& cpu, emu_object<_CONTEXT> context, const bool test_alert)
 		{

@@ -22,6 +22,9 @@ enum system_information_class : std::uint32_t
 	system_time_of_day_information  = 3,
 	system_numa_processor_map       = 55,
 
+	// Ex form only: the relationship asked about is the input buffer.
+	system_logical_processor_and_group_information = 107,
+
 	// Nothing is emulated here, so this is the basic information verbatim.
 	system_emulation_basic_information = 62,
 };
@@ -49,6 +52,75 @@ struct group_affinity_t
 	std::uint16_t group;
 	std::uint16_t reserved[3];
 };
+
+// LOGICAL_PROCESSOR_RELATIONSHIP, the values the input buffer can name.
+enum processor_relationship : std::uint32_t
+{
+	relation_processor_core    = 0,
+	relation_numa_node         = 1,
+	relation_cache             = 2,
+	relation_processor_package = 3,
+	relation_group             = 4,
+	relation_processor_die     = 5,
+	relation_numa_node_ex      = 6,
+	relation_processor_module  = 7,
+	relation_all               = 0xFFFF,
+};
+
+// NUMA_NODE_RELATIONSHIP. One node, every processor in it, which is the same
+// machine SystemNumaProcessorMap describes.
+struct numa_node_relationship_t
+{
+	std::uint32_t    node_number;
+	std::uint8_t     reserved[18];
+	std::uint16_t    group_count;
+	group_affinity_t group_mask[1];
+};
+
+// PROCESSOR_RELATIONSHIP. One GROUP_AFFINITY: one group, one processor in it.
+struct processor_relationship_t
+{
+	std::uint8_t     flags;
+	std::uint8_t     efficiency_class;
+	std::uint8_t     reserved[20];
+	std::uint16_t    group_count;
+	group_affinity_t group_mask[1];
+};
+
+// PROCESSOR_GROUP_INFO.
+struct processor_group_info_t
+{
+	std::uint8_t  maximum_processor_count;
+	std::uint8_t  active_processor_count;
+	std::uint8_t  reserved[38];
+	std::uint64_t active_processor_mask;
+};
+
+// GROUP_RELATIONSHIP, cut to the one group this machine has.
+struct group_relationship_t
+{
+	std::uint16_t          maximum_group_count;
+	std::uint16_t          active_group_count;
+	std::uint8_t           reserved[20];
+	processor_group_info_t group_info[1];
+};
+
+// SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX. Size is this entry's own length --
+// what a caller steps by, rather than the size of the widest member.
+struct system_logical_processor_information_ex_t
+{
+	std::uint32_t relationship;
+	std::uint32_t size;
+	union
+	{
+		processor_relationship_t  processor;
+		group_relationship_t      group;
+		numa_node_relationship_t  numa;
+	};
+};
+
+constexpr std::size_t logical_processor_header = offsetof(
+	system_logical_processor_information_ex_t, processor);
 
 // SYSTEM_NUMA_INFORMATION, cut to the one node this machine has.
 struct system_numa_information_t
@@ -220,16 +292,133 @@ void modules::register_ntoskrnl_sysinfo_ops(win_kernel_state& state, proc_module
 		}
 	};
 
+	// The processor topology. ntdll treats a failure here as fatal the way it
+	// does the NUMA map above: LdrpInitializeProcess asks on its way up, and a
+	// loader that cannot learn the group layout never reaches the entry point.
+	// One group, every processor its own core, no SMT.
+	auto query_processor_topology = [](vcpu& cpu, const addr_t input_buffer,
+		const std::uint32_t input_buffer_length, const addr_t system_information,
+		const std::uint32_t length, emu_object<std::uint32_t> return_length) -> NTSTATUS
+	{
+		auto& space = *cpu.curr_addr_space();
+
+		auto wanted = relation_all;
+
+		if (input_buffer && input_buffer_length >= sizeof(std::uint32_t))
+			wanted = static_cast<processor_relationship>(space.read_mem<std::uint32_t>(input_buffer));
+
+		const auto cpus = cpu.emu()->cpus().size();
+		const std::uint64_t mask = cpus >= 64 ? ~0ull : (1ull << cpus) - 1;
+
+		std::vector<std::uint8_t> answer;
+
+		const auto add = [&answer](const processor_relationship kind, const std::size_t body,
+			auto&& fill)
+		{
+			system_logical_processor_information_ex_t entry{};
+			entry.relationship = kind;
+			entry.size = static_cast<std::uint32_t>(logical_processor_header + body);
+
+			fill(entry);
+
+			const auto* const bytes = reinterpret_cast<const std::uint8_t*>(&entry);
+			answer.insert(answer.end(), bytes, bytes + entry.size);
+		};
+
+		if (wanted == relation_processor_core || wanted == relation_all)
+		{
+			for (std::size_t i = 0; i < cpus; ++i)
+			{
+				add(relation_processor_core, sizeof(processor_relationship_t),
+					[i](auto& entry)
+					{
+						// Flags is LTP_PC_SMT, and nothing here is threaded.
+						entry.processor.flags = 0;
+						entry.processor.efficiency_class = 0;
+						entry.processor.group_count = 1;
+						entry.processor.group_mask[0].mask = 1ull << i;
+						entry.processor.group_mask[0].group = 0;
+					});
+			}
+		}
+
+		// The Ex spelling asks for the same node, only saying the caller can read
+		// a group array longer than one. Both are answered: a caller told there
+		// are no nodes sizes whatever it indexes by node number to nothing.
+		if (wanted == relation_numa_node || wanted == relation_numa_node_ex
+			|| wanted == relation_all)
+		{
+			const auto kind = wanted == relation_numa_node_ex
+				? relation_numa_node_ex : relation_numa_node;
+
+			add(kind, sizeof(numa_node_relationship_t),
+				[mask](auto& entry)
+				{
+					entry.numa.node_number = 0;
+					entry.numa.group_count = 1;
+					entry.numa.group_mask[0].mask = mask;
+					entry.numa.group_mask[0].group = 0;
+				});
+		}
+
+		if (wanted == relation_group || wanted == relation_all)
+		{
+			add(relation_group, sizeof(group_relationship_t),
+				[cpus, mask](auto& entry)
+				{
+					entry.group.maximum_group_count = 1;
+					entry.group.active_group_count = 1;
+					entry.group.group_info[0].maximum_processor_count =
+						static_cast<std::uint8_t>(cpus);
+					entry.group.group_info[0].active_processor_count =
+						static_cast<std::uint8_t>(cpus);
+					entry.group.group_info[0].active_processor_mask = mask;
+				});
+		}
+
+		// A relationship this does not model. Saying so beats an empty list,
+		// which reads as "none of those exist" and is then relied on.
+		if (answer.empty())
+		{
+			THREAD_LOG_WARN("NtQuerySystemInformationEx(SystemLogicalProcessorAndGroup"
+				"Information): relationship {} is not one this machine describes",
+				static_cast<std::uint32_t>(wanted));
+
+			return STATUS_INVALID_PARAMETER;
+		}
+
+		if (return_length)
+			return_length.write(static_cast<std::uint32_t>(answer.size()));
+
+		// How the caller sizes the buffer, not a failure.
+		if (length < answer.size())
+			return STATUS_INFO_LENGTH_MISMATCH;
+
+		space.write_mem(system_information, answer.data(), answer.size());
+
+		THREAD_LOG_INFO("NtQuerySystemInformationEx(SystemLogicalProcessorAndGroupInformation, "
+			"relationship={}): {} cpu(s) in 1 group, mask 0x{:X}", static_cast<std::uint32_t>(wanted),
+			cpus, mask);
+
+		return STATUS_SUCCESS;
+	};
+
 	// The Ex form takes an input buffer naming which processor group or handle
-	// the question is about. There is one group and the classes answered here
-	// do not take an input, so it is only reported.
-	auto query_system_information_ex = [query_system_information](vcpu& cpu,
-		const std::uint32_t system_information_class, const addr_t input_buffer,
+	// the question is about. There is one group, so for the classes the plain
+	// form also answers, the input is only reported.
+	auto query_system_information_ex = [query_system_information, query_processor_topology](
+		vcpu& cpu, const std::uint32_t system_information_class, const addr_t input_buffer,
 		const std::uint32_t input_buffer_length, const addr_t system_information,
 		const std::uint32_t length, emu_object<std::uint32_t> return_length) -> NTSTATUS
 	{
 		THREAD_LOG_INFO("NtQuerySystemInformationEx: input=0x{:X}/{}",
 			input_buffer, input_buffer_length);
+
+		if (system_information_class == system_logical_processor_and_group_information)
+		{
+			return query_processor_topology(cpu, input_buffer, input_buffer_length,
+				system_information, length, return_length);
+		}
 
 		return query_system_information(cpu, system_information_class, system_information,
 			length, return_length);
