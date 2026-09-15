@@ -12,20 +12,15 @@
 namespace
 {
 
-// What the kernel's RtlAllocateStringRoutine tags a counted string's buffer
-// with, and therefore what RtlFreeUnicodeString expects to be freeing.
+// What RtlAllocateStringRoutine tags a buffer with, and what RtlFreeUnicodeString frees.
 constexpr std::uint32_t string_pool_tag = 0x67727453;
 
-// A counted string's Length is sixteen bits, so a conversion that would need
-// more than that fails rather than truncating.
+// A counted string's Length is sixteen bits, so a longer conversion fails rather than truncates.
 constexpr std::size_t max_counted_string_bytes = 0xFFFF;
 
 }
 
-// Most of these are pure functions over guest memory: there is no state to keep
-// and nothing to fake, so they are implemented rather than accounted for. The
-// three that allocate take their buffers from the executive pool, exactly as
-// the kernel's own string routine does.
+// The three that allocate take their buffers from the executive pool, as the kernel's own does.
 void modules::register_ntoskrnl_string_ops(win_kernel_state& state, proc_module& mod)
 {
 	auto* st = &state;
@@ -135,8 +130,6 @@ void modules::register_ntoskrnl_string_ops(win_kernel_state& state, proc_module&
 				? compare_ascii_nocase(a.c_str(), b.c_str(), std::min(a.size(), b.size()))
 				: a.compare(b);
 
-			// A shared prefix leaves the shorter string the lesser, which the
-			// folded compare above cannot say on its own.
 			const auto result = (r != 0)
 				? r
 				: static_cast<std::int32_t>(a.size()) - static_cast<std::int32_t>(b.size());
@@ -157,8 +150,6 @@ void modules::register_ntoskrnl_string_ops(win_kernel_state& state, proc_module&
 			space.read_mem(source1, a.data(), length);
 			space.read_mem(source2, b.data(), length);
 
-			// How many leading bytes match, which is `length` when they are
-			// equal -- not memcmp's sign.
 			const auto matched = static_cast<std::uint64_t>(
 				std::mismatch(a.begin(), a.end(), b.begin()).first - a.begin());
 
@@ -168,11 +159,7 @@ void modules::register_ntoskrnl_string_ops(win_kernel_state& state, proc_module&
 			return matched;
 		});
 
-	// The two code-page conversions. Both are ascii here: a real conversion
-	// goes through the system code page, and nothing in the emulator sets one
-	// up, so anything above 0x7F is carried across unchanged rather than
-	// mapped. The sizes and statuses are the real ones either way, which is
-	// what a caller sizing a buffer actually depends on.
+	// Both are ascii here: no system code page is set up, so anything above 0x7F is carried across.
 	state.redirect(mod, "RtlMultiByteToUnicodeN",
 		[](vcpu& cpu, const addr_t unicode_string, const std::uint32_t max_bytes_in_unicode_string,
 			emu_object<std::uint32_t> bytes_in_unicode_string, const addr_t multi_byte_string,
@@ -225,14 +212,10 @@ void modules::register_ntoskrnl_string_ops(win_kernel_state& state, proc_module&
 			THREAD_LOG_INFO("RtlUnicodeToUTF8N(in={} bytes, out={} bytes) -> '{}'",
 				unicode_string_byte_count, written, narrow.substr(0, written));
 
-			// The real one says so when the destination could not take it all,
-			// and a caller sizing a buffer loops on exactly this.
 			return written < narrow.size() ? STATUS_BUFFER_TOO_SMALL : STATUS_SUCCESS;
 		});
 
-	// RtlGetDefaultCodePage(PUSHORT AnsiCodePage, PUSHORT OemCodePage). Nothing
-	// here installs a code page, so these name the Windows defaults -- 1252 and
-	// 437 -- which is what the ascii-only conversions above behave as.
+	// Nothing here installs a code page, so these name the Windows defaults, 1252 and 437.
 	state.redirect(mod, "RtlGetDefaultCodePage",
 		[](vcpu&, emu_object<std::uint16_t> ansi_code_page,
 			emu_object<std::uint16_t> oem_code_page)
@@ -249,9 +232,6 @@ void modules::register_ntoskrnl_string_ops(win_kernel_state& state, proc_module&
 			THREAD_LOG_INFO("RtlGetDefaultCodePage() -> ansi={}, oem={}", ansi_latin1, oem_us);
 		});
 
-	// The conversion a driver reaches for when it has an ANSI string and needs
-	// a counted unicode one. Ascii-only, for the reason the code-page
-	// conversions above give; the sizes and statuses are the real ones.
 	state.redirect(mod, "RtlAnsiStringToUnicodeString",
 		[st](vcpu& cpu, emu_object<_UNICODE_STRING> destination_string,
 			emu_object<_STRING> source_string, const std::uint8_t allocate_destination_string)
@@ -263,8 +243,6 @@ void modules::register_ntoskrnl_string_ops(win_kernel_state& state, proc_module&
 			const auto narrow = win::read_ansi_string(source_string);
 			const auto wide = widen_string(narrow);
 
-			// Room for a terminator is part of what the caller has to have,
-			// even though Length does not count it.
 			const auto length = wide.size() * sizeof(char16_t);
 			const auto needed = length + sizeof(char16_t);
 
@@ -310,9 +288,7 @@ void modules::register_ntoskrnl_string_ops(win_kernel_state& state, proc_module&
 			return STATUS_SUCCESS;
 		});
 
-	// Folded onto RtlFreeAnsiString and RtlFreeUTF8String on both
-	// architectures, which is harmless: the three descriptors have the same
-	// shape and this frees the buffer and empties the descriptor either way.
+	// Folded onto RtlFreeAnsiString and RtlFreeUTF8String on both architectures.
 	state.redirect(mod, "RtlFreeUnicodeString",
 		[st](vcpu&, emu_object<_UNICODE_STRING> unicode_string)
 		{
@@ -329,9 +305,7 @@ void modules::register_ntoskrnl_string_ops(win_kernel_state& state, proc_module&
 
 			if (!st->pool.free(buffer))
 			{
-				// Real NT bugchecks here, as ExFreePool would on anything the
-				// pool did not hand out. The descriptor is emptied regardless,
-				// because the buffer is gone as far as the caller is concerned.
+				// Real NT bugchecks here; the descriptor is emptied anyway, the buffer being gone.
 				THREAD_LOG_ERR("RtlFreeUnicodeString: 0x{:X} is not a live pool allocation",
 					buffer);
 				return;
@@ -355,8 +329,6 @@ void modules::register_ntoskrnl_string_ops(win_kernel_state& state, proc_module&
 
 			const auto source = win::read_unicode_string(string_in);
 
-			// An empty source duplicates to an empty descriptor unless the
-			// caller asked for a buffer anyway.
 			if (source.empty() && !(flags & duplicate_allocate_null_string))
 			{
 				string_out.write(_UNICODE_STRING{});

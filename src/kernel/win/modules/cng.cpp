@@ -14,9 +14,6 @@
 namespace
 {
 
-// The algorithm an open provider names, and what it can do. Everything below
-// is real: the digests and the ciphers come out of OpenSSL, so a driver that
-// hashes a buffer here gets the digest it would get on Windows.
 struct algorithm_host final : win_object
 {
 	std::u16string id;
@@ -28,8 +25,6 @@ struct algorithm_host final : win_object
 
 struct hash_host final : win_object
 {
-	// Owned rather than shared: BCryptDuplicateHash would copy it, and nothing
-	// else may touch the context of a hash in progress.
 	EVP_MD_CTX* ctx = nullptr;
 	const EVP_MD* digest = nullptr;
 
@@ -58,8 +53,7 @@ const EVP_MD* digest_for(const std::u16string_view id)
 	return nullptr;
 }
 
-// AES is the only symmetric algorithm a driver here is likely to ask for, and
-// the cipher depends on the key length the caller ends up importing.
+// AES is the only symmetric algorithm here.
 const EVP_CIPHER* cipher_for(const std::u16string_view chaining_mode, const std::size_t key_bytes)
 {
 	const bool cbc = chaining_mode != u"ChainingModeECB";
@@ -73,15 +67,12 @@ const EVP_CIPHER* cipher_for(const std::u16string_view chaining_mode, const std:
 	}
 }
 
-// BCRYPT_* property names, read and written as counted wide strings.
 constexpr std::u16string_view property_object_length = u"ObjectLength";
 constexpr std::u16string_view property_hash_length = u"HashDigestLength";
 constexpr std::u16string_view property_chaining_mode = u"ChainingMode";
 constexpr std::u16string_view property_block_length = u"BlockLength";
 
-// The opaque object a caller allocates for a hash or a key. Nothing here uses
-// it -- the state is host side -- but the caller sizes its allocation from
-// ObjectLength, so the number has to be one it can act on.
+// The state is host side, but the caller sizes its allocation from this.
 constexpr std::uint32_t object_length = 0x200;
 
 constexpr std::uint32_t aes_block_length = 16;
@@ -98,13 +89,7 @@ std::vector<std::uint8_t> read_bytes(addr_space& space, const addr_t addr, const
 
 }
 
-// CNG, backed by OpenSSL. The hashing and the symmetric ciphers are real -- a
-// digest computed here is the digest Windows would have produced -- so a driver
-// that hashes its own data and checks the result against a constant works.
-//
-// Signature verification is the exception: it needs a public key the guest has
-// no way to have been given, and saying a signature checked out when nothing
-// checked it is the one answer that must not be invented.
+// Hashing and the ciphers are real; a signature verified by nothing must not be invented.
 void modules::register_cng(win_kernel_state& state, proc_module& mod)
 {
 	auto* st = &state;
@@ -168,7 +153,6 @@ void modules::register_cng(win_kernel_state& state, proc_module& mod)
 			return STATUS_SUCCESS;
 		});
 
-	// The sizes a caller allocates from, and the chaining mode it reads back.
 	state.redirect(mod, "BCryptGetProperty",
 		[st](vcpu& cpu, const addr_t handle, const addr_t property, const addr_t output,
 			const std::uint32_t output_size, emu_object<std::uint32_t> result_size,
@@ -420,8 +404,7 @@ void modules::register_cng(win_kernel_state& state, proc_module& mod)
 		return STATUS_SUCCESS;
 	});
 
-	// One call does the whole transform: there is no chaining state carried
-	// between calls, which is what BCRYPT_BLOCK_PADDING in the flags decides.
+	// One call does the whole transform; no chaining state is carried between calls.
 	auto transform = [st](vcpu& cpu, const addr_t key, const addr_t input,
 		const std::uint32_t input_size, const addr_t iv, const std::uint32_t iv_size,
 		const addr_t output, const std::uint32_t output_size,
@@ -478,7 +461,6 @@ void modules::register_cng(win_kernel_state& state, proc_module& mod)
 		if (result_size)
 			result_size.write(total);
 
-		// A null output buffer is how a caller asks how much room it needs.
 		if (!output)
 			return STATUS_SUCCESS;
 
@@ -515,10 +497,7 @@ void modules::register_cng(win_kernel_state& state, proc_module& mod)
 				result_size, flags, false, "BCryptDecrypt");
 		});
 
-	// An asymmetric key blob. Importing one means parsing a BCRYPT_RSAKEY_BLOB
-	// into a key only BCryptVerifySignature would use, and that cannot give an
-	// answer -- so the import is refused rather than handing back a key that
-	// leads nowhere.
+	// The imported key would only feed BCryptVerifySignature, so the import is refused.
 	state.redirect(mod, "BCryptImportKeyPair",
 		[](vcpu& cpu, const addr_t algorithm, const addr_t import_key,
 			const addr_t blob_type, emu_object<addr_t> key, const addr_t key_object,
@@ -538,8 +517,6 @@ void modules::register_cng(win_kernel_state& state, proc_module& mod)
 			return STATUS_NOT_SUPPORTED;
 		});
 
-	// The one answer that must not be invented: a driver told a signature
-	// verified acts on data nothing vouched for.
 	state.redirect(mod, "BCryptVerifySignature",
 		[](vcpu&, const addr_t key, const addr_t padding_info, const addr_t hash,
 			const std::uint32_t hash_size, const addr_t signature,

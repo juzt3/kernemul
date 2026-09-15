@@ -10,9 +10,7 @@
 namespace
 {
 
-// EX_PUSH_LOCK. Bit 0 says the lock is held whichever way it was taken, and the
-// share count sits above the four state bits -- so a shared acquire of a free
-// lock leaves 0x11, which is the constant the real fast path exchanges in.
+// EX_PUSH_LOCK: bit 0 is held, shares above the four state bits; a free shared acquire leaves 0x11.
 enum ex_push_lock_state : std::uint64_t
 {
 	push_lock_locked          = 0x1,
@@ -22,8 +20,7 @@ enum ex_push_lock_state : std::uint64_t
 	push_lock_state_mask      = 0xF,
 };
 
-// Which of the Ex forms' flags mean anything. The binary bugchecks on the rest
-// rather than ignoring them, so the mask is a validity check and not a state.
+// The binary bugchecks on any other flag, so this is a validity check.
 constexpr std::uint32_t push_lock_known_flags = 0x7;
 
 enum eresource_flag : std::uint16_t
@@ -32,8 +29,7 @@ enum eresource_flag : std::uint16_t
 	resource_owned_exclusive = 0x80,
 };
 
-// An OWNER_ENTRY's second word packs three flag bits under the recursion count,
-// which owner_count and set_owner below are the whole of.
+// An OWNER_ENTRY's second word packs three flag bits under the recursion count.
 constexpr std::uint32_t owner_flag_mask = 0x7;
 constexpr std::uint32_t owner_count_shift = 3;
 
@@ -43,10 +39,6 @@ addr_t current_ethread(vcpu& cpu)
 	return (t && t->ethread()) ? t->ethread().address() : 0;
 }
 
-// Nothing here can contend a push lock, for the same reason nothing contends a
-// spin lock: the acquiring cpu is stopped inside the handler, so whatever the
-// guest is locking against is not running. A lock found already held means the
-// guest reached it down a path a real wait would have blocked.
 void take_push_lock(emu_object<std::uint64_t> push_lock, const std::uint32_t flags,
 	const bool shared, const std::string_view who)
 {
@@ -74,9 +66,6 @@ void take_push_lock(emu_object<std::uint64_t> push_lock, const std::uint32_t fla
 		who, push_lock.address(), flags, taken);
 }
 
-// The release the binary's fast path performs, which is one formula for both
-// kinds: a share decrement, collapsing to nothing once the last share -- or the
-// single exclusive hold, whose value is below one share -- goes.
 void give_push_lock(emu_object<std::uint64_t> push_lock, const std::uint32_t flags,
 	const std::string_view who)
 {
@@ -104,10 +93,7 @@ void give_push_lock(emu_object<std::uint64_t> push_lock, const std::uint32_t fla
 		who, push_lock.address(), flags, released);
 }
 
-// An ERESOURCE's single owner entry. Windows spills further shared owners into
-// an allocated owner table; nothing here has two threads inside a resource at
-// once -- the cpu is stopped in the handler -- so recursion by the one owner is
-// the whole of what the count has to carry.
+// Windows spills further shared owners into an allocated owner table; nothing here has two at once.
 std::uint32_t owner_count(const emu_object<_ERESOURCE>& resource)
 {
 	return resource.field(&_ERESOURCE::OwnerEntry).field(&_OWNER_ENTRY::TableSize).read()
@@ -135,7 +121,6 @@ bool take_resource(const emu_object<_ERESOURCE>& resource, vcpu& cpu,
 	const auto held_by = resource.field(&_ERESOURCE::OwnerEntry)
 		.field(&_OWNER_ENTRY::OwnerThread).read();
 
-	// Free: take it, and say which way it is held so a release can tell.
 	if (entries == 0)
 	{
 		resource.field(&_ERESOURCE::Flag).write(static_cast<std::uint16_t>(
@@ -150,8 +135,6 @@ bool take_resource(const emu_object<_ERESOURCE>& resource, vcpu& cpu,
 		return true;
 	}
 
-	// Recursive, and a shared acquire of a shared resource, are the two the
-	// owner entry can carry.
 	if (held_by == owner || (!exclusive && !held_exclusive))
 	{
 		if (held_by != owner)
@@ -169,8 +152,6 @@ bool take_resource(const emu_object<_ERESOURCE>& resource, vcpu& cpu,
 		return true;
 	}
 
-	// A caller that passed Wait is documented never to be refused, so it is the
-	// one that has to be told the wait did not happen.
 	if (wait)
 		THREAD_LOG_ERR("{}: 0x{:X} is held by thread 0x{:X} and nothing here can wait",
 			who, resource.address(), held_by);
@@ -182,16 +163,10 @@ bool take_resource(const emu_object<_ERESOURCE>& resource, vcpu& cpu,
 
 }
 
-// Push locks, executive resources, and the rundown reference a driver waits on
-// before tearing something down. All three are reader/writer locks whose only
-// observable state here is what they leave in their own memory: a redirect runs
-// with its cpu stopped, so no second party can be holding one, and no wait can
-// be satisfied by anything other than the caller giving up.
+// A redirect runs with its cpu stopped, so none of these locks can contend.
 void modules::register_ntoskrnl_lock_ops(win_kernel_state& state, proc_module& mod)
 {
-	// One instruction that zeroes eight bytes serves three exports: the linker
-	// folds ExInitializeRundownProtection and KeInitializeSpinLock onto this on
-	// both architectures, so all three names reach this handler.
+	// The linker folds ExInitializeRundownProtection and KeInitializeSpinLock onto this.
 	state.redirect(mod, "ExInitializePushLock",
 		[](vcpu&, emu_object<std::uint64_t> push_lock)
 		{
@@ -246,9 +221,6 @@ void modules::register_ntoskrnl_lock_ops(win_kernel_state& state, proc_module& m
 
 			resource.write(_ERESOURCE{});
 
-			// The system resource list is circular and anchored in the resource
-			// itself; nothing links them together here, so an empty one points
-			// at its own head.
 			const auto head = resource.field(&_ERESOURCE::SystemResourcesList).address();
 			resource.field(&_ERESOURCE::SystemResourcesList).write(guest_links(head, head));
 
@@ -282,9 +254,7 @@ void modules::register_ntoskrnl_lock_ops(win_kernel_state& state, proc_module& m
 
 			if (!count || !entries)
 			{
-				// Real NT bugchecks with RESOURCE_NOT_OWNED. The guest is left
-				// standing instead, because a driver releasing a resource it
-				// never took is easier to read about than to find in a crash.
+				// Real NT bugchecks with RESOURCE_NOT_OWNED; the guest is left standing instead.
 				THREAD_LOG_ERR("ExReleaseResourceLite: 0x{:X} is not held", resource.address());
 				return;
 			}
@@ -321,8 +291,6 @@ void modules::register_ntoskrnl_lock_ops(win_kernel_state& state, proc_module& m
 			if (resource.field(&_ERESOURCE::ActiveEntries).read())
 				THREAD_LOG_ERR("ExDeleteResourceLite: 0x{:X} is still held", resource.address());
 
-			// No owner table was ever allocated, so unlinking the resource from
-			// its own list is all the teardown there is.
 			resource.write(_ERESOURCE{});
 
 			THREAD_LOG_INFO("ExDeleteResourceLite(resource=0x{:X})", resource.address());
@@ -330,9 +298,7 @@ void modules::register_ntoskrnl_lock_ops(win_kernel_state& state, proc_module& m
 			return STATUS_SUCCESS;
 		});
 
-	// Marks a rundown reference closed so no further reference can be taken,
-	// and waits for the outstanding ones. Nothing can drop a reference while
-	// this cpu is stopped, so an outstanding one is a wait that cannot end.
+	// Nothing can drop a reference while this cpu is stopped, so an outstanding one never ends.
 	state.redirect(mod, "ExWaitForRundownProtectionRelease", [](vcpu&, win::rundown_ref run_ref)
 	{
 		if (!run_ref)

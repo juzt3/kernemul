@@ -12,11 +12,9 @@
 namespace
 {
 
-// WaitType.
 constexpr std::uint32_t wait_all = 0;
 
-// How many objects one wait can name, which is what the guest is allowed to
-// pass and what bounds the work the scheduler does per look.
+// How many objects one wait can name, which bounds the work the scheduler does per look.
 constexpr std::size_t maximum_wait_objects = 64;
 
 win_thread::wait_state make_wait(std::vector<addr_t> objects,
@@ -35,21 +33,11 @@ win_thread::wait_state make_wait(std::vector<addr_t> objects,
 
 }
 
-// The waits. A thread that cannot proceed is parked on its objects and taken
-// off the queue, and whoever signals one of them hands it over -- so a wait
-// really does block, and the handlers that signal really do release it.
-//
-// Deciding a wait means reading the objects, which only works with a thread on
-// the cpu. So the signaller does it, and all the scheduler ever looks at is
-// whether the wait has been satisfied or has run out of time.
+// A wait really does block, and the signaller decides it: reading the objects needs the cpu.
 void modules::register_ntoskrnl_wait_ops(win_kernel_state& state, proc_module& mod)
 {
 	auto* st = &state;
 
-	// The wait is set up once. If it can be satisfied straight away the
-	// scheduler does that before the thread runs again, so there is no fast
-	// path here and no result to write: either way the thread comes back with
-	// what the scheduler gave it.
 	auto begin_wait = [](vcpu& cpu, std::vector<addr_t> objects, const std::uint32_t wait_type,
 		const emu_object<std::int64_t>& timeout, const std::string_view who) -> NTSTATUS
 	{
@@ -69,20 +57,14 @@ void modules::register_ntoskrnl_wait_ops(win_kernel_state& state, proc_module& m
 
 		t->begin_wait(std::move(wait));
 
-		// Asked once here, on the cpu: an object that is already signalled
-		// releases the wait without it ever going to sleep, and this is the only
-		// place guest memory can be read for it.
 		t->try_satisfy(*cpu.curr_addr_space());
 
-		// Off the cpu either way. The scheduler decides when the thread runs
-		// again and writes the status over the one returned here.
+		// The scheduler decides when the thread runs again and writes the status over this one.
 		thread_scheduler::yield_current(cpu);
 
 		return STATUS_SUCCESS;
 	};
 
-	// KeWaitForSingleObject takes the object itself, which is what a driver
-	// holds for anything it initialised with Ke*.
 	state.redirect(mod, "KeWaitForSingleObject",
 		[begin_wait](vcpu& cpu, const addr_t object, const std::uint32_t wait_reason,
 			const std::uint8_t wait_mode, const bool alertable,
@@ -109,7 +91,6 @@ void modules::register_ntoskrnl_wait_ops(win_kernel_state& state, proc_module& m
 
 			auto& space = *cpu.curr_addr_space();
 
-			// An array of pointers to the objects, not the objects themselves.
 			std::vector<addr_t> objects(count);
 
 			for (std::uint32_t i = 0; i < count; ++i)
@@ -124,8 +105,6 @@ void modules::register_ntoskrnl_wait_ops(win_kernel_state& state, proc_module& m
 				"KeWaitForMultipleObjects");
 		});
 
-	// The Nt forms take handles, and the object behind each is the same one the
-	// Ke forms are handed directly.
 	auto object_of = [st](const std::uint64_t handle) -> addr_t
 	{
 		const auto entry = st->sys_proc->handle_table().lookup_handle(handle);
@@ -185,9 +164,7 @@ void modules::register_ntoskrnl_wait_ops(win_kernel_state& state, proc_module& m
 				"NtWaitForMultipleObjects");
 		});
 
-	// Signalling and waiting as one step, so nothing can take what was signalled
-	// and leave the caller waiting for it. The handler runs once, so the signal
-	// happens once and the park that follows it cannot be raced.
+	// The handler runs once, so the signal happens once and the park after it cannot be raced.
 	state.redirect_ntzw(mod, "SignalAndWaitForSingleObject",
 		[st, begin_wait, object_of](vcpu& cpu, const std::uint64_t signal_handle,
 			const std::uint64_t wait_handle, const bool alertable,
@@ -219,8 +196,7 @@ void modules::register_ntoskrnl_wait_ops(win_kernel_state& state, proc_module& m
 
 			THREAD_LOG_INFO("NtSignalAndWaitForSingleObject: signalled 0x{:X}", signal);
 
-			// Before parking, so a thread already waiting on the signalled
-			// object gets it rather than losing it to the wait below.
+			// Before parking, so a thread already waiting on the signalled object gets it.
 			st->sys_proc->wake_waiters(space, signal);
 
 			if (alertable)

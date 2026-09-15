@@ -15,8 +15,6 @@ constexpr std::u16string_view system32_dir = u"C:\\Windows\\System32\\";
 namespace win
 {
 
-// The size matters as much as the address: the loader copies the block using
-// it, and a zero has it copy nothing and then read what it never wrote.
 struct environment_block
 {
 	addr_t address;
@@ -53,9 +51,7 @@ inline emu_object<_RTL_USER_PROCESS_PARAMETERS> init_process_parameters(
 {
 	const auto current_dir = dir_from_path(image_path);
 
-	// One block: the structure, then the strings it points at, with Length
-	// covering both. The loader rebases every Buffer against the block when it
-	// copies it, so a string allocated apart comes out pointing at nothing.
+	// One block, Length covering both: the loader rebases every Buffer against it on copy.
 	std::vector<char16_t> strings;
 
 	struct placement
@@ -69,8 +65,7 @@ inline emu_object<_RTL_USER_PROCESS_PARAMETERS> init_process_parameters(
 		const placement at{ strings.size() * sizeof(char16_t),
 			static_cast<unsigned short>(text.size() * sizeof(char16_t)) };
 
-		// Terminated as well as counted: the loader runs plain string functions
-		// over these.
+		// Terminated as well as counted: the loader runs plain string functions over these.
 		strings.insert(strings.end(), text.begin(), text.end());
 		strings.push_back(u'\0');
 
@@ -116,9 +111,6 @@ inline emu_object<_RTL_USER_PROCESS_PARAMETERS> init_process_parameters(
 	return emu_object<_RTL_USER_PROCESS_PARAMETERS>(mem.space(), addr);
 }
 
-// The guest's copy of the schema, and the host's. The guest resolves its own
-// names through the PEB; the host needs the same answers for the imports the
-// emulator resolves itself.
 struct api_set_result
 {
 	addr_t address = 0;

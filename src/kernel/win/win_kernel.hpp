@@ -42,27 +42,16 @@ struct win_kernel_state : kernel_state
 	active_process_list_t active_process_list;
 	emu_object<_KUSER_SHARED_DATA> kuser_shared_data;
 
-	// One table per machine, built at boot. Null where there is no
-	// implementation for the architecture.
 	std::unique_ptr<win_syscall> syscalls = make_win_syscall();
 
 	// One per machine: the trampoline it returns through is a single address.
 	guest_caller calls;
 
-	// Views mapped into system space, by base address, so unmapping one knows
-	// how much to take down. Small and touched only by the two handlers that
-	// map and unmap, so it rides with the rest of the kernel state.
 	std::unordered_map<addr_t, std::uint64_t> views;
 
-	// When the kernel came up, which is what a caller asking how long the
-	// machine has been running measures against.
 	std::int64_t boot_time = static_cast<std::int64_t>(win_system_time());
 
-	// Every list the guest keeps lives in guest memory, and a push rewrites the
-	// head and the old tail, so a module load or a thread starting at the same
-	// time as another would tangle the guest's own links. Public because
-	// win_kernel_proc appends to the module list and windows_process to the
-	// per-process thread lists.
+	// The guest's lists live in guest memory; a push rewrites the head and the old tail.
 	std::mutex list_mtx_;
 
 	explicit win_kernel_state(const std::shared_ptr<class emu>& emu)
@@ -74,16 +63,12 @@ struct win_kernel_state : kernel_state
 		processes[sys_proc->id()] = sys_proc;
 		auto& space = *emu->default_addr_space();
 
-		// A flat directory on the host, mounted where a user process looks for
-		// its DLLs.
 		fs.load_dir(target::guest_fs_dir, system32_dir_narrow);
 
 		const auto ntoskrnl = map_redirect_module("ntoskrnl.exe", modules::register_ntoskrnl);
 
 		if (ntoskrnl)
 		{
-			// The modules beside it, each mapped only so a driver importing
-			// from it can be told what its exports do.
 			map_redirect_module("fltmgr.sys", modules::register_fltmgr);
 			map_redirect_module("cng.sys", modules::register_cng);
 			map_redirect_module("ci.dll", modules::register_ci);
@@ -107,9 +92,6 @@ struct win_kernel_state : kernel_state
 
 			if (active_process_list.address())
 			{
-				// The system process's own EPROCESS. Every kernel thread hangs
-				// off the thread lists inside it, so it is worth having even
-				// when nothing points the guest at it.
 				const auto sys_eproc = insert_process(space, sys_proc->id(), "System");
 				sys_proc->set_eprocess(sys_eproc);
 
@@ -126,14 +108,7 @@ struct win_kernel_state : kernel_state
 		kuser_shared_data.write(make_default_kuser_shared_data(1));
 	}
 
-	// One of the kernel's own modules, mapped out of the guest filesystem with
-	// the handlers that stand in for its exports. Nothing in a mapped module is
-	// ever executed -- it is there so its exports have addresses to redirect --
-	// which is why the imports are not resolved either.
-	//
-	// A module that is not in the guest filesystem is skipped rather than
-	// fatal: a driver importing from it fails to map and says so, and one that
-	// does not is unaffected.
+	// Nothing in a mapped module is ever executed, so the imports are not resolved either.
 	template <typename F>
 	std::shared_ptr<proc_module> map_redirect_module(const std::string_view name, F&& registrar)
 	{
@@ -159,10 +134,7 @@ struct win_kernel_state : kernel_state
 		return mod;
 	}
 
-	// Nt and Zw name one function at one address. Which of the two ntoskrnl
-	// exports varies from one function to the next -- and a driver can only
-	// import a name that is exported -- so a handler is bound to both spellings,
-	// and only a pair where neither resolves is worth reporting.
+	// Which of the two ntoskrnl exports varies per function, so both spellings are bound.
 	template <typename F>
 	void redirect_ntzw(proc_module& mod, const std::string_view base, F&& fn)
 	{
@@ -180,8 +152,7 @@ struct win_kernel_state : kernel_state
 	void set_emulator(windows_emulator* e) { emulator_ = e; }
 	[[nodiscard]] windows_emulator* emulator() const noexcept { return emulator_; }
 
-	// KUSER_SHARED_DATA is built before any cpu exists, so its count starts as
-	// a placeholder.
+	// KUSER_SHARED_DATA is built before any cpu exists, so its count starts as a placeholder.
 	void publish_processor_count(const std::size_t processors)
 	{
 		if (!kuser_shared_data)
@@ -202,8 +173,7 @@ struct win_kernel_state : kernel_state
 			add_stub_services("win32u.dll", *win32k);
 	}
 
-	// Parsed in host memory: nothing ever runs these stubs, so the guest has no
-	// reason to have them.
+	// Nothing ever runs these stubs, so the guest has no reason to have them.
 	void add_stub_services(const std::string_view name, const proc_module& impl)
 	{
 		const auto file = fs.open(std::string(system32_dir_narrow) + std::string(name));
@@ -226,10 +196,6 @@ struct win_kernel_state : kernel_state
 		syscalls->add(name, image, impl);
 	}
 
-	// The service number names an address in ntoskrnl or win32k, which is what
-	// the handler was bound to -- so a trap lands on the same function a driver
-	// calling that name would reach. Returns whether the handler moved the pc.
-	//
 	// Nothing changes mode: the handler is native, so the guest stays in ring 3.
 	bool dispatch_syscall(vcpu& cpu)
 	{
@@ -240,8 +206,7 @@ struct win_kernel_state : kernel_state
 
 		if (!fn)
 		{
-			// Unlike an unimplemented export this does not end the thread: the
-			// guest asked and gets an answer it knows how to deal with.
+			// Unlike an unimplemented export this does not end the thread.
 			THREAD_LOG_WARN("unimplemented syscall 0x{:X}", id);
 			emu_->call_conv()->ret(cpu, static_cast<NTSTATUS>(STATUS_NOT_IMPLEMENTED));
 			return false;
@@ -256,13 +221,10 @@ struct win_kernel_state : kernel_state
 			THREAD_LOG_ERR("syscall 0x{:X} faulted: {}", id, e.what());
 		}
 
-		// A handler that moved the pc -- NtContinue, a thread ending -- has said
-		// where to go, and stepping past the instruction would undo it.
+		// A handler that moved the pc has said where to go, and stepping past would undo it.
 		return cpu.pc() != saved_pc;
 	}
 
-	// A thread handle names the ETHREAD rather than the thread, so this is how
-	// a handle gets back to the thread it belongs to.
 	[[nodiscard]] std::shared_ptr<win_thread> find_ethread(const emu_object<_ETHREAD>& ethread)
 	{
 		if (!ethread)
@@ -284,9 +246,6 @@ struct win_kernel_state : kernel_state
 		return {};
 	}
 
-	// A module's entry in PsLoadedModuleList, by the address it was mapped at.
-	// Only the driver object needs one, and only to point DriverSection at it,
-	// but the entry is built as the module is added and nothing else keeps it.
 	void set_ldr_entry(const addr_t base, const addr_t entry) { ldr_entries_[base] = entry; }
 
 	[[nodiscard]] addr_t ldr_entry(const addr_t base) const
@@ -295,9 +254,6 @@ struct win_kernel_state : kernel_state
 		return it != ldr_entries_.end() ? it->second : 0;
 	}
 
-	// The DRIVER_OBJECT and registry path DriverEntry is called with. Windows
-	// builds both before it calls a driver, and a driver that is handed neither
-	// has nowhere to put its unload routine or its dispatch table.
 	struct driver_entry_args
 	{
 		emu_object<_DRIVER_OBJECT> driver_object;
@@ -317,8 +273,6 @@ struct win_kernel_state : kernel_state
 			.driver_init = mod.entry_point,
 		});
 
-		// A driver object is an object manager object, so it goes through the
-		// manager and gets a header the guest can dereference like any other.
 		const auto body = objs.create_object(0, &drv, sizeof(drv),
 			{}, prot_rw | prot_supervisor);
 
@@ -333,14 +287,12 @@ struct win_kernel_state : kernel_state
 		return { std::move(obj), std::move(reg_path) };
 	}
 
-	// Called once as each cpu is added, in the order they are added: that order
-	// is what makes a block's index the cpu's own id.
+	// Called in the order cpus are added: that order makes a block's index the cpu's own id.
 	win_per_cpu& init_per_cpu(vcpu& cpu)
 	{
 		auto& pcpu = per_cpu_.emplace_back(*emu_->default_addr_space(),
 			static_cast<std::uint32_t>(cpu.id()));
 
-		// Where the guest looks to find out how many cpus the machine has.
 		kuser_shared_data.field(&_KUSER_SHARED_DATA::ActiveProcessorCount)
 			.write(static_cast<std::uint32_t>(per_cpu_.size()));
 
@@ -379,9 +331,6 @@ struct win_kernel_state : kernel_state
 private:
 	windows_emulator* emulator_ = nullptr;
 
-	// The one handle a process's standard input, output and error all name.
-	// Nothing reads from it, and everything written to it lands on the
-	// emulator's own stdout.
 	[[nodiscard]] win_handle_table::handle_t open_console()
 	{
 		auto host = std::make_shared<file_host>();
@@ -398,8 +347,7 @@ private:
 		return sys_proc->handle_table().create_handle(addr, 0);
 	}
 
-	// One KPCR per cpu, indexed by a cpu's id. A deque rather than a vector
-	// because each block is handed out by pointer as its cpu is added.
+	// A deque rather than a vector because each block is handed out by pointer as its cpu is added.
 	std::deque<win_per_cpu> per_cpu_;
 
 	std::unordered_map<addr_t, addr_t> ldr_entries_;
@@ -415,8 +363,6 @@ private:
 		std::scoped_lock lock(list_mtx_);
 		auto obj = active_process_list.push_back(ep);
 
-		// Empty circular lists, so the process's first thread has something to
-		// link itself into.
 		kprocess_thread_list(space, obj.address()).init();
 		eprocess_thread_list(space, obj.address()).init();
 
@@ -440,7 +386,6 @@ public:
 			[this](vcpu& cpu) { return kernel_.dispatch_syscall(cpu); });
 	}
 
-	// The first moment the guest can be told how many cpus there are.
 	void create_vcpus(const std::size_t count) override
 	{
 		os_emulator::create_vcpus(count);
@@ -451,28 +396,21 @@ public:
 
 	[[nodiscard]] win_per_cpu* per_cpu(const vcpu& cpu) { return kernel_.per_cpu(cpu.id()); }
 
-	// Point the cpu's per-processor register at its own KPCR. Which register
-	// that is belongs to the arch: the GS base on x86-64, TPIDR_EL1 on ARM64.
+	// Which register that is belongs to the arch: the GS base on x86-64, TPIDR_EL1 on ARM64.
 	virtual void set_pcr(vcpu&, addr_t) {}
 
-	// Mirror the IRQL into whatever the architecture lets the guest read it
-	// from without asking. x86-64 has cr8; ARM64 has nothing of the sort, so
-	// there the KPCR is the only copy and this does nothing.
+	// ARM64 has nothing of the sort, so there the KPCR is the only copy and this does nothing.
 	virtual void set_hw_irql(vcpu&, irql_t) {}
 
-	// A thread's registers as the guest's own CONTEXT, and the way back. Its
-	// shape belongs to the architecture, so both halves live there. `flags` is
-	// what was asked for; ContextFlags comes back saying what was filled in.
+	// `flags` is what was asked for; ContextFlags comes back saying what was filled in.
 	virtual void capture_context(const reg_view& regs, emu_object<_CONTEXT> out,
 		context_flags flags) = 0;
 
-	// Everything the architecture can fill in, for a caller with no request.
 	static constexpr context_flags context_all{ ~0u };
 
 	virtual void apply_context(const reg_view& regs, emu_object<_CONTEXT> in) = 0;
 
-	// Raise or lower this cpu's IRQL, and say what it was. Every handler that
-	// moves the IRQL goes through here, so the two copies cannot drift.
+	// Every handler that moves the IRQL goes through here, so the two copies cannot drift.
 	irql_t set_irql(vcpu& cpu, const irql_t irql)
 	{
 		const auto* pcpu = per_cpu(cpu);
@@ -498,21 +436,14 @@ public:
 		return kernel_.sys_proc->create_thread(cpu, start_addr);
 	}
 
-	// An instruction usermode may not execute that the kernel services rather
-	// than reporting. Windows on ARM64 does this for the system registers that
-	// report cpu features; x86-64 needs none of it, cpuid being unprivileged.
-	// True if it was served and the pc has moved past it.
+	// ARM64 services the system registers that report cpu features; x86-64 needs none of it.
 	virtual bool emulate_privileged_insn(vcpu&) { return false; }
 
 	virtual void init_thread_teb(thread&, vcpu&, addr_t) {}
 
-	// The CONTEXT and frame ntdll's LdrInitializeThunk starts on.
 	virtual void setup_loader_frame(thread&, vcpu&, addr_t, addr_t) {}
 
-	// Puts a faulted user thread on ntdll's exception dispatcher, with the
-	// record and the context where that dispatcher looks for them -- which is
-	// architecture's own business. False if this one cannot yet, and the fault
-	// is then dispatched here instead.
+	// False if this one cannot yet, and the fault is then dispatched here instead.
 	virtual bool setup_exception_frame(vcpu&, addr_t, const win::exception_info&) { return false; }
 
 	struct user_process_args
@@ -522,12 +453,7 @@ public:
 		std::shared_ptr<thread> thread;
 	};
 
-	// Brings up a process around `exe_name` and leaves its first thread queued.
-	//
-	// The thread starts at ntdll's LdrInitializeThunk, not at the image's entry
-	// point: the loader creates the process heap, the TLS slots and the loader
-	// locks that the image's startup code assumes exist, then reaches the entry
-	// point by continuing through the context set up here.
+	// The thread starts at ntdll's LdrInitializeThunk, not at the image's entry point.
 	user_process_args create_user_process(vcpu& cpu, const std::string_view exe_name)
 	{
 		auto proc = std::dynamic_pointer_cast<win_user_proc>(
@@ -568,8 +494,7 @@ public:
 			return {};
 		}
 
-		// Writing the frame after create_thread is safe only because no cpu is
-		// running yet.
+		// Writing the frame after create_thread is safe only because no cpu is running yet.
 		auto t = proc->create_thread(cpu, *ldr_init);
 
 		if (!t)

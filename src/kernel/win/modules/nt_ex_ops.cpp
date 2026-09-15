@@ -6,15 +6,11 @@
 #include "../../../util/log.hpp"
 #include "../../../util/string.hpp"
 
-// The executive odds and ends: the local clock, a work item, an access
-// violation a driver raises on itself, and the firmware variables.
 void modules::register_ntoskrnl_ex_ops(win_kernel_state& state, proc_module& mod)
 {
 	auto* st = &state;
 
-	// Local time is system time less the timezone bias, which the guest also
-	// reads out of shared data for itself -- so it comes from there rather than
-	// from the host's own idea of a timezone, and the two cannot disagree.
+	// The timezone bias comes from shared data, which the guest reads for itself.
 	state.redirect(mod, "ExSystemTimeToLocalTime",
 		[st](vcpu&, emu_object<std::int64_t> system_time, emu_object<std::int64_t> local_time)
 		{
@@ -35,10 +31,7 @@ void modules::register_ntoskrnl_ex_ops(win_kernel_state& state, proc_module& mod
 				system_time.read(), local, bias);
 		});
 
-	// A work item runs on a pooled worker thread in real Windows. There is no
-	// pool here, so it gets a system thread of its own -- which is the same
-	// thing from the routine's side: it runs at passive level, in the system
-	// process, after the caller has moved on.
+	// There is no worker pool here, so a work item gets a system thread of its own.
 	state.redirect(mod, "ExQueueWorkItem",
 		[st](vcpu& cpu, emu_object<_WORK_QUEUE_ITEM> work_item, const std::uint32_t queue_type)
 		{
@@ -64,11 +57,7 @@ void modules::register_ntoskrnl_ex_ops(win_kernel_state& state, proc_module& mod
 				"runs as tid={}", work_item.address(), queue_type, routine, parameter, t->id());
 		});
 
-	// Raises STATUS_ACCESS_VIOLATION at the caller and never returns. Nothing
-	// here delivers a software exception into the guest, and a driver calling
-	// this has already decided it cannot go on -- so the thread ends where the
-	// unwind would have taken it, rather than returning from a routine that
-	// cannot return.
+	// Nothing delivers a software exception, so the thread ends where the unwind would have.
 	state.redirect(mod, "ExRaiseAccessViolation", [](vcpu& cpu)
 	{
 		THREAD_LOG_ERR("ExRaiseAccessViolation: nothing delivers the exception, so the thread "
@@ -80,11 +69,7 @@ void modules::register_ntoskrnl_ex_ops(win_kernel_state& state, proc_module& mod
 		cpu.stop();
 	});
 
-	// The real one refuses outright on a machine whose firmware is not UEFI,
-	// and nothing here is: no variable store exists to read from. So this is
-	// the status the guest would get on such a machine rather than an invented
-	// failure, and a driver probing for firmware support takes the same path it
-	// would take on real hardware without it.
+	// Nothing here is UEFI and no variable store exists, so this is what such a machine gives.
 	state.redirect(mod, "ExGetFirmwareEnvironmentVariable",
 		[](vcpu&, emu_object<_UNICODE_STRING> variable_name, emu_object<void> vendor_guid,
 			[[maybe_unused]] const addr_t value, emu_object<std::uint32_t> value_length,

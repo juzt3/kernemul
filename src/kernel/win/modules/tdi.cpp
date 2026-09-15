@@ -8,21 +8,15 @@
 namespace
 {
 
-// What the real TdiRegisterPnPHandlers answers a client it will not register,
-// recovered from tdi.sys: neither code is in any public header.
+// What the real TdiRegisterPnPHandlers answers, out of tdi.sys: neither code is in a header.
 constexpr NTSTATUS tdi_bad_version = 0xC0010004;
 constexpr NTSTATUS tdi_bad_size = 0xC0010005;
 
-// TDI_CLIENT_INTERFACE_INFO opens with MajorTdiVersion, and the real one
-// refuses anything it does not know along with an info block too short to hold
-// the handlers it would read out of it.
 constexpr std::uint8_t maximum_tdi_version = 2;
 constexpr std::uint32_t minimum_interface_info_size = 0x38;
 
 }
 
-// There is no transport here, so the handlers a client registers are never
-// called and the binding handle names nothing.
 void modules::register_tdi(win_kernel_state& state, proc_module& mod)
 {
 	auto* st = &state;

@@ -15,13 +15,10 @@
 namespace
 {
 
-// MmCopyMemory's flags. Exactly one says where the source address lives, and
-// that is the whole of what they decide.
 constexpr std::uint32_t mm_copy_memory_physical = 0x1;
 constexpr std::uint32_t mm_copy_memory_virtual = 0x2;
 
-// MEMORY_CACHING_TYPE. There is one kind of memory behind every mapping here,
-// so the type only reaches the log.
+// There is one kind of memory behind every mapping here, so the type only reaches the log.
 std::string_view caching_type_name(const std::uint32_t type)
 {
 	switch (type)
@@ -39,10 +36,7 @@ std::string_view caching_type_name(const std::uint32_t type)
 
 }
 
-// What a driver asks the memory manager about an address it is holding. The
-// page tables the emulator's mmu walks are the guest's own, so these answer
-// from the same tables the guest faults against rather than from a shadow of
-// them.
+// The page tables the mmu walks are the guest's own, not a shadow of the guest's.
 void modules::register_ntoskrnl_mem_ops(win_kernel_state& state, proc_module& mod)
 {
 	auto* st = &state;
@@ -58,8 +52,6 @@ void modules::register_ntoskrnl_mem_ops(win_kernel_state& state, proc_module& mo
 			return valid;
 		});
 
-	// Zero for an address that is not mapped, which is what the real one
-	// returns and what a caller checks for -- there is no error path.
 	state.redirect(mod, "MmGetPhysicalAddress",
 		[](vcpu& cpu, const addr_t base_address) -> std::uint64_t
 		{
@@ -74,10 +66,7 @@ void modules::register_ntoskrnl_mem_ops(win_kernel_state& state, proc_module& mo
 			return pa;
 		});
 
-	// The reverse walk. Real NT reads it straight out of the PFN database, so
-	// a page mapped twice has one answer there and this has whichever the
-	// search reaches first -- which is the same answer whenever there is only
-	// one mapping, and there is only ever one here.
+	// Real NT reads it out of the PFN database; here the search reaches whichever mapping is first.
 	state.redirect(mod, "MmGetVirtualForPhysical",
 		[](vcpu& cpu, const std::uint64_t physical_address) -> addr_t
 		{
@@ -93,8 +82,6 @@ void modules::register_ntoskrnl_mem_ops(win_kernel_state& state, proc_module& mo
 			return va;
 		});
 
-	// MM_COPY_ADDRESS is a union of a virtual and a physical address, so the
-	// source arrives as one eight-byte value and the flags say which it is.
 	state.redirect(mod, "MmCopyMemory",
 		[](vcpu& cpu, const addr_t target_address, const std::uint64_t source_address,
 			const std::uint64_t number_of_bytes, const std::uint32_t flags,
@@ -112,9 +99,6 @@ void modules::register_ntoskrnl_mem_ops(win_kernel_state& state, proc_module& mo
 			auto& space = *cpu.curr_addr_space();
 			std::vector<std::uint8_t> buffer(number_of_bytes);
 
-			// The point of MmCopyMemory is that a source it cannot reach is an
-			// error rather than a bugcheck, so the fault the read throws is the
-			// one thing here that is caught.
 			try
 			{
 				if (kind == mm_copy_memory_physical)
@@ -145,17 +129,12 @@ void modules::register_ntoskrnl_mem_ops(win_kernel_state& state, proc_module& mo
 			return STATUS_SUCCESS;
 		});
 
-	// MmMapIoSpace exists to reach memory that is already there, so this points
-	// a fresh kernel window at the physical pages the caller named rather than
-	// allocating anything. Physical memory nothing backs has no window, and null
-	// is what the real one returns then.
+	// A fresh kernel window is pointed at the physical pages named; unbacked memory has none.
 	auto map_io_space = [](vcpu& cpu, const std::uint64_t physical_address,
 		const std::uint64_t number_of_bytes, const std::string_view who) -> addr_t
 	{
 		auto& space = *cpu.curr_addr_space();
 
-		// A mapping is whole pages, and the caller gets back an address carrying
-		// the same offset into the first of them that it asked with.
 		const auto base = mdl_page_base(physical_address);
 		const auto offset = mdl_page_offset(physical_address);
 
@@ -186,8 +165,7 @@ void modules::register_ntoskrnl_mem_ops(win_kernel_state& state, proc_module& mo
 			return map_io_space(cpu, physical_address, number_of_bytes, "MmMapIoSpace");
 		});
 
-	// The Ex form takes page protection instead of a cache type. Everything the
-	// kernel maps here is readable and writable, so it only reaches the log.
+	// Everything mapped here is readable and writable, so the protection only reaches the log.
 	state.redirect(mod, "MmMapIoSpaceEx",
 		[map_io_space](vcpu& cpu, const std::uint64_t physical_address,
 			const std::uint64_t number_of_bytes, const std::uint32_t protect) -> addr_t
@@ -207,12 +185,7 @@ void modules::register_ntoskrnl_mem_ops(win_kernel_state& state, proc_module& mo
 				number_of_bytes + mdl_page_offset(base_address));
 		});
 
-	// Contiguous in physical memory is what the caller wants, and the pool hands
-	// out one run per allocation, so a pool block already is one. The address
-	// bounds say which physical addresses a device can reach; an allocation that
-	// lands outside them is given back rather than handed over, because a driver
-	// programming a device with an address it cannot reach is worse than one
-	// told there was no memory.
+	// The pool hands out one run per allocation, so a pool block already is contiguous.
 	auto allocate_contiguous = [st](vcpu& cpu, const std::uint64_t number_of_bytes,
 		const std::uint64_t highest_acceptable_address, const std::string_view who) -> addr_t
 	{
@@ -257,7 +230,6 @@ void modules::register_ntoskrnl_mem_ops(win_kernel_state& state, proc_module& mo
 				"MmAllocateContiguousMemorySpecifyCache");
 		});
 
-	// There is one node, so the preferred one only reaches the log.
 	state.redirect(mod, "MmAllocateContiguousNodeMemory",
 		[allocate_contiguous](vcpu& cpu, const std::uint64_t number_of_bytes,
 			const std::uint64_t lowest_acceptable_address,
@@ -286,9 +258,6 @@ void modules::register_ntoskrnl_mem_ops(win_kernel_state& state, proc_module& mo
 		THREAD_LOG_INFO("MmFreeContiguousMemory(0x{:X}): {} bytes", base_address, freed->size);
 	});
 
-	// An MDL over memory that is resident and already mapped: the system address
-	// is the virtual address the MDL was built over, and the pages behind it
-	// never move.
 	state.redirect(mod, "MmBuildMdlForNonPagedPool",
 		[](vcpu& cpu, emu_object<mdl_t> memory_descriptor_list)
 		{
@@ -303,9 +272,6 @@ void modules::register_ntoskrnl_mem_ops(win_kernel_state& state, proc_module& mo
 
 			memory_descriptor_list.write(mdl);
 
-			// The page frame array behind the header is what a driver walking
-			// the MDL reads, so it is filled from the same page tables
-			// MmGetPhysicalAddress answers from.
 			auto& space = *cpu.curr_addr_space();
 			const auto first = mdl_page_base(mdl.start_va);
 			const auto pages = mdl_page_count(mdl.start_va, mdl.byte_count);
@@ -323,9 +289,7 @@ void modules::register_ntoskrnl_mem_ops(win_kernel_state& state, proc_module& mo
 				memory_descriptor_list.address(), mdl.byte_count, pages, mdl.mapped_system_va);
 		});
 
-	// The physical memory the emulator actually handed out, which is one run:
-	// the mmu allocates it by bumping a cursor. The caller walks the array until
-	// a zeroed entry, so the terminator is what ends it.
+	// The physical memory handed out is one run: the mmu allocates by bumping a cursor.
 	state.redirect(mod, "MmGetPhysicalMemoryRanges", [st](vcpu& cpu) -> addr_t
 	{
 		const auto range = cpu.curr_addr_space()->mmu_->phys_range();
@@ -352,9 +316,7 @@ void modules::register_ntoskrnl_mem_ops(win_kernel_state& state, proc_module& mo
 		return addr;
 	});
 
-	// A section is a file made mappable. The file behind it is the one the
-	// handle names, and a section with no file is one backed by the pagefile --
-	// which is nothing here, so it is sized by MaximumSize and starts zeroed.
+	// A section with no file would be pagefile backed, so it is sized by MaximumSize and zeroed.
 	state.redirect(mod, "MmCreateSection",
 		[st](vcpu& cpu, emu_object<addr_t> section_object, const std::uint32_t desired_access,
 			[[maybe_unused]] const addr_t object_attributes,
@@ -385,8 +347,6 @@ void modules::register_ntoskrnl_mem_ops(win_kernel_state& state, proc_module& mo
 				host->path = file->path;
 			}
 
-			// An empty file has no pages to map, and a section with neither a
-			// file nor a size has nothing to make them out of.
 			if (host->file && host->file->size() == 0)
 			{
 				THREAD_LOG_WARN("MmCreateSection: '{}' is empty", host->path);
@@ -429,10 +389,7 @@ void modules::register_ntoskrnl_mem_ops(win_kernel_state& state, proc_module& mo
 			return STATUS_SUCCESS;
 		});
 
-	// The view is a copy of the file rather than a mapping of it: nothing here
-	// shares pages between a section and the file it came from, so a write
-	// through the view does not reach the file. A driver reading a section it
-	// mapped sees the right bytes, which is what they are mapped for.
+	// The view is a copy of the file rather than a mapping, so a write does not reach the file.
 	state.redirect(mod, "MmMapViewInSystemSpace",
 		[st](vcpu& cpu, const addr_t section, emu_object<addr_t> mapped_base,
 			emu_object<std::uint64_t> view_size) -> NTSTATUS
@@ -445,8 +402,6 @@ void modules::register_ntoskrnl_mem_ops(win_kernel_state& state, proc_module& mo
 				return STATUS_INVALID_PARAMETER;
 			}
 
-			// Zero means the whole section, which is what a caller that does not
-			// care how big it is passes.
 			auto size = view_size ? view_size.read() : 0;
 
 			if (!size)

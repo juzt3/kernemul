@@ -12,14 +12,10 @@
 namespace
 {
 
-// Ten million ticks a second is what win_ticks counts in, so a performance
-// counter delta and a system time delta describe the same interval without
-// either needing to be scaled.
+// win_ticks counts in ten million a second, so a counter delta and a time delta need no scaling.
 constexpr std::int64_t perf_frequency = 10'000'000;
 
-// NT's default on a machine whose timer it has not been asked to speed up. A
-// driver divides by it to turn an interval into a count of clock ticks, so it
-// has to be non-zero and plausible.
+// NT's default; a driver divides by it, so it has to be non-zero and plausible.
 constexpr std::uint32_t clock_increment_100ns = 156250;
 
 // A KAFFINITY names one group's worth of processors, and a group holds 64.
@@ -32,16 +28,11 @@ std::uint64_t affinity_mask(const std::size_t count)
 
 }
 
-// What a driver asks the kernel about itself: the clock, how many processors
-// there are, which process is running, what Windows this is, and where a
-// routine it wants to call by name lives.
 void modules::register_ntoskrnl_info_ops(win_kernel_state& state, proc_module& mod)
 {
 	auto* st = &state;
 	auto* m = &mod;
 
-	// A steady clock, because the guest times intervals with it and a wall
-	// clock can step backwards under it.
 	state.redirect(mod, "KeQueryPerformanceCounter",
 		[](vcpu&, emu_object<std::int64_t> frequency) -> std::int64_t
 		{
@@ -63,9 +54,7 @@ void modules::register_ntoskrnl_info_ops(win_kernel_state& state, proc_module& m
 		return clock_increment_100ns;
 	});
 
-	// The wall clock, which is what a driver stamps its own records with. The
-	// precise form reads the same clock as KUSER_SHARED_DATA rather than the
-	// value cached there, so the two never disagree by more than a tick.
+	// The precise form reads the same clock as KUSER_SHARED_DATA, not the value cached there.
 	auto system_time = [](vcpu&, emu_object<std::int64_t> current_time)
 	{
 		if (!current_time)
@@ -79,8 +68,7 @@ void modules::register_ntoskrnl_info_ops(win_kernel_state& state, proc_module& m
 
 	state.redirect(mod, "KeQuerySystemTimePrecise", system_time);
 
-	// Every cpu the emulator made is active -- none of them can be taken
-	// offline -- so the active count is just how many there are.
+	// Every cpu the emulator made is active and none can be taken offline.
 	state.redirect(mod, "KeQueryActiveProcessorCount",
 		[st](vcpu& cpu, emu_object<std::uint64_t> active_processors) -> std::uint32_t
 		{
@@ -89,8 +77,6 @@ void modules::register_ntoskrnl_info_ops(win_kernel_state& state, proc_module& m
 			if (active_processors)
 				active_processors.write(affinity_mask(count));
 
-			// The guest reads the count out of shared data as well, and the two
-			// disagreeing is worse than either being wrong.
 			st->kuser_shared_data.field(&_KUSER_SHARED_DATA::ActiveProcessorCount)
 				.write(static_cast<std::uint32_t>(count));
 
@@ -100,9 +86,7 @@ void modules::register_ntoskrnl_info_ops(win_kernel_state& state, proc_module& m
 			return static_cast<std::uint32_t>(count);
 		});
 
-	// ALL_PROCESSOR_GROUPS asks for the machine-wide total. There is only ever
-	// one group here, so every other group number is empty rather than an
-	// error -- which is what a caller enumerating groups expects to find.
+	// There is only ever one group here, so every other group number is empty rather than an error.
 	state.redirect(mod, "KeQueryActiveProcessorCountEx",
 		[](vcpu& cpu, const std::uint16_t group_number) -> std::uint32_t
 		{
@@ -118,9 +102,7 @@ void modules::register_ntoskrnl_info_ops(win_kernel_state& state, proc_module& m
 			return count;
 		});
 
-	// SpecialApcDisable covers the guarded regions, and the IRQL covers being
-	// above passive. Interrupts are the third term on real Windows, and they
-	// are never masked here -- nothing raises one -- so that term is dropped.
+	// Interrupts are the third term on real Windows, never masked here, so that term is dropped.
 	state.redirect(mod, "KeAreAllApcsDisabled", [st](vcpu& cpu) -> bool
 	{
 		const auto t = std::dynamic_pointer_cast<win_thread>(cpu.thread());
@@ -143,8 +125,6 @@ void modules::register_ntoskrnl_info_ops(win_kernel_state& state, proc_module& m
 		const auto t = cpu.thread();
 		auto proc = t ? std::dynamic_pointer_cast<windows_process>(t->proc()) : nullptr;
 
-		// Before the scheduler owns a cpu there is no current thread, and the
-		// only process there could be is the one the kernel started in.
 		if (!proc)
 			proc = st->sys_proc;
 
@@ -158,8 +138,6 @@ void modules::register_ntoskrnl_info_ops(win_kernel_state& state, proc_module& m
 		return eprocess;
 	});
 
-	// Read back out of the EPROCESS the caller already holds rather than
-	// searched for: a driver can pass one it got from anywhere.
 	state.redirect(mod, "PsGetProcessId",
 		[](vcpu&, emu_object<_EPROCESS> process) -> addr_t
 		{
@@ -176,10 +154,7 @@ void modules::register_ntoskrnl_info_ops(win_kernel_state& state, proc_module& m
 			return id;
 		});
 
-	// PsGetCurrentProcessId is the same export under a second name, folded to
-	// one address on both architectures, so one handler serves both. It comes
-	// from the thread's own ETHREAD rather than from its process, which is what
-	// makes it answerable even when the process object is not set up.
+	// PsGetCurrentProcessId is the same export folded to one address on both architectures.
 	auto current_process_id = [st](vcpu& cpu) -> addr_t
 	{
 		const auto t = std::dynamic_pointer_cast<win_thread>(cpu.thread());
@@ -196,8 +171,6 @@ void modules::register_ntoskrnl_info_ops(win_kernel_state& state, proc_module& m
 	state.redirect(mod, "PsGetCurrentThreadProcessId", current_process_id);
 	state.redirect(mod, "PsGetCurrentProcessId", current_process_id);
 
-	// The numbers come from KUSER_SHARED_DATA rather than from constants here,
-	// so what a driver is told matches what it reads out of shared data itself.
 	state.redirect(mod, "RtlGetVersion",
 		[st](vcpu& cpu, emu_object<_RTL_OSVERSIONINFOEXW> version_information) -> NTSTATUS
 		{
@@ -224,8 +197,7 @@ void modules::register_ntoskrnl_info_ops(win_kernel_state& state, proc_module& m
 			out.dwPlatformId = ver_platform_win32_nt;
 			out.wProductType = ver_nt_workstation;
 
-			// Only what the caller said it had room for: the EX fields sit past
-			// the end of a plain RTL_OSVERSIONINFOW.
+			// Only what the caller had room for: the EX fields sit past a plain RTL_OSVERSIONINFOW.
 			cpu.curr_addr_space()->write_mem(version_information.address(), &out, size);
 
 			THREAD_LOG_INFO("RtlGetVersion(0x{:X}) -> {}.{}.{}",
@@ -235,14 +207,7 @@ void modules::register_ntoskrnl_info_ops(win_kernel_state& state, proc_module& m
 			return STATUS_SUCCESS;
 		});
 
-	// The real one searches ntoskrnl's exports and then hal's. Only ntoskrnl is
-	// mapped here, so a hal routine comes back null -- which the caller has to
-	// handle anyway, since not finding the routine is why it asked.
-	//
-	// An address handed back is one the guest intends to call, and calling an
-	// ntoskrnl address only works if something stands in for it. Saying which
-	// ones do would mean listing every redirect; the unimplemented-function log
-	// says it instead, at the point the guest actually jumps.
+	// Only ntoskrnl is mapped here, so a hal routine comes back null.
 	state.redirect(mod, "MmGetSystemRoutineAddress",
 		[m](vcpu& cpu, emu_object<_UNICODE_STRING> system_routine_name) -> addr_t
 		{
@@ -262,11 +227,7 @@ void modules::register_ntoskrnl_info_ops(win_kernel_state& state, proc_module& m
 			return addr.value_or(0);
 		});
 
-	// The documented seeded generator is gone from this build: it draws from
-	// ExGenRandom and writes the result back over the caller's seed, so the
-	// sequence is not reproducible from the seed the caller chose. Matching
-	// that rather than the documentation, because a driver checking its own
-	// seed afterwards sees what the real one left.
+	// The documented seeded generator is gone from this build: it draws from ExGenRandom instead.
 	state.redirect(mod, "RtlRandomEx",
 		[](vcpu&, emu_object<std::uint32_t> seed) -> std::uint32_t
 		{
@@ -282,9 +243,6 @@ void modules::register_ntoskrnl_info_ops(win_kernel_state& state, proc_module& m
 			return value;
 		});
 
-	// A guest timestamp is 100ns ticks from 1601; std::chrono counts days from
-	// 1970 and already knows how to break one into a calendar date, so the leap
-	// year rules are its problem rather than this one's.
 	state.redirect(mod, "RtlTimeToTimeFields",
 		[](vcpu&, emu_object<std::int64_t> time, emu_object<_TIME_FIELDS> time_fields)
 		{

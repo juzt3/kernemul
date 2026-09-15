@@ -65,8 +65,7 @@ std::basic_string<CharT> vformat(addr_space& space, std::basic_string_view<CharT
 		else result += u"(null)";
 	};
 
-	// Every conversion routed here prints ascii, so one narrow snprintf serves
-	// both widths -- and swprintf, which has no char16_t form, is not needed.
+	// Every conversion routed here prints ascii, so one narrow snprintf serves both widths.
 	auto format_spec = [&](const std::string& host_spec, auto val) {
 		char buf[256]{};
 		std::snprintf(buf, std::size(buf), host_spec.c_str(), val);
@@ -101,10 +100,6 @@ std::basic_string<CharT> vformat(addr_space& space, std::basic_string_view<CharT
 		if (++i >= fmt.size()) break;
 		if (fmt[i] == pct) { result += pct; continue; }
 
-		// Flags, width and precision mean the same to every host printf, so they
-		// carry over as written -- except a '*', whose value came off the guest's
-		// argument list and is spelled out here rather than left for the host to
-		// go looking for.
 		std::string mods;
 
 		while (i < fmt.size() && (fmt[i] == CharT('-') || fmt[i] == CharT('+') ||
@@ -153,11 +148,7 @@ std::basic_string<CharT> vformat(addr_space& space, std::basic_string_view<CharT
 		const CharT spec = fmt[i];
 		const std::basic_string<CharT> spec_str(fmt.substr(spec_start, i - spec_start + 1));
 
-		// The length modifier is re-emitted to match the width cast below rather
-		// than carried over: the guest writes MSVC's spelling, where %l is four
-		// bytes and %I64 is how it says eight. A host that is not MSVC reads %l as
-		// eight and %I as a flag of its own, so passing the guest's text through
-		// would have it read the wrong number of bytes off the argument list.
+		// The guest writes MSVC's spelling, where %l is four bytes and %I64 is how it says eight.
 		auto host_spec = [&mods](const bool as_64bit, const CharT conv) {
 			return "%" + mods + (as_64bit ? "ll" : "") + static_cast<char>(conv);
 		};
@@ -222,11 +213,7 @@ std::u16string vswprintf(addr_space& space, std::u16string_view fmt, NextArg nex
 	return vformat<char16_t>(space, fmt, std::move(next_arg));
 }
 
-// The arguments behind a va_list the guest passed in, for the routines that
-// take one rather than `...`. A va_list is a pointer to consecutive 8-byte
-// slots on both architectures -- ARM64's variadic convention puts every
-// argument on the stack, and x64's spills the register ones into the same
-// area -- so walking it is the same either way.
+// A va_list is a pointer to consecutive 8-byte slots on both architectures.
 inline auto va_list_args(addr_space& space, const addr_t va_list)
 {
 	return [&space, addr = va_list]() mutable -> std::uint64_t

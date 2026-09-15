@@ -4,9 +4,6 @@
 
 namespace arm64
 {
-	// Stage 1 VA breakdown for a 4KB granule with T0SZ = T1SZ = 16, i.e. 48-bit
-	// virtual addresses and a four level walk. Structurally the same split x86
-	// uses, only the descriptor format below differs.
 	union virt_addr
 	{
 		std::uint64_t val;
@@ -21,9 +18,6 @@ namespace arm64
 		};
 	};
 
-	// Table descriptor (levels 0-2) and page descriptor (level 3). Both are
-	// 64-bit and both have 0b11 in the low two bits; a level 3 entry with 0b01
-	// would be a block, which we never emit.
 	constexpr std::uint64_t desc_valid  = 1ull << 0;
 	constexpr std::uint64_t desc_table  = 1ull << 1;  // table at L0-2, page at L3
 	constexpr std::uint64_t desc_af     = 1ull << 10; // access flag
@@ -35,7 +29,6 @@ namespace arm64
 	constexpr std::uint64_t desc_ap_el0 = 1ull << 6;
 	constexpr std::uint64_t desc_ap_ro  = 1ull << 7;
 
-	// Output address occupies bits 47:12 in both descriptor kinds.
 	constexpr std::uint64_t desc_addr_mask = 0x0000'FFFF'FFFF'F000ull;
 
 	struct addr_space : ::addr_space
@@ -43,10 +36,7 @@ namespace arm64
 		addr_t alloc(std::size_t size, mem_prot prot) override;
 		addr_t map_phys(addr_t pa, std::size_t size, mem_prot prot) override;
 
-		// One level 0 table serves both halves. With a 48-bit VA the level 0
-		// index is VA[47:39], so user addresses land in entries 0-255 and
-		// kernel addresses in 256-511 -- disjoint, which lets TTBR0_EL1 and
-		// TTBR1_EL1 point at the same table the way x86 uses a single CR3.
+		// User and kernel level 0 indices are disjoint, so TTBR0_EL1 and TTBR1_EL1 share one table.
 		addr_t ttbr_pa = 0;
 		std::unordered_map<addr_t, addr_t> shadow;
 		addr_t user_next_ = 0x10000;

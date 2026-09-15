@@ -28,10 +28,7 @@ void win_syscall::add(const std::string_view name, const std::span<const std::ui
 
 	for (const auto exp : img->exports())
 	{
-		// Nt and Zw are the same stub at the same number, and Nt is the spelling
-		// the implementation is named by. A forwarded export has the name of
-		// another one where its code would be, and that text decodes as
-		// instructions like anything else does.
+		// Nt and Zw are the same stub; a forwarded export has a name where its code would be.
 		if (exp.forwarded || !exp.name.starts_with("Nt"))
 			continue;
 

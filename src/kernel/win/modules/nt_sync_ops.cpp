@@ -9,8 +9,7 @@
 namespace
 {
 
-// FM_LOCK_BIT. A fast mutex is free while bit 0 of Count is set; acquiring
-// clears it, and the bits above it count the waiters that queue on the event.
+// A fast mutex is free while bit 0 of Count is set, and the bits above it count the waiters.
 constexpr std::int32_t fm_lock_bit = 1;
 
 std::int32_t mutex_count(const emu_object<_FAST_MUTEX>& mutex)
@@ -18,10 +17,6 @@ std::int32_t mutex_count(const emu_object<_FAST_MUTEX>& mutex)
 	return static_cast<std::int32_t>(mutex.field(&_FAST_MUTEX::Count).read());
 }
 
-// Take the lock bit if it is there. Nothing can contend a fast mutex here for
-// the same reason nothing contends a spin lock -- the acquiring cpu is stopped
-// inside the handler -- so a mutex found already held means the guest reached
-// it down a path the missing KeWaitForSingleObject would have blocked.
 void take_mutex(const emu_object<_FAST_MUTEX>& mutex, const std::string_view who)
 {
 	const auto count = mutex_count(mutex);
@@ -48,9 +43,6 @@ void own_mutex(const emu_object<_FAST_MUTEX>& mutex, vcpu& cpu)
 	mutex.field(&_FAST_MUTEX::Owner).write(guest_ptr<void>(owner));
 }
 
-// Put the lock bit back. Nothing ever queues behind the mutex, but the guest
-// owns Count and a release of one that was never taken is a driver bug worth
-// the same report the dispatcher objects give it.
 void give_mutex(const emu_object<_FAST_MUTEX>& mutex, const std::string_view who)
 {
 	const auto count = mutex_count(mutex);
@@ -66,12 +58,7 @@ void give_mutex(const emu_object<_FAST_MUTEX>& mutex, const std::string_view who
 	mutex.field(&_FAST_MUTEX::Count).write(count | fm_lock_bit);
 }
 
-// The fast mutex and the guarded mutex. They are one lock on this kernel: the
-// linker folds ExAcquireFastMutex onto KeAcquireGuardedMutex on both
-// architectures, and ExReleaseFastMutex onto KeReleaseGuardedMutex on x86-64,
-// so one handler serves both names whether or not it wants to. What is left of
-// the distinction is that a guarded mutex holds APCs off with a region counter
-// rather than by raising IRQL, and nothing here delivers an APC either way.
+// The linker folds ExAcquireFastMutex onto KeAcquireGuardedMutex on both, the release on x86-64.
 void register_fast_mutexes(win_kernel_state& state, proc_module& mod)
 {
 	auto* st = &state;
@@ -92,8 +79,7 @@ void register_fast_mutexes(win_kernel_state& state, proc_module& mod)
 			THREAD_LOG_INFO("KeInitializeGuardedMutex(mutex=0x{:X})", mutex.address());
 		});
 
-	// The IRQL the caller was at is kept in the mutex, because the release is
-	// what puts it back and the release is not handed it.
+	// The IRQL the caller was at is kept in the mutex, because the release is not handed it.
 	auto acquire = [st](vcpu& cpu, emu_object<_FAST_MUTEX> mutex)
 	{
 		if (!mutex)
@@ -163,8 +149,6 @@ void register_fast_mutexes(win_kernel_state& state, proc_module& mod)
 	state.redirect(mod, "ExTryToAcquireFastMutex", try_acquire);
 	state.redirect(mod, "KeTryToAcquireGuardedMutex", try_acquire);
 
-	// The unsafe pair leave the IRQL alone: the caller is already holding APCs
-	// off, by a critical region or by having raised the level itself.
 	state.redirect(mod, "ExAcquireFastMutexUnsafe",
 		[](vcpu& cpu, emu_object<_FAST_MUTEX> mutex)
 		{
@@ -191,14 +175,7 @@ void register_fast_mutexes(win_kernel_state& state, proc_module& mod)
 
 }
 
-// Signalling, and the locks that never contend. What the guest reads back is
-// the signal state in the object's own header, so that is what these keep
-// exactly right -- and anything a thread is parked on is handed over here, at
-// the moment it is signalled, because this is a thread on a cpu and so the one
-// place the objects can be read to decide who gets them.
-//
-// The fast mutexes and spin locks below still cannot contend: nothing yields
-// while one is held, so one is always free by the time it is asked for.
+// A fast mutex or spin lock below never contends: nothing yields while one is held.
 void modules::register_ntoskrnl_sync_ops(win_kernel_state& state, proc_module& mod)
 {
 	auto* st = &state;
@@ -231,22 +208,12 @@ void modules::register_ntoskrnl_sync_ops(win_kernel_state& state, proc_module& m
 			THREAD_LOG_INFO("KeSetEvent(event=0x{:X}, increment={}, wait={}) -> {}",
 				event.address(), increment, wait, previous);
 
-			// A synchronization event releases one waiter and goes back to
-			// unsignalled, which is the waiter taking it rather than anything
-			// done here -- so the state written above is what a wait sees, and
-			// what it leaves behind.
 			st->sys_proc->wake_waiters(*cpu.curr_addr_space(), event.address());
 
 			return previous;
 		});
 
-	// KeClearEvent is KeResetEvent without the return value, and the two are so
-	// nearly identical that the linker folds them: both exports name one
-	// address, on x64 and ARM64 alike. Registering a second handler would
-	// silently replace the first, and nothing at run time can tell which name
-	// the caller used, so one handler serves both. It returns the previous
-	// state; a caller that meant KeClearEvent ignores that, exactly as on real
-	// Windows and for the same reason.
+	// KeClearEvent and KeResetEvent fold onto one address on x64 and ARM64 alike.
 	auto reset_event = [](vcpu&, emu_object<_KEVENT> event) -> std::int32_t
 	{
 		if (!event)
@@ -280,9 +247,7 @@ void modules::register_ntoskrnl_sync_ops(win_kernel_state& state, proc_module& m
 				mutex.address(), level);
 		});
 
-	// A mutex is acquired by waiting on it, so a release of one that is already
-	// free is a release without a matching wait. Real Windows bugchecks on
-	// that, so it is reported rather than quietly counted.
+	// Real Windows bugchecks on a release without a matching wait, so it is reported.
 	state.redirect(mod, "KeReleaseMutex",
 		[st](vcpu& cpu, emu_object<_KMUTANT> mutex, const std::uint8_t wait) -> std::int32_t
 		{
@@ -320,10 +285,7 @@ void modules::register_ntoskrnl_sync_ops(win_kernel_state& state, proc_module& m
 				semaphore.address(), count, limit);
 		});
 
-	// Going past the limit raises STATUS_SEMAPHORE_LIMIT_EXCEEDED on real
-	// Windows and leaves the count alone. The count is left alone here too --
-	// what is missing is the raise, so this is reported as an error rather than
-	// pushed somewhere the guest can never bring it back from.
+	// What is missing is the raise, so going past the limit is reported and the count left alone.
 	state.redirect(mod, "KeReleaseSemaphore",
 		[st](vcpu& cpu, emu_object<_KSEMAPHORE> semaphore, const std::int32_t increment,
 			const std::int32_t adjustment, const std::uint8_t wait) -> std::int32_t
@@ -348,16 +310,12 @@ void modules::register_ntoskrnl_sync_ops(win_kernel_state& state, proc_module& m
 				"KeReleaseSemaphore(semaphore=0x{:X}, increment={}, adjustment={}, wait={}) -> {}",
 				semaphore.address(), increment, adjustment, wait, previous);
 
-			// The count says how many waits the release covers, and each waiter
-			// that takes the semaphore spends one of them.
 			st->sys_proc->wake_waiters(*cpu.curr_addr_space(), semaphore.address());
 
 			return previous;
 		});
 
-	// Nothing here delivers an APC, so the count is only ever read back -- but
-	// the guest does read it, and a driver that leaves without entering has
-	// corrupted a count Windows checks on the way out of a system call.
+	// Nothing here delivers an APC, so the count is only ever read back.
 	auto apc_disable = [](vcpu& cpu, const std::int32_t delta) -> std::int32_t
 	{
 		const auto t = std::dynamic_pointer_cast<win_thread>(cpu.thread());
@@ -373,10 +331,7 @@ void modules::register_ntoskrnl_sync_ops(win_kernel_state& state, proc_module& m
 		return updated;
 	};
 
-	// An interlocked singly-linked list head. Nothing pushes or pops one yet --
-	// those are the Ex*SList routines -- but a driver initialises it up front
-	// and the guest reads the head back, so an uninitialised one is a list that
-	// looks like it already has entries.
+	// Nothing pushes or pops one yet -- the Ex*SList routines do -- but the guest reads the head.
 	state.redirect(mod, "InitializeSListHead",
 		[](vcpu&, emu_object<_SLIST_HEADER> slist_head)
 		{
@@ -388,11 +343,7 @@ void modules::register_ntoskrnl_sync_ops(win_kernel_state& state, proc_module& m
 			THREAD_LOG_INFO("InitializeSListHead(0x{:X})", slist_head.address());
 		});
 
-	// The dispatcher reads. Every one of them is the same instruction on this
-	// kernel -- KeReadStateEvent, KeReadStateMutex, KeReadStateQueue and
-	// KeReadStateSemaphore all fold onto this address on both architectures --
-	// because the signal state sits at the same offset in every dispatcher
-	// object, so one handler answers whichever name the guest called.
+	// KeReadStateEvent, KeReadStateMutex, KeReadStateQueue and KeReadStateSemaphore all fold here.
 	state.redirect(mod, "KeReadStateMutant",
 		[](vcpu&, emu_object<_DISPATCHER_HEADER> object) -> std::int32_t
 		{
@@ -423,8 +374,6 @@ void modules::register_ntoskrnl_sync_ops(win_kernel_state& state, proc_module& m
 			THREAD_LOG_INFO("KeLeaveCriticalRegion: apc disable count now {}", count);
 	});
 
-	// A guarded region holds off special kernel APCs as well, so it drives the
-	// other of the thread's two counts -- the one KeAreAllApcsDisabled reads.
 	auto special_apc_disable = [](vcpu& cpu, const std::int32_t delta) -> std::int32_t
 	{
 		const auto t = std::dynamic_pointer_cast<win_thread>(cpu.thread());

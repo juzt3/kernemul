@@ -26,12 +26,9 @@ constexpr std::size_t alpc_port_body_size = 0x20;
 // Bounds what a caller claiming an enormous TotalLength can make this allocate.
 constexpr std::size_t maximum_message_length = 0x10000;
 
-// What an LPC connect reports back, and the largest view it will map.
 constexpr std::uint32_t default_maximum_message_length = 0x148;
 constexpr std::uint64_t maximum_port_view_size = 0x100000;
 
-// A name resolves to a server port; connecting to one makes a client port. The
-// two point at each other, so a send goes to the peer's queue.
 struct alpc_port_host final : win_object
 {
 	std::string name;
@@ -68,7 +65,6 @@ private:
 	std::deque<std::vector<std::uint8_t>> messages_;
 };
 
-// ClientId is stamped in on the way past: the one field the kernel fills.
 std::vector<std::uint8_t> read_message(vcpu& cpu, const emu_object<_PORT_MESSAGE>& message)
 {
 	auto& space = *cpu.curr_addr_space();
@@ -91,8 +87,6 @@ std::vector<std::uint8_t> read_message(vcpu& cpu, const emu_object<_PORT_MESSAGE
 	return bytes;
 }
 
-// Nothing answers a connect, so the reply buffer would come back holding the
-// caller's own stack garbage. Zeroed is what a silent server leaves behind.
 void clear_connection_information(vcpu& cpu, const addr_t information,
 	const emu_object<std::uint32_t>& information_length)
 {
@@ -121,9 +115,7 @@ std::string attribute_name(vcpu& cpu, const emu_object<_OBJECT_ATTRIBUTES>& obje
 
 }
 
-// ALPC works between two things inside the guest, and only there: a port this
-// guest did not create belongs to a process that is not running, which is every
-// case the older LPC pair sees. Receiving does not block, as in nt_iocp_ops.cpp.
+// A port this guest did not create belongs to a process that is not running.
 void modules::register_ntoskrnl_lpc_ops(win_kernel_state& state, proc_module& mod)
 {
 	auto* st = &state;
@@ -214,7 +206,6 @@ void modules::register_ntoskrnl_lpc_ops(win_kernel_state& state, proc_module& mo
 			if (!handle)
 				return STATUS_INSUFFICIENT_RESOURCES;
 
-			// A second connection replaces the first.
 			server->peer = client;
 
 			port_handle.write(handle);
@@ -230,7 +221,6 @@ void modules::register_ntoskrnl_lpc_ops(win_kernel_state& state, proc_module& mo
 					"to the server", name, size);
 			}
 
-			// Nothing answers a connection, so none of the buffer came back.
 			if (buffer_length)
 				buffer_length.write(0);
 
@@ -306,10 +296,6 @@ void modules::register_ntoskrnl_lpc_ops(win_kernel_state& state, proc_module& mo
 			return copied < message->size() ? STATUS_BUFFER_TOO_SMALL : STATUS_SUCCESS;
 		});
 
-	// NtCreatePort is never called here, so there is never a port to find and
-	// never a server to answer. The connection is made anyway: the handle is a
-	// real handle to a real port, the caller is told how long a message may be,
-	// and its view is mapped -- so everything but a reply works.
 	auto connect_port = [st, create_port_object](vcpu& cpu,
 		emu_object<std::uint64_t> port_handle, emu_object<_UNICODE_STRING> port_name,
 		const addr_t client_view, emu_object<_REMOTE_PORT_VIEW> server_view,
@@ -333,9 +319,7 @@ void modules::register_ntoskrnl_lpc_ops(win_kernel_state& state, proc_module& mo
 
 		auto& space = *cpu.curr_addr_space();
 
-		// PORT_VIEW is not in the generated types: ViewSize and the two bases
-		// sit past the section handle and offset, at the same offsets on both
-		// architectures.
+		// PORT_VIEW is not in the generated types: the bases sit past the handle and offset.
 		if (client_view)
 		{
 			const auto view_size = space.read_mem<std::uint64_t>(client_view + 0x18);

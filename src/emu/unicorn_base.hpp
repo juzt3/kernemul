@@ -15,13 +15,9 @@ struct unicorn_hook : emu_hook
 {
 	int uc_type;
 
-	// UC_<arch>_INS_* for a real instruction hook, or the QEMU exception index
-	// to match when insn_via_intr is set.
+	// UC_<arch>_INS_*, or the QEMU exception index to match when insn_via_intr is set.
 	int uc_insn;
 
-	// An instruction hook the architecture cannot install directly, served
-	// from the exception that instruction raises instead. Both this and
-	// hook_exception use UC_HOOK_INTR, so the flag picks the trampoline.
 	bool insn_via_intr = false;
 
 	std::vector<uc_hook> handles;
@@ -39,10 +35,7 @@ public:
 		if (uc_) uc_close(uc_);
 	}
 
-	// Held for as long as a hook callback runs on this cpu. A cpu inside a hook
-	// is not executing guest code, so an engine-wide operation neither has to
-	// stop it nor wait for it -- it only has to keep it from resuming, which is
-	// what the wait on the way out does.
+	// A cpu inside a hook is not executing guest code; it only has to be kept from resuming.
 	struct hook_guard
 	{
 		explicit hook_guard(vcpu& cpu)
@@ -64,14 +57,10 @@ public:
 		{
 			auto pc = reg<addr_t>(arch_->pc());
 
-			// A nested run executes guest code, so for its duration this cpu is
-			// not at a hook's safe point, whatever the hook around it says.
+			// A nested run executes guest code, so this cpu is not at a hook's safe point.
 			const auto hooks = in_hook_.exchange(0);
 
-			// run_on_all only waits for the cpus that were executing when it
-			// looked. Starting now would have it flush this cpu's tlb, or remap
-			// its memory, while it runs. Before running_, or it would be
-			// waiting on a cpu that is waiting on it.
+			// Before running_, or it would be waiting on a cpu that is waiting on it.
 			while (pending_pause_.load()) {}
 
 			++running_;
@@ -79,25 +68,17 @@ public:
 			--running_;
 			in_hook_ = hooks;
 
-			// Nothing downstream can tell an engine error from an ordinary stop.
 			if (res != UC_ERR_OK)
 				LOG_ERR("cpu {}: emulation stopped at 0x{:X}: {}", id(), pc, uc_strerror(res));
 
 			if (redirect_.exchange(false))
 			{
-				// Some helpers advance pc after the hook returns -- the x86
-				// syscall helper adds the instruction length unconditionally,
-				// even once uc_emu_stop has been requested. Put back the pc the
-				// callback asked for, so "return true" means the same thing on
-				// every architecture.
+				// Helpers can advance pc after a hook returns; restore what the callback asked for.
 				reg(arch_->pc(), redirect_pc_);
 				continue;
 			}
 
-			// Stopped for an engine-wide operation rather than by a hook that
-			// meant it: wait for it to finish and carry on from the same pc. A
-			// nested run has to resume too, or its caller is handed a result
-			// that was never produced.
+			// Stopped for an engine-wide operation, not by a hook: carry on from the same pc.
 			if (!pending_pause_.load())
 				break;
 
@@ -111,40 +92,23 @@ public:
 		uc_emu_stop(uc_);
 	}
 
-	// Asked for from another thread, so nothing here touches the engine: a
-	// uc_engine takes no locks of its own, and a uc_emu_stop racing the
-	// uc_emu_start that is executing leaves the cpu somewhere the guest never
-	// was -- pc past code that has not run, or short of code that has. The
-	// request is picked up by poll_stop below, on this cpu's own thread.
-	//
-	// Nothing is asked of a cpu that is not running its own outermost run: a
-	// request the cpu has no reason to act on would be acted on the moment it
-	// picked up its next thread, costing that thread a trip round the
-	// scheduler before it had run anything.
+	// Touches no engine: uc_emu_stop racing uc_emu_start leaves the cpu where the guest never was.
 	void try_stop() override
 	{
 		if (running_.load() == 1)
 			stop_requested_.store(true);
 	}
 
-	// At the top of every basic block, on this cpu's own thread: the one place
-	// a cpu can be taken off guest code without the engine being touched from
-	// the outside.
+	// The one place a cpu leaves guest code without the engine being touched from outside.
 	void poll_stop()
 	{
-		// An engine-wide operation is waiting for this cpu to leave guest
-		// code. Its run() resumes from the same pc once the operation is done,
-		// so a nested run survives it and is stopped too.
 		if (pending_pause_.load())
 		{
 			stop();
 			return;
 		}
 
-		// The quantum ran out. Only the outermost run can be taken away: a
-		// nested one ends at a trampoline its caller installed, and stopping
-		// it anywhere else hands that caller a result that was never produced.
-		// The request stays pending until then.
+		// Only the outermost run can be taken away; a nested one ends at its caller's trampoline.
 		if (running_.load() == 1 && stop_requested_.exchange(false))
 			stop();
 	}
@@ -154,15 +118,11 @@ public:
 		uc_ctl_flush_tlb(uc_);
 	}
 
-	// Register translation is the only part of driving a uc_engine that
-	// depends on the guest architecture; emu/<arch>/unicorn.hpp supplies it.
 	void reg_read(reg_t reg, void* value, std::size_t size) override = 0;
 	void reg_write(reg_t reg, const void* value, std::size_t size) override = 0;
 
 	uc_engine* native() const { return uc_; }
 
-	// Called from a hook trampoline when the callback wants to take over: it
-	// records where the callback left pc so run() can restore it.
 	void request_redirect()
 	{
 		redirect_pc_ = reg<addr_t>(arch_->pc());
@@ -171,8 +131,7 @@ public:
 
 	uc_engine* uc_;
 
-	// uc_emu_start nesting: 0 is not executing, 1 is the outermost run, more
-	// than that is a hook that started its own.
+	// 0 is not executing, 1 is the outermost run, more is a hook that started its own.
 	std::atomic<int> running_{0};
 	std::atomic<int> in_hook_{0};
 	std::atomic<bool> pending_pause_{false};
@@ -237,11 +196,6 @@ public:
 			std::memcpy(dst, buf, std::min(size, avail));
 	}
 
-	// Runs fn with no cpu executing guest code. A cpu inside a hook already
-	// qualifies: it is asked to pause, which its hook waits on before returning,
-	// and it is neither stopped nor waited for. That is what lets a hook itself
-	// call in here -- stopping it would end the run it is in the middle of, and
-	// waiting for it would be waiting on the caller.
 	void run_on_all(const std::function<void()>& fn) override
 	{
 		std::lock_guard lk(op_mtx_);
@@ -249,14 +203,7 @@ public:
 		for (auto& cpu : cpus_)
 			static_cast<unicorn_vcpu_base*>(cpu.get())->pending_pause_ = true;
 
-		// Nothing stops the other cpus from here: each one sees the flag at the
-		// top of its next basic block and stops itself, which is the only way
-		// an engine may be stopped -- see unicorn_vcpu_base::try_stop. A cpu
-		// parked in the scheduler is not executing and has nothing to notice.
-		//
-		// in_hook_ is re-read every time round: a cpu that was executing when
-		// the flag went up can still enter a hook before it gets there, and
-		// would then be parked on the way out with running_ never clearing.
+		// in_hook_ is re-read every round: a cpu can still enter a hook after the flag went up.
 		for (auto& cpu : cpus_)
 		{
 			auto* uc = static_cast<unicorn_vcpu_base*>(cpu.get());
@@ -279,9 +226,6 @@ public:
 		if (const int uc_insn = to_uc_insn(insn); uc_insn >= 0)
 			return add_hook(start_addr, end_addr, UC_HOOK_INSN, uc_insn, std::move(cb));
 
-		// Not every architecture lets Unicorn hook the instruction itself. If
-		// it raises a distinguishable exception, the hook is served from that
-		// instead -- see insn_as_intr.
 		if (const int intno = insn_as_intr(insn); intno >= 0)
 			return add_hook(start_addr, end_addr, UC_HOOK_INTR, intno, std::move(cb), true);
 
@@ -319,24 +263,16 @@ public:
 	}
 
 protected:
-	// Open an engine for the guest architecture, already configured.
 	virtual uc_engine* open_engine() = 0;
 
-	// Wrap it in the vcpu type that knows this architecture's registers.
 	virtual std::shared_ptr<unicorn_vcpu_base> wrap_engine(uc_engine* uc, std::size_t id) = 0;
 
-	// The UC_<arch>_INS_* value for an instruction hook, or -1 if the
-	// architecture cannot hook that instruction.
 	virtual int to_uc_insn(hook_insn_t insn) const = 0;
 
-	// For an instruction to_uc_insn cannot hook: the QEMU exception index it
-	// raises, or -1 if it does not raise one. Returning a value here makes
-	// hook_insn work on this architecture anyway.
+	// The QEMU exception index the instruction raises, or -1 if it does not raise one.
 	virtual int insn_as_intr(hook_insn_t) const { return -1; }
 
-	// Length of the instruction insn_as_intr describes. The exception is
-	// raised with pc already past it, so the trampoline rewinds by this much
-	// to hand the callback the instruction's own address.
+	// The exception is raised with pc already past it, so the trampoline rewinds by this much.
 	virtual addr_t insn_as_intr_len() const { return 0; }
 
 	std::shared_ptr<vcpu> create_vcpu(const std::size_t id) final
@@ -354,10 +290,7 @@ protected:
 
 		auto cpu = wrap_engine(uc, id);
 
-		// Every cpu carries this one, whether or not anything else hooks
-		// anything: it is what turns a stop asked for from another thread into
-		// a stop this cpu performs on itself, at a block boundary. Unbounded,
-		// the way begin > end is written everywhere else here.
+		// Turns a stop asked from another thread into one this cpu performs at a block boundary.
 		uc_hook stop_poll{};
 		if (uc_hook_add(uc, &stop_poll, UC_HOOK_BLOCK,
 				reinterpret_cast<void*>(&stop_poll_trampoline), cpu.get(), 1, 0)
@@ -434,10 +367,6 @@ private:
 		}
 	}
 
-	// Serves a hook_insn request from the exception the instruction raises,
-	// presenting the same view an architecture with a real instruction hook
-	// would: pc at the instruction, the address range honoured, and execution
-	// resuming after it unless the callback redirects.
 	static void insn_intr_trampoline(uc_engine* uc, std::uint32_t intno, void* user_data)
 	{
 		auto* hk = static_cast<unicorn_hook*>(user_data);
@@ -456,8 +385,7 @@ private:
 			const addr_t len = self->insn_as_intr_len();
 			const addr_t insn_pc = cpu->pc() - len;
 
-			// UC_HOOK_INTR ignores the address range Unicorn was given, so it
-			// is applied here. start > end means unbounded, as elsewhere.
+			// UC_HOOK_INTR ignores the address range Unicorn was given, so it is applied here.
 			if (hk->start <= hk->end && (insn_pc < hk->start || insn_pc > hk->end))
 				return;
 
@@ -515,10 +443,7 @@ private:
 		return false;
 	}
 
-	// Whether a hook_insn request is being served from this exception index --
-	// see insn_as_intr. Both it and hook_exception ride UC_HOOK_INTR and every
-	// callback is called for every index, so without this an AArch64 SVC also
-	// reaches the OS exception handler and becomes an access violation.
+	// Every callback gets every index; without this an SVC also becomes an access violation.
 	[[nodiscard]] bool claimed_by_insn_hook(const int intno) const
 	{
 		for (const auto& hk : hooks_)
@@ -631,8 +556,6 @@ private:
 	std::list<unicorn_hook> hooks_;
 	std::mutex op_mtx_;
 
-	// mem_ is host state. Pausing the engines says nothing about the other host
-	// threads walking page tables through read_phys_mem and write_phys_mem.
-	// Those two only look the region up, so they share; growing it is exclusive.
+	// The phys read/write paths only look the region up, so they share; growing it is exclusive.
 	mutable std::shared_mutex mem_mtx_;
 };

@@ -13,11 +13,7 @@
 namespace
 {
 
-// A KBUGCHECK_REASON_CALLBACK_RECORD is a WDK type: the kernel never stores one
-// itself, so it is not in the PDB the generated headers come from. The layout
-// is the one KeRegisterBugCheckReasonCallback writes in ntoskrnl, and it is the
-// same on both architectures -- every member is pointer sized or smaller and
-// naturally aligned.
+// A WDK type the kernel never stores, so not in the PDB; layout taken from the register call.
 constexpr std::size_t bugcheck_record_callback_routine = 0x10;
 constexpr std::size_t bugcheck_record_component = 0x18;
 constexpr std::size_t bugcheck_record_checksum = 0x20;
@@ -26,17 +22,12 @@ constexpr std::size_t bugcheck_record_state = 0x2C;
 
 constexpr std::uint8_t bugcheck_record_registered = 1;
 
-// A callback object's body, as ExCreateCallback builds it: 'Call' at the front,
-// a list head at 0x10 linked to itself, and AllowMultipleCallbacks at 0x20. The
-// guest only ever passes the pointer back, so nothing here reads it -- it is
-// written so that a driver looking at what it was handed sees a real one.
+// ExCreateCallback's body: Call at 0, list head at 0x10, AllowMultipleCallbacks at 0x20.
 constexpr std::size_t callback_object_size = 0x38;
 constexpr std::size_t callback_object_list_head = 0x10;
 constexpr std::size_t callback_object_allow_multiple = 0x20;
 constexpr std::uint32_t callback_object_signature = 0x6C6C6143;
 
-// Nothing notifies a callback, so a registration is only a token to hand back
-// and a place to record what was registered.
 struct callback_host final : win_object
 {
 	struct registration
@@ -59,7 +50,6 @@ struct device_host final : win_object
 	addr_t driver_object = 0;
 };
 
-// TOKEN_INFORMATION_CLASS, the two a driver asks for often enough to answer.
 // A WDK enum; the kernel does not store one, so it is not in the PDB.
 enum token_information_class : std::uint32_t
 {
@@ -67,8 +57,7 @@ enum token_information_class : std::uint32_t
 	token_integrity_level = 25,
 };
 
-// SID_AND_ATTRIBUTES::Attributes, and the parts of S-1-16-12288 -- the
-// integrity level everything here runs at.
+// SID_AND_ATTRIBUTES::Attributes, and the parts of S-1-16-12288.
 enum sid_attributes : std::uint32_t
 {
 	se_group_integrity = 0x00000020,
@@ -77,8 +66,7 @@ enum sid_attributes : std::uint32_t
 constexpr std::uint8_t security_mandatory_label_authority = 16;
 constexpr std::uint32_t security_mandatory_high_rid = 12288;
 
-// What SeRegisterImageVerificationCallback accepts, recovered from the binary --
-// it has no documented prototype. Each type takes exactly one subtype.
+// Recovered from the binary -- SeRegisterImageVerificationCallback has no documented prototype.
 enum image_verification_type : std::uint32_t
 {
 	image_verification_driver_info = 1,
@@ -92,17 +80,11 @@ constexpr std::uint32_t image_verification_subtype(const image_verification_type
 
 }
 
-// The rest of what a driver reaches for on its way up: the device object it
-// publishes itself through, the callbacks it registers that nothing will ever
-// invoke, and the platform queries that have no answer on an emulated machine.
+// The rest of what a driver reaches for on its way up; none of these callbacks is ever invoked.
 void modules::register_ntoskrnl_misc_ops(win_kernel_state& state, proc_module& mod)
 {
 	auto* st = &state;
 
-	// A bugcheck callback is registered against a record the caller owns, and
-	// State is what tells it the registration took. Nothing bugchecks here, so
-	// the routine is never called and the record is never linked into a list --
-	// State and the fields beside it are the whole of what the guest can see.
 	state.redirect(mod, "KeRegisterBugCheckReasonCallback",
 		[](vcpu& cpu, emu_object<void> callback_record, const addr_t callback_routine,
 			const std::uint32_t reason, const addr_t component) -> bool
@@ -151,9 +133,6 @@ void modules::register_ntoskrnl_misc_ops(win_kernel_state& state, proc_module& m
 			return registered;
 		});
 
-	// ExCreateCallback opens a named callback object, creating it first when
-	// asked to. Nothing else in the guest ever creates one, so a caller passing
-	// Create=FALSE is looking for something that cannot be there.
 	state.redirect(mod, "ExCreateCallback",
 		[st](vcpu& cpu, emu_object<addr_t> callback_object_out,
 			emu_object<_OBJECT_ATTRIBUTES> object_attributes,
@@ -202,9 +181,6 @@ void modules::register_ntoskrnl_misc_ops(win_kernel_state& state, proc_module& m
 			return STATUS_SUCCESS;
 		});
 
-	// The address handed back is what ExUnregisterCallback would be given, so it
-	// has to be one the guest can hold. Nothing notifies a callback, so
-	// registering one only records that it was asked for.
 	state.redirect(mod, "ExRegisterCallback",
 		[st](vcpu&, const addr_t callback_object_addr, const addr_t callback_function,
 			const addr_t callback_context) -> addr_t
@@ -246,9 +222,6 @@ void modules::register_ntoskrnl_misc_ops(win_kernel_state& state, proc_module& m
 			return addr;
 		});
 
-	// A device object is the one thing DriverEntry almost always makes, and the
-	// driver holds the pointer for the rest of its life: the extension it
-	// carries is where the driver keeps its own state.
 	state.redirect(mod, "IoCreateDevice",
 		[st](vcpu& cpu, emu_object<_DRIVER_OBJECT> driver_object,
 			const std::uint32_t device_extension_size,
@@ -262,8 +235,7 @@ void modules::register_ntoskrnl_misc_ops(win_kernel_state& state, proc_module& m
 			auto& space = *cpu.curr_addr_space();
 			const auto name = win::read_unicode_string(device_name);
 
-			// The extension follows the object, and a driver casts it to its own
-			// structure, so it starts where that structure would want to.
+			// A driver casts the extension to its own structure, so align it to 8.
 			const auto extension_size = (device_extension_size + 7) & ~std::uint32_t{7};
 			const auto body_size = sizeof(_DEVICE_OBJECT) + extension_size;
 
@@ -289,16 +261,12 @@ void modules::register_ntoskrnl_misc_ops(win_kernel_state& state, proc_module& m
 			device.Characteristics = device_characteristics;
 			device.StackSize = 1;
 
-			// The driver clears DO_DEVICE_INITIALIZING itself once it is willing
-			// to be sent requests, and a driver that forgets is a real bug worth
-			// leaving visible.
+			// The driver clears DO_DEVICE_INITIALIZING itself; one that forgets is a real bug.
 			device.Flags = do_device_initializing | (exclusive ? do_exclusive : 0);
 
 			if (device_extension_size)
 				device.DeviceExtension = guest_ptr<void>(addr + sizeof(_DEVICE_OBJECT));
 
-			// New devices go on the front of the driver's list, which is where
-			// IoCreateDevice puts them and what IoDeleteDevice walks.
 			auto head = driver_object.field(&_DRIVER_OBJECT::DeviceObject);
 			device.NextDevice = head.read();
 
@@ -313,10 +281,6 @@ void modules::register_ntoskrnl_misc_ops(win_kernel_state& state, proc_module& m
 			return STATUS_SUCCESS;
 		});
 
-	// Unlinked from the driver, so a driver that deletes one device and keeps
-	// another finds the list it expects. The object itself stays mapped: a
-	// driver reading through a pointer it already deleted is a use after free
-	// that the real kernel would also let it get away with for a while.
 	state.redirect(mod, "IoDeleteDevice",
 		[st](vcpu& cpu, emu_object<_DEVICE_OBJECT> device_object)
 		{
@@ -364,9 +328,6 @@ void modules::register_ntoskrnl_misc_ops(win_kernel_state& state, proc_module& m
 			THREAD_LOG_INFO("IoDeleteDevice(0x{:X})", device_object.address());
 		});
 
-	// There is no object namespace to put a link in, so the name is only
-	// reported. A driver creates one so user mode can open the device by name,
-	// and nothing here opens anything by name.
 	state.redirect(mod, "IoCreateSymbolicLink",
 		[](vcpu&, emu_object<_UNICODE_STRING> symbolic_link_name,
 			emu_object<_UNICODE_STRING> device_name) -> NTSTATUS
@@ -378,10 +339,7 @@ void modules::register_ntoskrnl_misc_ops(win_kernel_state& state, proc_module& m
 			return STATUS_SUCCESS;
 		});
 
-	// Nothing dispatches an IRP, so the only way a driver reaches this is by
-	// completing one it built itself -- and then there is no stack location
-	// below it to run a completion routine from. Warned rather than logged,
-	// because a driver that expected one to run will not see it.
+	// Nothing dispatches an IRP, so there is no stack location to run a completion routine from.
 	state.redirect(mod, "IofCompleteRequest",
 		[](vcpu&, const addr_t irp, const std::int8_t priority_boost)
 		{
@@ -389,9 +347,6 @@ void modules::register_ntoskrnl_misc_ops(win_kernel_state& state, proc_module& m
 				irp, priority_boost);
 		});
 
-	// The flag is the observable half: a driver reads it back to find out
-	// whether it is on the shutdown list. Nothing shuts down, so the callback
-	// is never made.
 	state.redirect(mod, "IoRegisterShutdownNotification",
 		[](vcpu&, emu_object<_DEVICE_OBJECT> device_object) -> NTSTATUS
 		{
@@ -406,8 +361,6 @@ void modules::register_ntoskrnl_misc_ops(win_kernel_state& state, proc_module& m
 			return STATUS_SUCCESS;
 		});
 
-	// No device ever arrives or leaves, so the callback is never made. The
-	// entry still has to be a distinct address the driver can pass back.
 	state.redirect(mod, "IoRegisterPlugPlayNotification",
 		[st](vcpu&, const std::uint32_t event_category,
 			const std::uint32_t event_category_flags, const addr_t event_category_data,
@@ -444,9 +397,7 @@ void modules::register_ntoskrnl_misc_ops(win_kernel_state& state, proc_module& m
 			return STATUS_SUCCESS;
 		});
 
-	// No device publishes an interface, so the list is empty -- which is a
-	// double null and not a null pointer, because that is what the caller walks
-	// and then frees.
+	// An empty list is a double null, not a null pointer: that is what the caller walks and frees.
 	state.redirect(mod, "IoGetDeviceInterfaces",
 		[st](vcpu&, const addr_t interface_class_guid,
 			const addr_t physical_device_object, const std::uint32_t flags,
@@ -472,8 +423,6 @@ void modules::register_ntoskrnl_misc_ops(win_kernel_state& state, proc_module& m
 			return STATUS_SUCCESS;
 		});
 
-	// Nothing registers a WMI block, so every guid is one that was never
-	// registered -- which is an answer the caller is documented to get.
 	state.redirect(mod, "IoWMIOpenBlock",
 		[](vcpu&, emu_object<_GUID> guid, const std::uint32_t desired_access,
 			emu_object<addr_t> data_block_object) -> NTSTATUS
@@ -488,8 +437,6 @@ void modules::register_ntoskrnl_misc_ops(win_kernel_state& state, proc_module& m
 			return STATUS_WMI_GUID_NOT_FOUND;
 		});
 
-	// There is no ACPI on an emulated machine, and a null table is what the real
-	// one returns for a signature the firmware does not carry.
 	state.redirect(mod, "HalAcpiGetTableEx",
 		[](vcpu&, const addr_t loader_block, const std::uint32_t signature,
 			const std::uint32_t oem_id, const std::uint32_t oem_table_id) -> addr_t
@@ -509,9 +456,7 @@ void modules::register_ntoskrnl_misc_ops(win_kernel_state& state, proc_module& m
 			return 0;
 		});
 
-	// Zero bytes read, which is what a caller gets for a bus that is not there.
-	// The buffer is left alone rather than filled with a plausible config space:
-	// a driver that believes it read one goes on to act on it.
+	// The buffer is left alone rather than filled with a config space a driver would act on.
 	state.redirect(mod, "HalGetBusDataByOffset",
 		[](vcpu&, const std::uint32_t bus_data_type, const std::uint32_t bus_number,
 			const std::uint32_t slot_number, const addr_t buffer,
@@ -523,9 +468,7 @@ void modules::register_ntoskrnl_misc_ops(win_kernel_state& state, proc_module& m
 			return 0;
 		});
 
-	// Not one of ntoskrnl's exports -- a driver imports it from hal, which is not
-	// mapped. It binds by PDB symbol, so ntoskrnl code reaching it still lands
-	// here, and nothing a guest driver links against ever will.
+	// Not an ntoskrnl export -- imported from hal, which is not mapped; binds by PDB symbol.
 	state.redirect(mod, "HalPutDmaAdapter",
 		[st](vcpu&, const addr_t dma_adapter)
 		{
@@ -533,8 +476,6 @@ void modules::register_ntoskrnl_misc_ops(win_kernel_state& state, proc_module& m
 			st->objs.dereference_object(dma_adapter);
 		});
 
-	// The caller frees what it is given with ExFreePool, so both answers come
-	// out of the pool rather than off a scratch page.
 	state.redirect(mod, "SeQueryInformationToken",
 		[st](vcpu& cpu, const addr_t token, const std::uint32_t token_information_class,
 			emu_object<addr_t> token_information) -> NTSTATUS
@@ -577,8 +518,6 @@ void modules::register_ntoskrnl_misc_ops(win_kernel_state& state, proc_module& m
 
 			if (token_information_class == token_privileges)
 			{
-				// PrivilegeCount alone: the array that follows it is empty, so
-				// none of it is there to write.
 				const auto buffer = st->pool.allocate(sizeof(std::uint32_t),
 					pool_tag("Se  "), true);
 
@@ -599,9 +538,6 @@ void modules::register_ntoskrnl_misc_ops(win_kernel_state& state, proc_module& m
 			return STATUS_INVALID_INFO_CLASS;
 		});
 
-	// Undocumented, so the prototype and the statuses below were recovered from
-	// the binary. Each callback type accepts exactly one subtype, and the fifth
-	// argument has to be null.
 	state.redirect(mod, "SeRegisterImageVerificationCallback",
 		[st](vcpu&, const std::uint32_t callback_type, const std::uint32_t callback_subtype,
 			const addr_t callback_function, const addr_t callback_context,
@@ -618,9 +554,6 @@ void modules::register_ntoskrnl_misc_ops(win_kernel_state& state, proc_module& m
 			if (reserved)
 				return STATUS_INVALID_PARAMETER_5;
 
-			// The real one registers against one of the kernel's own callback
-			// objects. Nothing verifies an image here, so the handle is only
-			// something to hand to SeUnregisterImageVerificationCallback.
 			auto host = std::make_shared<callback_registration_host>();
 
 			const std::uint8_t body[sizeof(addr_t)] = {};
@@ -638,9 +571,7 @@ void modules::register_ntoskrnl_misc_ops(win_kernel_state& state, proc_module& m
 			return STATUS_SUCCESS;
 		});
 
-	// Nothing gives an object a name, so there is nothing to look one up in. The
-	// out parameter is cleared first, which is the order the real one does it in
-	// and the reason a caller can trust it on the failure path.
+	// The out parameter is cleared first, which is the order the real one does it in.
 	state.redirect(mod, "ObReferenceObjectByName",
 		[](vcpu&, emu_object<_UNICODE_STRING> object_name, const std::uint32_t attributes,
 			const addr_t access_state, const std::uint32_t desired_access,
@@ -662,9 +593,6 @@ void modules::register_ntoskrnl_misc_ops(win_kernel_state& state, proc_module& m
 			return STATUS_OBJECT_NAME_NOT_FOUND;
 		});
 
-	// Which image an address belongs to. The real one searches the unwind
-	// function tables; the module list answers the same question here, and a pc
-	// outside every module is a null base rather than an error.
 	state.redirect(mod, "RtlPcToFileHeader",
 		[st](vcpu& cpu, const addr_t pc_value, emu_object<addr_t> base_of_image) -> addr_t
 		{
@@ -677,8 +605,7 @@ void modules::register_ntoskrnl_misc_ops(win_kernel_state& state, proc_module& m
 			const auto m = proc->find_module_by_addr(pc_value);
 			const addr_t base = m ? m->addr : 0;
 
-			// Written on every path and not tested for null first, because the
-			// real one does neither and a caller relies on it being set.
+			// Written on every path and not tested for null, because the real one does neither.
 			base_of_image.write(base);
 
 			THREAD_LOG_INFO("RtlPcToFileHeader(pc=0x{:X}) -> 0x{:X} ({})",
@@ -687,8 +614,7 @@ void modules::register_ntoskrnl_misc_ops(win_kernel_state& state, proc_module& m
 			return base;
 		});
 
-	// A tail call, so the broadcast function's result is the caller's without
-	// anything in between able to change it.
+	// A tail call, so the broadcast function's result reaches the caller unchanged.
 	state.redirect(mod, "KeIpiGenericCall",
 		[](vcpu& cpu, const addr_t broadcast_function, const std::uint64_t context)
 		{
@@ -706,9 +632,7 @@ void modules::register_ntoskrnl_misc_ops(win_kernel_state& state, proc_module& m
 			guest_tail_call(cpu, broadcast_function, args);
 		});
 
-	// A triage dump is an undocumented layout nothing here can produce, and a
-	// buffer left untouched with a length saying it was filled is worse than
-	// none.
+	// A triage dump is undocumented, and a length claiming the buffer was filled is worse.
 	state.redirect(mod, "KeCapturePersistentThreadState",
 		[](vcpu&, const addr_t context, const addr_t thread, const std::uint32_t bugcheck_code,
 			const std::uint64_t p1, const std::uint64_t p2, const std::uint64_t p3,
@@ -722,8 +646,6 @@ void modules::register_ntoskrnl_misc_ops(win_kernel_state& state, proc_module& m
 			return 0;
 		});
 
-	// Nothing consumes a trace, so every event is dropped -- which is what a
-	// real kernel with no logger running does with one too.
 	state.redirect_ntzw(mod, "TraceEvent",
 		[](vcpu&, const std::uint64_t trace_handle, const std::uint32_t flags,
 			const std::uint32_t field_size, const addr_t fields) -> NTSTATUS
@@ -735,7 +657,6 @@ void modules::register_ntoskrnl_misc_ops(win_kernel_state& state, proc_module& m
 			return STATUS_SUCCESS;
 		});
 
-	// There is no trace session to control, and nothing wrote the output buffer.
 	state.redirect_ntzw(mod, "TraceControl",
 		[](vcpu&, const std::uint32_t function_code, const addr_t in_buffer,
 			const std::uint32_t in_length, const addr_t out_buffer,
@@ -764,8 +685,6 @@ void modules::register_ntoskrnl_misc_ops(win_kernel_state& state, proc_module& m
 			return STATUS_NOT_SUPPORTED;
 		});
 
-	// Nobody is here to answer the message, so its parameters go to the log --
-	// the mask says which of them are strings.
 	state.redirect_ntzw(mod, "RaiseHardError",
 		[](vcpu& cpu, const NTSTATUS error_status, const std::uint32_t parameter_count,
 			const std::uint32_t unicode_string_mask, const addr_t parameters,
@@ -802,8 +721,6 @@ void modules::register_ntoskrnl_misc_ops(win_kernel_state& state, proc_module& m
 			return STATUS_SUCCESS;
 		});
 
-	// There is no shim cache, so a lookup finds nothing and everything else has
-	// nothing to change.
 	state.redirect_ntzw(mod, "ApphelpCacheControl",
 		[](vcpu&, const std::uint32_t service_class, const addr_t data) -> NTSTATUS
 		{
@@ -827,8 +744,6 @@ void modules::register_ntoskrnl_misc_ops(win_kernel_state& state, proc_module& m
 			return STATUS_OBJECT_NAME_NOT_FOUND;
 		});
 
-	// The same answer for the data behind such a name. Both outputs are still
-	// written: a caller reads them back even on the failure.
 	state.redirect_ntzw(mod, "QueryWnfStateData",
 		[](vcpu&, const addr_t state_name, const addr_t type_id,
 			const addr_t explicit_scope, emu_object<std::uint32_t> change_stamp,
@@ -847,7 +762,6 @@ void modules::register_ntoskrnl_misc_ops(win_kernel_state& state, proc_module& m
 			return STATUS_OBJECT_NAME_NOT_FOUND;
 		});
 
-	// Nothing here builds a token, so no handle can name one.
 	state.redirect_ntzw(mod, "QuerySecurityAttributesToken",
 		[](vcpu&, const std::uint64_t token_handle, const addr_t attributes,
 			const std::uint32_t attribute_count, const addr_t buffer,
@@ -879,7 +793,6 @@ void modules::register_ntoskrnl_misc_ops(win_kernel_state& state, proc_module& m
 			return STATUS_NOT_IMPLEMENTED;
 		});
 
-	// Licence values live under a registry key this registry does not have.
 	state.redirect_ntzw(mod, "QueryLicenseValue",
 		[](vcpu&, emu_object<_UNICODE_STRING> value_name, emu_object<std::uint32_t> type,
 			[[maybe_unused]] const addr_t data, const std::uint32_t data_size,
@@ -898,15 +811,8 @@ void modules::register_ntoskrnl_misc_ops(win_kernel_state& state, proc_module& m
 			return STATUS_OBJECT_NAME_NOT_FOUND;
 		});
 
-	// DbgPrompt does not ask anything: it raises a debug service trap and lets
-	// whoever is attached fill the response in. So the trap is the behaviour,
-	// and STATUS_BREAKPOINT goes through the same dispatcher a real one would --
-	// a driver with a handler around the call gets it, and the redirect leaves
-	// the pc alone once the dispatcher has moved it.
-	//
-	// The trap carries BREAKPOINT_PROMPT and the response buffer on real
-	// Windows; the dispatcher here takes no exception parameters, so a handler
-	// cannot tell this breakpoint from any other.
+	// DbgPrompt raises a debug service trap rather than asking, so the trap is the behaviour.
+	// The dispatcher takes no exception parameters, so it looks like any other breakpoint.
 	state.redirect(mod, "DbgPrompt",
 		[st](vcpu& cpu, const addr_t prompt, const addr_t response,
 			const std::uint32_t length) -> std::uint32_t
@@ -925,10 +831,6 @@ void modules::register_ntoskrnl_misc_ops(win_kernel_state& state, proc_module& m
 				return 0;
 			}
 
-			// Real Windows bugchecks here: nothing is attached to answer the
-			// trap and no handler caught it. There is no bugcheck to take, so
-			// the thread is left standing and told nothing was read -- which is
-			// the one thing a caller can act on.
 			THREAD_LOG_WARN("DbgPrompt: no debugger is attached and nothing handled the breakpoint -> 0 bytes");
 
 			return 0;

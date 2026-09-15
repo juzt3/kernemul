@@ -41,15 +41,11 @@ target_thread resolve_thread(win_kernel_state& state, vcpu& cpu, const std::uint
 
 }
 
-// A CONTEXT is the architecture's own shape, so filling one in and putting one
-// back are windows_emulator's job. What is here is which thread's registers
-// those two are pointed at.
 void modules::register_ntoskrnl_ctx_ops(win_kernel_state& state, proc_module& mod)
 {
 	auto* st = &state;
 
-	// Returning first is what makes the captured frame the caller's: consuming
-	// the return address leaves sp where the caller will find it.
+	// Returning first leaves sp where the caller will find it, making the frame the caller's.
 	state.redirect(mod, "RtlCaptureContext",
 		[st](vcpu& cpu, emu_object<_CONTEXT> context)
 		{
@@ -63,11 +59,7 @@ void modules::register_ntoskrnl_ctx_ops(win_kernel_state& state, proc_module& mo
 				context.address(), ret, cpu.sp());
 		});
 
-	// Returns nothing, deliberately: a result is written to the convention's
-	// return register, which on AArch64 is x0 -- one of the registers the
-	// context just restored. Writing STATUS_SUCCESS over it leaves a thread
-	// continuing into RtlUserThreadStart with a zero entry point. x86-64 never
-	// saw this, returning in rax, which no context continues through.
+	// Returns nothing deliberately: a result would go to x0, a register the context just restored.
 	state.redirect_ntzw(mod, "Continue",
 		[st](vcpu& cpu, emu_object<_CONTEXT> context, const bool test_alert)
 		{
@@ -94,7 +86,6 @@ void modules::register_ntoskrnl_ctx_ops(win_kernel_state& state, proc_module& mo
 				context.address(), cpu.pc(), cpu.sp());
 		});
 
-	// ContextFlags asks on the way in and answers on the way out.
 	state.redirect_ntzw(mod, "GetContextThread",
 		[st](vcpu& cpu, const std::uint64_t thread_handle,
 			emu_object<_CONTEXT> context) -> NTSTATUS
@@ -159,8 +150,6 @@ void modules::register_ntoskrnl_ctx_ops(win_kernel_state& state, proc_module& mo
 			return STATUS_SUCCESS;
 		});
 
-	// The exception path is driven by a cpu fault and has no way in from a
-	// status code, so the thread ends here as ExRaiseAccessViolation's does.
 	state.redirect_ntzw(mod, "RaiseException",
 		[](vcpu& cpu, emu_object<_EXCEPTION_RECORD> exception_record,
 			[[maybe_unused]] emu_object<_CONTEXT> context, const bool first_chance)
@@ -183,9 +172,7 @@ void modules::register_ntoskrnl_ctx_ops(win_kernel_state& state, proc_module& mo
 			cpu.stop();
 		});
 
-	// win_exception::handle walks the scope table itself, so what reaches this
-	// is a driver running its own dispatch. The DISPATCHER_CONTEXT fields read
-	// below are not in the generated types, and sit at the same offsets on both.
+	// The DISPATCHER_CONTEXT fields read below are not in the generated types; same offsets.
 	state.redirect(mod, "__C_specific_handler",
 		[st](vcpu& cpu, emu_object<_EXCEPTION_RECORD> exception_record,
 			const addr_t establisher_frame, emu_object<_CONTEXT> context_record,
@@ -208,7 +195,6 @@ void modules::register_ntoskrnl_ctx_ops(win_kernel_state& state, proc_module& mo
 					exception_record.field(&_EXCEPTION_RECORD::ExceptionCode).read()),
 				flags, control_rva, dispatch.scope_index);
 
-			// A frame is already chosen; run this one's __finally blocks.
 			if (flags & exception_unwinding_flags)
 			{
 				const auto count = space.read_mem<std::uint32_t>(dispatch.handler_data);
@@ -222,7 +208,6 @@ void modules::register_ntoskrnl_ctx_ops(win_kernel_state& state, proc_module& mo
 					if (control_rva < scope.begin_address || control_rva >= scope.end_address)
 						continue;
 
-					// A target belongs to the search pass below.
 					if (scope.jump_target)
 						continue;
 
@@ -237,8 +222,6 @@ void modules::register_ntoskrnl_ctx_ops(win_kernel_state& state, proc_module& mo
 				return win::exception_continue_search;
 			}
 
-			// The caller built the record and the context, so its own pair is
-			// what the filters get.
 			const auto pointers = guest_caller::scratch_base(cpu, sizeof(_EXCEPTION_POINTERS));
 
 			_EXCEPTION_POINTERS ptrs{};
@@ -262,11 +245,7 @@ void modules::register_ntoskrnl_ctx_ops(win_kernel_state& state, proc_module& mo
 			if (found.disposition != win::exception_execute_handler)
 				return found.disposition;
 
-			// Where the frame was taken goes back through the dispatcher
-			// context, which is what the caller acts on. A language handler
-			// does not move the cpu itself: real Windows leaves here through
-			// RtlUnwindEx, and moving it from inside a guest call would run the
-			// handler body in that call rather than returning from it.
+			// A language handler does not move the cpu; real Windows leaves through RtlUnwindEx.
 			dispatcher_context.field(&win::dispatcher_context64::target_ip)
 				.write(found.target_ip);
 			dispatcher_context.field(&win::dispatcher_context64::establisher_frame)

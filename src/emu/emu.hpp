@@ -26,10 +26,6 @@ public:
 	virtual void run() = 0;
 	virtual void stop() = 0;
 
-	// Ask the cpu to stop, from a thread other than the one running it. Unlike
-	// stop() this is a request: a backend whose cpu can only be stopped from
-	// its own thread takes it up there instead, and one that has nothing to
-	// stop drops it. A backend that can be stopped from anywhere just stops.
 	virtual void try_stop() { stop(); }
 	virtual void flush_tlb() = 0;
 
@@ -71,7 +67,6 @@ public:
 
 	[[nodiscard]] class emu* emu() const noexcept { return emu_; }
 
-	// Position in emu::cpus(), fixed when the cpu is added.
 	[[nodiscard]] std::size_t id() const noexcept { return id_; }
 
 	[[nodiscard]] std::shared_ptr<thread> thread() const noexcept { return thread_; }
@@ -213,12 +208,10 @@ public:
 	virtual hook_handle hook_exception(exception_hk_cb) = 0;
 	virtual void remove_hook(hook_handle handle) = 0;
 
-	// Run fn with no cpu executing guest code, for anything a cpu would trip
-	// over being changed underneath it.
+	// Run fn with no cpu executing guest code.
 	virtual void run_on_all(const std::function<void()>& fn) { fn(); }
 
-	// Always mapped rwx: the guest page tables decide access, and a narrower
-	// permission here would sit under them and refuse what they allow.
+	// Always mapped rwx so the guest page tables, not this, decide access.
 	virtual void map_phys_mem(addr_t addr, std::size_t size) = 0;
 	virtual void unmap_phys_mem(addr_t addr, std::size_t size, mem_prot prot) = 0;
 	virtual void read_phys_mem(addr_t addr, void* buf, std::size_t size) = 0;

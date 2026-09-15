@@ -38,11 +38,7 @@ inline std::string build_key(const pe::codeview_rsds& cv)
 	return std::format("{}{:X}", format_guid(cv.guid), cv.age);
 }
 
-// The name the symbol server knows the PDB by. What the PE carries is the path
-// it was built at -- always a Windows one, "d:\build\ntkrnlmp.pdb"
-// -- so the split is on both separators by hand. std::filesystem would do it
-// on Windows and hand back the whole string anywhere else, where a backslash
-// is an ordinary character.
+// The PE carries the Windows path it was built at, so the split is on both separators by hand.
 inline std::string pdb_file_name(const pe::codeview_rsds& cv)
 {
 	const std::string_view path = cv.pdb_path();

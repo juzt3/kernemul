@@ -16,8 +16,6 @@
 namespace
 {
 
-// THREADINFOCLASS and PROCESSINFOCLASS, the ones answerable from what the
-// kernel here actually keeps.
 enum thread_information_class : std::uint32_t
 {
 	thread_basic_information       = 0,
@@ -40,8 +38,7 @@ enum process_information_class : std::uint32_t
 	process_tls_information     = 35,
 };
 
-// PROCESS_TLS_INFORMATION, followed by one entry per thread, in the order the
-// kernel keeps them rather than named by id.
+// Followed by one entry per thread, in the order the kernel keeps them rather than named by id.
 #pragma pack(push, 8)
 struct process_tls_information_t
 {
@@ -59,7 +56,6 @@ struct thread_tls_information_t
 };
 #pragma pack(pop)
 
-// PROCESS_TLS_INFORMATION_TYPE.
 constexpr std::uint32_t process_tls_replace_index = 0;
 constexpr std::uint32_t process_tls_replace_vector = 1;
 
@@ -117,8 +113,6 @@ std::shared_ptr<win_thread> thread_from_handle(win_kernel_state& state, vcpu& cp
 	if (handle == current_thread_handle)
 		return std::dynamic_pointer_cast<win_thread>(cpu.thread());
 
-	// A thread handle names the ETHREAD, which is a registered object, so the
-	// thread it belongs to is found by matching it back.
 	const auto entry = state.sys_proc->handle_table().lookup_handle(handle);
 
 	if (!entry)
@@ -129,17 +123,10 @@ std::shared_ptr<win_thread> thread_from_handle(win_kernel_state& state, vcpu& cp
 
 }
 
-// The thread and process syscalls. Creating, ending and asking about a thread
-// all go through the same scheduler and the same ETHREAD the Ps* handlers use,
-// so a driver that mixes the two sees one thread rather than two views of one.
 void modules::register_ntoskrnl_task_ops(win_kernel_state& state, proc_module& mod)
 {
 	auto* st = &state;
 
-	// The flags a user-mode caller passes are about the process it is creating
-	// the thread in, and there is one process here. The attribute list names
-	// things -- a client id to fill in, a teb to hand back -- that a kernel
-	// caller does not use.
 	auto create_thread = [st](vcpu& cpu, emu_object<std::uint64_t> thread_handle,
 		const std::uint32_t desired_access,
 		[[maybe_unused]] emu_object<_OBJECT_ATTRIBUTES> object_attributes,
@@ -180,7 +167,6 @@ void modules::register_ntoskrnl_task_ops(win_kernel_state& state, proc_module& m
 		return STATUS_SUCCESS;
 	};
 
-	// A thread is opened by client id, which is the only name one has here.
 	auto open_thread = [st](vcpu&, emu_object<std::uint64_t> thread_handle,
 		const std::uint32_t desired_access,
 		[[maybe_unused]] emu_object<_OBJECT_ATTRIBUTES> object_attributes,
@@ -220,8 +206,6 @@ void modules::register_ntoskrnl_task_ops(win_kernel_state& state, proc_module& m
 		return STATUS_SUCCESS;
 	};
 
-	// Ending the calling thread does not return, which is why the status below
-	// is only reached when some other thread is named.
 	auto terminate_thread = [st](vcpu& cpu, const std::uint64_t thread_handle,
 		const NTSTATUS exit_status) -> NTSTATUS
 	{
@@ -248,8 +232,6 @@ void modules::register_ntoskrnl_task_ops(win_kernel_state& state, proc_module& m
 		return STATUS_SUCCESS;
 	};
 
-	// The interval is 100ns units, negative for a delay from now. This is
-	// KeDelayExecutionThread with the arguments in a different order.
 	auto delay_execution = [](vcpu& cpu, const bool alertable,
 		emu_object<std::int64_t> delay_interval) -> NTSTATUS
 	{
@@ -312,8 +294,7 @@ void modules::register_ntoskrnl_task_ops(win_kernel_state& state, proc_module& m
 			if (length < sizeof(kernel_user_times_t))
 				return STATUS_INFO_LENGTH_MISMATCH;
 
-			// Nothing accounts cpu time, so the only honest figure is the one
-			// that says none has been charged.
+			// Nothing accounts cpu time, so the only honest figure is that none has been charged.
 			kernel_user_times_t times{};
 			times.create_time = static_cast<std::int64_t>(win_system_time());
 
@@ -333,8 +314,6 @@ void modules::register_ntoskrnl_task_ops(win_kernel_state& state, proc_module& m
 			if (length < sizeof(std::uint32_t))
 				return STATUS_INFO_LENGTH_MISMATCH;
 
-			// Reachable only through a handle, and a terminated thread is off
-			// the process, so anything answerable here is still running.
 			emu_object<std::uint32_t>(space, thread_information).write(0);
 
 			THREAD_LOG_INFO("NtQueryInformationThread(tid={}, ThreadIsTerminated) -> false",
@@ -343,8 +322,6 @@ void modules::register_ntoskrnl_task_ops(win_kernel_state& state, proc_module& m
 			return STATUS_SUCCESS;
 		}
 
-		// A thread returning from its start routine asks this before deciding
-		// whether to end the process with itself.
 		case thread_am_i_last_thread:
 		{
 			if (return_length)
@@ -415,8 +392,6 @@ void modules::register_ntoskrnl_task_ops(win_kernel_state& state, proc_module& m
 			return STATUS_SUCCESS;
 		}
 
-		// Nothing debugs the guest, and a driver checking for a debugger is
-		// asking a question with a real answer: there is not one.
 		case process_debug_port:
 		case process_debug_object_handle:
 		{
@@ -451,8 +426,7 @@ void modules::register_ntoskrnl_task_ops(win_kernel_state& state, proc_module& m
 			return STATUS_SUCCESS;
 		}
 
-		// What RtlEncodePointer xors with. Any value will do, as long as it is
-		// the same every time.
+		// What RtlEncodePointer xors with: any value will do, as long as it is the same every time.
 		case process_cookie:
 		{
 			if (return_length)
@@ -476,9 +450,7 @@ void modules::register_ntoskrnl_task_ops(win_kernel_state& state, proc_module& m
 		}
 	};
 
-	// Nothing here acts on any of these -- there is no debugger to hide from
-	// and no quantum to reset -- so they are accepted and recorded in the log
-	// rather than changing anything.
+	// Nothing here acts on any of these, so they are recorded in the log rather than acted on.
 	auto set_thread = [st](vcpu& cpu, const std::uint64_t thread_handle,
 		const std::uint32_t thread_information_class, const addr_t thread_information,
 		const std::uint32_t length) -> NTSTATUS
@@ -538,8 +510,6 @@ void modules::register_ntoskrnl_task_ops(win_kernel_state& state, proc_module& m
 			if (!proc)
 				return STATUS_INVALID_HANDLE;
 
-			// Each entry says what the thread's vector becomes; the value it had
-			// goes back in the same entry for the loader to free.
 			std::uint32_t index = 0;
 
 			proc->for_each_thread([&](win_thread& other)
@@ -584,8 +554,7 @@ void modules::register_ntoskrnl_task_ops(win_kernel_state& state, proc_module& m
 		}
 	};
 
-	// The scheduler passes over a suspended thread, so suspending the calling
-	// one has to give the cpu up on the way out.
+	// The scheduler passes over a suspended thread, so suspending the calling one gives the cpu up.
 	auto suspend_thread = [st](vcpu& cpu, const std::uint64_t thread_handle,
 		emu_object<std::uint32_t> previous_count) -> NTSTATUS
 	{
@@ -636,8 +605,6 @@ void modules::register_ntoskrnl_task_ops(win_kernel_state& state, proc_module& m
 		return STATUS_SUCCESS;
 	};
 
-	// The alert is aimed at the thread rather than at the address the waiter
-	// passes, so the wait names no object and only an alert or a timeout ends it.
 	auto alert_thread = [st](vcpu& cpu, const std::uint64_t thread_id) -> NTSTATUS
 	{
 		const auto t = std::dynamic_pointer_cast<win_thread>(
@@ -686,7 +653,6 @@ void modules::register_ntoskrnl_task_ops(win_kernel_state& state, proc_module& m
 		return STATUS_SUCCESS;
 	};
 
-	// The status a thread that has not impersonated anyone gets on real Windows.
 	auto open_thread_token = [](vcpu&, const std::uint64_t thread_handle,
 		const std::uint32_t desired_access, const bool open_as_self,
 		emu_object<std::uint64_t> token_handle) -> NTSTATUS
@@ -709,7 +675,6 @@ void modules::register_ntoskrnl_task_ops(win_kernel_state& state, proc_module& m
 			std::move(token_handle));
 	};
 
-	// Ends the thread asking too, so it does not return.
 	auto terminate_process = [st](vcpu& cpu, const std::uint64_t process_handle,
 		const NTSTATUS exit_status) -> NTSTATUS
 	{
@@ -745,7 +710,6 @@ void modules::register_ntoskrnl_task_ops(win_kernel_state& state, proc_module& m
 		return STATUS_SUCCESS;
 	};
 
-	// One group, and the cpu the caller is on is the one it is asking about.
 	state.redirect_ntzw(mod, "GetCurrentProcessorNumber", [](vcpu& cpu) -> std::uint32_t
 	{
 		const auto id = static_cast<std::uint32_t>(cpu.id());

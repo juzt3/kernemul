@@ -12,8 +12,7 @@ struct win_kernel_state;
 class windows_emulator;
 class win_thread;
 
-// The stub a thread's start routine returns to. ntdll exports its one;
-// ntoskrnl's is internal, so that one needs the ntoskrnl PDB.
+// ntdll exports its one; ntoskrnl's is internal, so that one needs the ntoskrnl PDB.
 constexpr std::string_view kernel_thread_startup = "PspSystemThreadStartup";
 constexpr std::string_view user_thread_startup   = "RtlUserThreadStart";
 
@@ -34,18 +33,12 @@ public:
 		std::span<const std::uint64_t> args = {}) override;
 	void terminate_thread(thread_id_type id) override;
 
-	// The thread the ETHREAD belongs to, which is what a thread handle names.
 	[[nodiscard]] std::shared_ptr<win_thread> find_ethread(
 		const emu_object<_ETHREAD>& ethread) const;
 
-	// Every windows thread of this process, for the things that have to look at
-	// all of them: waking waiters, and finding one by its ETHREAD.
 	void for_each_thread(const std::function<void(win_thread&)>& fn) const;
 
-	// Hands `object` to whichever of this process's threads are parked on it
-	// and can take it. Called by whoever signalled the object, because deciding
-	// a wait means reading the objects and the scheduler is in no position to
-	// do that -- it only notices that the answer is in.
+	// Called by whoever signalled the object; the scheduler only notices that the answer is in.
 	void wake_waiters(struct addr_space& space, addr_t object) const;
 
 	win_handle_table& handle_table() { return handle_table_; }
@@ -54,25 +47,18 @@ public:
 
 	void set_emulator(windows_emulator* e) { emulator_ = e; }
 
-	// The guest's own view of this process, and the anchor for its thread
-	// lists. Unset when the guest has no view of it -- without ntoskrnl's
-	// symbols there is no list to put it on.
+	// Unset when the guest has no view of it -- without ntoskrnl's symbols there is no list.
 	void set_eprocess(emu_object<_EPROCESS> ep) { eprocess_ = std::move(ep); }
 	[[nodiscard]] const emu_object<_EPROCESS>& eprocess() const { return eprocess_; }
 
 protected:
-	// Where a module is looked for when the process has nowhere of its own.
 	[[nodiscard]] std::shared_ptr<win_file> open_system_image(std::string_view name) const;
 
 	// 0 if the module is not mapped or has no such symbol, logging either way.
 	addr_t find_symbol(std::string_view mod_name, std::string_view sym) const;
 
-	// Gives the thread the guest-side half of itself and links it into this
-	// process's thread lists. Both create_thread paths call it once the thread
-	// has the stack and TEB the ETHREAD describes.
 	void setup_ethread(const std::shared_ptr<win_thread>& t, addr_t start_addr);
 
-	// The other end: off the lists, and stamped with when it stopped.
 	void destroy_ethread(const win_thread& t);
 
 	win_obj_manager& objs_;
@@ -123,8 +109,7 @@ public:
 		peb.GdiSharedHandleTable = mem_.alloc(0x1000, prot_rw);
 		peb_.write(peb);
 
-		// A thread starts in ntdll's loader, so without it there is nothing to
-		// start. Last, because mapping writes the loader list set up above.
+		// Last, because mapping writes the loader list set up above.
 		if (!win_user_proc::load_module(ntdll_name, false))
 			LOG_ERR("{} is not in the guest filesystem", ntdll_name);
 	}
@@ -145,15 +130,11 @@ public:
 	std::shared_ptr<thread> create_thread(vcpu& cpu, addr_t start_addr,
 		std::span<const std::uint64_t> args = {}) override;
 
-	// The loader reads the image's PE headers through this; creating the
-	// process heap needs the subsystem version out of them.
 	void set_image_base(const addr_t base)
 	{
 		peb_.field(&_PEB64::ImageBaseAddress).write(base);
 	}
 
-	// Where GetStdHandle reads from, and with it everything the crt writes
-	// through: a process handed none of these prints into nowhere.
 	void set_std_handles(const win_handle_table::handle_t in,
 		const win_handle_table::handle_t out, const win_handle_table::handle_t err)
 	{

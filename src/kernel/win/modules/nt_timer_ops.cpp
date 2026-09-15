@@ -18,10 +18,7 @@ constexpr std::uint8_t medium_importance = 1;
 
 }
 
-// Deferred procedure calls and the timers that queue them. A DPC runs: it is
-// started on a thread of its own, which is the closest thing here to the
-// dispatch level the real one runs at. A timer does not -- nothing walks a
-// timer list -- so a timer records what it was told and says so.
+// A DPC is started on a thread of its own; nothing walks a timer list, so a timer only records.
 void modules::register_ntoskrnl_timer_ops(win_kernel_state& state, proc_module& mod)
 {
 	auto* st = &state;
@@ -45,10 +42,6 @@ void modules::register_ntoskrnl_timer_ops(win_kernel_state& state, proc_module& 
 				dpc.address(), deferred_routine, deferred_context);
 		});
 
-	// The real one queues the DPC and runs it when the processor next drops to
-	// dispatch level. It runs on a thread of its own here instead, so it runs
-	// alongside the caller rather than after it -- a driver relying on the
-	// serialisation a real DPC queue gives would notice.
 	state.redirect(mod, "KeInsertQueueDpc",
 		[st](vcpu& cpu, emu_object<_KDPC> dpc, const addr_t system_argument1,
 			const addr_t system_argument2) -> bool
@@ -66,8 +59,6 @@ void modules::register_ntoskrnl_timer_ops(win_kernel_state& state, proc_module& 
 				return false;
 			}
 
-			// DpcData is what the real one tests to find out whether the object
-			// is already on a queue, and what it clears when the DPC runs.
 			if (guest_va(entry.DpcData))
 			{
 				THREAD_LOG_INFO("KeInsertQueueDpc(0x{:X}): already queued", dpc.address());
@@ -79,8 +70,6 @@ void modules::register_ntoskrnl_timer_ops(win_kernel_state& state, proc_module& 
 			entry.DpcData = guest_ptr<void>(dpc.address());
 			dpc.write(entry);
 
-			// A deferred routine is called with the DPC itself, the context it
-			// was initialised with and the two arguments it was queued with.
 			const std::uint64_t args[] = {
 				dpc.address(),
 				guest_va(entry.DeferredContext),
@@ -96,16 +85,12 @@ void modules::register_ntoskrnl_timer_ops(win_kernel_state& state, proc_module& 
 			return true;
 		});
 
-	// Nothing sits on a queue waiting to be drained -- an inserted DPC is
-	// already running on its own thread -- so there is nothing to wait for.
+	// Nothing sits on a queue waiting to be drained, so there is nothing to wait for.
 	state.redirect(mod, "KeFlushQueuedDpcs", [](vcpu&)
 	{
 		THREAD_LOG_INFO("KeFlushQueuedDpcs(): a DPC runs when it is inserted, so none are queued");
 	});
 
-	// A notification timer stays signalled once it fires and a synchronization
-	// timer is taken by one waiter; nothing fires either, but the type is what a
-	// driver reads back out of the header.
 	state.redirect(mod, "KeInitializeTimer", [](vcpu&, emu_object<_KTIMER> timer)
 	{
 		if (!timer)
@@ -120,9 +105,6 @@ void modules::register_ntoskrnl_timer_ops(win_kernel_state& state, proc_module& 
 		THREAD_LOG_INFO("KeInitializeTimer(0x{:X})", timer.address());
 	});
 
-	// The due time is negative for an interval and positive for an absolute
-	// time, which is the one thing worth reporting about a timer that will not
-	// go off.
 	state.redirect(mod, "KeSetTimer",
 		[](vcpu&, emu_object<_KTIMER> timer, const std::int64_t due_time,
 			emu_object<_KDPC> dpc) -> bool
@@ -133,8 +115,6 @@ void modules::register_ntoskrnl_timer_ops(win_kernel_state& state, proc_module& 
 			auto entry = timer.read();
 			const bool was_set = entry.DueTime.QuadPart != 0;
 
-			// A negative due time is an interval from now; the timer list holds
-			// absolute times, so that is what DueTime ends up holding.
 			const auto absolute = due_time < 0
 				? win_system_time() + static_cast<std::uint64_t>(-due_time)
 				: static_cast<std::uint64_t>(due_time);
@@ -174,8 +154,7 @@ void modules::register_ntoskrnl_timer_ops(win_kernel_state& state, proc_module& 
 		return was_set;
 	});
 
-	// Never signalled, because nothing fires a timer. A driver polling this
-	// instead of waiting sees the same answer the wait would have given it.
+	// Never signalled, because nothing fires a timer.
 	state.redirect(mod, "KeReadStateTimer", [](vcpu&, emu_object<_KTIMER> timer) -> bool
 	{
 		if (!timer)
@@ -189,8 +168,6 @@ void modules::register_ntoskrnl_timer_ops(win_kernel_state& state, proc_module& 
 		return signalled;
 	});
 
-	// The body is a real KTIMER, so a wait on the handle reads the same state a
-	// wait on the object would -- which, as above, nothing ever moves.
 	state.redirect_ntzw(mod, "CreateTimer2",
 		[st](vcpu& cpu, emu_object<std::uint64_t> timer_handle,
 			[[maybe_unused]] const addr_t reserved1, [[maybe_unused]] const addr_t reserved2,

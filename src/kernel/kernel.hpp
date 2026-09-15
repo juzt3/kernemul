@@ -37,8 +37,6 @@ public:
 			if (handle_exception(cpu, ex))
 				return true;
 
-			// Only the trap path reaches this: callers that merely ask whether
-			// an exception would be handled go through handle_exception.
 			const auto t = cpu.thread();
 
 			LOG_ERR("unhandled {} on cpu {}: nothing anywhere claimed it, so the "
@@ -70,7 +68,6 @@ public:
 	virtual std::shared_ptr<vcpu> add_vcpu() = 0;
 	virtual std::shared_ptr<thread> create_kernel_thread(vcpu& cpu, addr_t start_addr) = 0;
 
-	// The machine's cpus. Each needs a host thread of its own to run anything.
 	virtual void create_vcpus(const std::size_t count)
 	{
 		for (std::size_t i = 0; i < count; ++i)
@@ -82,13 +79,9 @@ public:
 		return emu_->cpus();
 	}
 
-	// How long a thread may hold a cpu before it is made to give it up.
 	static constexpr auto default_thread_runtime = std::chrono::milliseconds(300);
 
-	// Give every cpu a host thread of its own and let the scheduler spread the
-	// guest's threads over them. This thread has nothing to do but wait for
-	// them, so it keeps time: once a thread has had its run it asks the cpu to
-	// reschedule, or a thread that never returns would own its cpu forever.
+	// A thread that never returns would own its cpu forever, so the waiting thread keeps time.
 	void run_all(const std::chrono::milliseconds runtime = default_thread_runtime)
 	{
 		std::atomic<std::size_t> live{cpus().size()};
@@ -99,9 +92,6 @@ public:
 		{
 			hosts.emplace_back([this, cpu, &live]
 			{
-				// This host thread drives this one cpu for as long as it runs,
-				// which is what lets a handler say where it is running without
-				// being handed the cpu to say it with.
 				set_log_cpu(cpu.get());
 
 				scheduler_.run(*cpu);
@@ -140,9 +130,7 @@ struct kernel_state
 		return it != processes.end() ? it->second : nullptr;
 	}
 
-	// Thread ids are handed out machine wide rather than per process, so the
-	// process a thread belongs to is not something a caller holding only an id
-	// can know -- which is why this searches all of them.
+	// Thread ids are handed out machine wide rather than per process, so this searches all of them.
 	std::shared_ptr<thread> find_thread(const process::thread_id_type id)
 	{
 		std::shared_lock lock(proc_mtx_);
@@ -168,8 +156,6 @@ struct kernel_state
 		return mod;
 	}
 
-	// What to call an address in a module: its symbol if the module brought one,
-	// and an offset if it did not.
 	static std::string name_at(const proc_module& mod, const addr_t addr)
 	{
 		if (const auto sym = mod.symbols.resolve(addr))
@@ -191,11 +177,7 @@ struct kernel_state
 
 				if (it != redirections->end())
 				{
-					// A handler reaches into guest memory on the guest's word,
-					// and a driver that got a pointer wrong is a thing to
-					// report rather than to die of. The throw would otherwise
-					// unwind through the emulator's own C frames, which is not
-					// something it can be asked to survive.
+					// The throw would otherwise unwind through the emulator's own C frames.
 					try
 					{
 						it->second(cpu);
@@ -206,15 +188,7 @@ struct kernel_state
 							name_at(*m, addr), e.what());
 					}
 
-					// A handler that has not finished -- a wait whose object
-					// is not signalled yet -- asks to be entered again. The pc
-					// is put back on the function rather than left there:
-					// stopping the cpu moves it on some architectures. The
-					// stack is untouched, because ret_addr is what consumes the
-					// return address on the ones that push it.
-					// Either way the thread leaves the function: the result is
-					// whatever the handler had written before it faulted, but a
-					// pc left where it was would land here again for ever.
+					// Stopping the cpu moves the pc on some architectures, so it is put back.
 					if (cpu.pc() == addr)
 						cpu.set_pc(a->ret_addr(cpu));
 
@@ -223,8 +197,7 @@ struct kernel_state
 
 				THREAD_LOG_ERR("unimplemented function {}!{}", m->name, name_at(*m, addr));
 
-				// There is nothing to go on to, so the thread ends here. Left
-				// running it would be rescheduled onto this address forever.
+				// Left running, the thread would be rescheduled onto this address forever.
 				if (const auto t = cpu.thread())
 					t->finish();
 
@@ -232,8 +205,6 @@ struct kernel_state
 			});
 	}
 
-	// Whether the symbol was there, without saying anything about it: the
-	// syscall pairing below binds two names knowing one of them may not exist.
 	bool try_redirect(proc_module& mod, const std::string_view name, redirect_fn fn)
 	{
 		const auto addr = mod.find_symbol(name);

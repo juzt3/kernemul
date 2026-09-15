@@ -19,10 +19,7 @@ struct proc_module
 {
 	std::string name;
 
-	// What find_module matches on: name folded to lower case. A PE import
-	// descriptor names its module in whatever case the linker felt like --
-	// FLTMGR.SYS is as common as fltmgr.sys -- and Windows resolves imports
-	// case-insensitively, so the emulator has to as well.
+	// Windows resolves imports case-insensitively -- FLTMGR.SYS is as common as fltmgr.sys.
 	std::string lookup_name;
 	addr_t addr;
 	std::uint32_t size;
@@ -46,10 +43,7 @@ struct proc_module
 		return it->second;
 	}
 
-	// The only way to reach an export that carries no name -- ntdll has one,
-	// and kernelbase imports it. An ordinal is the function table's own index
-	// counted from the directory's base, so this is a bounds check and a read
-	// rather than anything the module has to be walked for.
+	// An ordinal is the function table's index counted from the directory's base.
 	[[nodiscard]] std::optional<addr_t> find_ordinal(const std::uint32_t ordinal) const
 	{
 		const auto* const img = pe();
@@ -72,19 +66,13 @@ struct proc_module
 		const auto rva = reinterpret_cast<const std::uint32_t*>(
 			bytes + exp->address_of_functions)[ordinal - exp->base];
 
-		// Inside the directory it is a forwarder string rather than code, and
-		// an unused slot is zero.
+		// An rva inside the export directory is a forwarder, not code; an unused slot is zero.
 		if (!rva || (rva >= dir.virtual_address && rva < dir.virtual_address + dir.size))
 			return std::nullopt;
 
 		return addr + rva;
 	}
 
-	// What an export names instead of pointing at code, as text like
-	// "NTDLL.RtlAllocateHeap". Kept out of the exports so that nothing reads a
-	// forwarder's rva as an address -- it points into the export directory, at
-	// the name -- and looked up here rather than stored, because the only
-	// caller is the one an export lookup has already missed for.
 	[[nodiscard]] std::string_view find_forward(const std::string_view exp_name) const
 	{
 		const auto* const img = pe();
@@ -138,14 +126,9 @@ public:
 	[[nodiscard]] std::shared_ptr<proc_module> find_module(std::string_view name) const;
 	[[nodiscard]] std::shared_ptr<proc_module> find_module_by_addr(addr_t addr) const;
 
-	// A module an image imports from and this process does not have yet. The
-	// base process has nowhere to look; the windows ones have a filesystem.
 	virtual std::shared_ptr<proc_module> load_module(std::string_view, bool) { return nullptr; }
 
-	// What a module an image names is really called. Only windows user
-	// processes have an answer of their own -- api-ms-* and ext-ms-* are names
-	// of contracts rather than of files, and the schema says which file keeps
-	// each one, sometimes differently depending on who is asking.
+	// api-ms-* and ext-ms-* name contracts, not files; the schema says which file keeps each.
 	[[nodiscard]] virtual std::string resolve_module_name(const std::string_view name,
 		std::string_view /*importer*/) const
 	{
@@ -157,15 +140,11 @@ public:
 
 	void set_scheduler(thread_scheduler* s) { scheduler_ = s; }
 
-	// The arguments go in before the thread is queued: a thread is runnable the
-	// moment it is on the queue, and another cpu will start it. Setting them
-	// afterwards is a race against a thread that may already be running.
+	// Arguments go in before queueing: queued is runnable, and another cpu will start it.
 	virtual std::shared_ptr<thread> create_thread(vcpu& cpu, addr_t start_addr,
 		std::span<const std::uint64_t> args = {});
 
-	// The start stub a thread's start routine returns to. Windows starts a
-	// thread inside one of these and it ends the thread when the routine
-	// returns; reaching it is how the emulator sees the same thing.
+	// Windows starts a thread inside one of these and it ends the thread when the routine returns.
 	[[nodiscard]] virtual addr_t thread_exit_addr() const { return 0; }
 	virtual void terminate_thread(thread_id_type id);
 	[[nodiscard]] std::shared_ptr<thread> find_thread(thread_id_type id) const;
@@ -174,8 +153,6 @@ public:
 
 protected:
 	id_type id_;
-	// Read on every symbol lookup and every fault, written only when a module
-	// is mapped.
 	mutable std::shared_mutex modules_mtx_;
 	std::unordered_map<std::string_view, std::shared_ptr<proc_module>> modules_;
 	std::shared_ptr<struct addr_space> addr_space_;

@@ -31,8 +31,7 @@ namespace arm64
 
 		std::unordered_map<addr_t, std::shared_ptr<::addr_space>> spaces_;
 
-		// The level 0 table of the first address space, which is the kernel's.
-		// Every later space copies its upper half -- see create_addr_space.
+		// The first address space level 0 table; every later space copies its upper half.
 		addr_t kernel_ttbr_pa_ = 0;
 
 		static addr_space& as_arm64(::addr_space& space);
@@ -46,7 +45,6 @@ namespace arm64
 		void map_page(addr_space& space, addr_t va, addr_t pa, mem_prot prot);
 		void unmap_page(addr_space& space, addr_t va);
 
-		// Returns the physical address of the level 3 table for va, or 0.
 		addr_t walk_to_l3(const addr_space& space, addr_t va);
 
 		void copy_virt(const addr_space& space, addr_t va, void* buf, std::size_t size, bool write);

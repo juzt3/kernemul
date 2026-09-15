@@ -1,10 +1,5 @@
 #pragma once
-// Windows Hypervisor Platform backend: the guest runs on the host cpu in a
-// Hyper-V partition rather than being interpreted. x86-64 and Windows only,
-// and one cpu only -- hypermulator's hook and step state is per partition, so
-// a second cpu stepping over a hooked access would unprotect the pages under
-// the first. Code, block and memory hooks are physically addressed, so the
-// virtual range is translated once when the hook is installed.
+// x86-64, Windows and one cpu only: hypermulator's hook and step state is per partition.
 #if defined(KERNEMUL_HAS_WHP)
 #include "../emu.hpp"
 #include "arch.hpp"
@@ -56,7 +51,6 @@ public:
 
 	[[nodiscard]] hm::emu& native() const noexcept { return *hm_; }
 
-	// The cpu a hook callback reports. There is only ever the one.
 	[[nodiscard]] vcpu* hook_cpu() const;
 
 protected:
@@ -70,8 +64,7 @@ private:
 		addr_t begin, end;
 	};
 
-	// The physical runs a virtual range maps to, end exclusive. Contiguous
-	// pages coalesce, so a range from one map_virt costs one native hook.
+	// The physical runs a virtual range maps to, end exclusive; contiguous pages coalesce.
 	[[nodiscard]] std::vector<phys_run> phys_runs(addr_t start_addr, addr_t end_addr);
 
 	hook_handle add_hook(std::unique_ptr<whp_hook> hook);

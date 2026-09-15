@@ -13,8 +13,6 @@
 namespace
 {
 
-// A directory and a symbolic link are both reached only by handle, so their
-// bodies are opaque and what they hold lives here.
 constexpr std::size_t namespace_object_body_size = 0x10;
 
 struct directory_host final : win_object {};
@@ -24,9 +22,7 @@ struct symbolic_link_host final : win_object
 	std::string target;
 };
 
-// OB_CALLBACK_REGISTRATION and OB_OPERATION_REGISTRATION are WDK types the
-// kernel does not store, so they are not in the PDB. Both are the same on each
-// architecture: every member is pointer sized or smaller and naturally aligned.
+// WDK types the kernel does not store, so not in the PDB; both are the same on each architecture.
 #pragma pack(push, 8)
 struct ob_callback_registration_t
 {
@@ -109,11 +105,7 @@ void modules::register_ntoskrnl_object_ops(win_kernel_state& state, proc_module&
 
 	state.redirect_ntzw(mod, "Close", close_fn);
 
-	// An object callback is told before and after a handle is opened or
-	// duplicated. Nothing here opens a handle through the object manager path
-	// that would notify one, so a driver filtering handle access sees none of
-	// the traffic these handlers make -- which is the whole point of registering
-	// one, so this is a warning rather than a note.
+	// Nothing here opens a handle down the path that would notify one, so a filter sees no traffic.
 	state.redirect(mod, "ObRegisterCallbacks",
 		[&objs = state.objs](vcpu& cpu, emu_object<void> callback_registration,
 			emu_object<addr_t> registration_handle) -> NTSTATUS
@@ -133,9 +125,6 @@ void modules::register_ntoskrnl_object_ops(win_kernel_state& state, proc_module&
 			THREAD_LOG_INFO("ObRegisterCallbacks(version={}, altitude='{}', {} operation(s))",
 				reg.version, altitude, reg.operation_count);
 
-			// Which object types a filter wants, and what it would be called
-			// with. Reported because it is the whole of what the registration
-			// says, and none of it is ever acted on.
 			for (std::uint16_t i = 0; i < reg.operation_count; ++i)
 			{
 				const emu_object<ob_operation_registration_t> op(space,
@@ -172,10 +161,7 @@ void modules::register_ntoskrnl_object_ops(win_kernel_state& state, proc_module&
 		THREAD_LOG_INFO("ObUnRegisterCallbacks(0x{:X})", registration_handle);
 	});
 
-	// An object type is a global ntoskrnl points at -- PsThreadType,
-	// IoFileObjectType and the rest -- so the answer is the value of whichever
-	// of those globals matches the kind of object this is. Nothing here builds
-	// a type index table, so the kind comes from the host object instead.
+	// Nothing here builds a type index table, so the kind comes from the host object instead.
 	state.redirect(mod, "ObGetObjectType",
 		[st = &state, m = &mod](vcpu& cpu, const addr_t object) -> addr_t
 		{
@@ -210,9 +196,6 @@ void modules::register_ntoskrnl_object_ops(win_kernel_state& state, proc_module&
 			return type;
 		});
 
-	// A handle onto an object the caller already holds a pointer to. The object
-	// manager here has no type to check the pointer against, so what it can
-	// check is that the address really is one of its objects.
 	state.redirect(mod, "ObOpenObjectByPointer",
 		[st = &state](vcpu&, const addr_t object, const std::uint32_t handle_attributes,
 			const addr_t passed_access_state, const std::uint32_t desired_access,
@@ -222,9 +205,6 @@ void modules::register_ntoskrnl_object_ops(win_kernel_state& state, proc_module&
 			if (!handle)
 				return STATUS_INVALID_PARAMETER;
 
-			// Not checked against the object manager: a driver reaches this with
-			// a pointer it got from anywhere -- an EPROCESS, a file object the
-			// io manager made -- and only some of those were created here.
 			st->objs.reference_object(object);
 			const auto value = st->sys_proc->handle_table().create_handle(object, desired_access);
 
@@ -238,9 +218,7 @@ void modules::register_ntoskrnl_object_ops(win_kernel_state& state, proc_module&
 			return STATUS_SUCCESS;
 		});
 
-	// The handle table of a process, which every process here shares: there is
-	// one table, hanging off the system process. The address is what
-	// ObDereferenceProcessHandleTable is given back.
+	// There is one handle table, hanging off the system process, and every process here shares it.
 	state.redirect(mod, "ObReferenceProcessHandleTable",
 		[](vcpu&, emu_object<_EPROCESS> process) -> addr_t
 		{
@@ -253,9 +231,7 @@ void modules::register_ntoskrnl_object_ops(win_kernel_state& state, proc_module&
 			return table;
 		});
 
-	// Walking a handle table means calling the caller back once per handle, and
-	// nothing here calls back into the guest. Returning null says the walk
-	// finished without a match, which is what a caller searching for one reads.
+	// Nothing here calls back into the guest, so null says the walk finished without a match.
 	state.redirect(mod, "ExEnumHandleTable",
 		[](vcpu&, const addr_t handle_table, const addr_t callback, const addr_t context,
 			emu_object<std::uint64_t> handle) -> bool
@@ -270,9 +246,7 @@ void modules::register_ntoskrnl_object_ops(win_kernel_state& state, proc_module&
 			return false;
 		});
 
-	// Nothing builds the directories these names would hang off, so opening one
-	// makes it: the handle is a real handle to a real object, and a caller that
-	// enumerates it finds it empty rather than finding the open refused.
+	// Nothing builds the directories these names would hang off, so opening one makes it.
 	auto attribute_name = [](vcpu& cpu, const emu_object<_OBJECT_ATTRIBUTES>& object_attributes)
 	{
 		auto& space = *cpu.curr_addr_space();
@@ -325,8 +299,6 @@ void modules::register_ntoskrnl_object_ops(win_kernel_state& state, proc_module&
 			return STATUS_SUCCESS;
 		});
 
-	// A link opened here is made the same way, and points where the loader
-	// expects the one it actually asks for -- KnownDllPath -- to point.
 	state.redirect_ntzw(mod, "OpenSymbolicLinkObject",
 		[attribute_name, open_namespace_object](vcpu& cpu, emu_object<std::uint64_t> link_handle,
 			const std::uint32_t desired_access,

@@ -14,15 +14,12 @@
 namespace
 {
 
-// SYSTEM_INFORMATION_CLASS, the two answerable from what the emulator knows
-// about itself.
 enum system_information_class : std::uint32_t
 {
 	system_basic_information        = 0,
 	system_time_of_day_information  = 3,
 	system_numa_processor_map       = 55,
 
-	// Ex form only: the relationship asked about is the input buffer.
 	system_logical_processor_and_group_information = 107,
 
 	// Nothing is emulated here, so this is the basic information verbatim.
@@ -45,7 +42,6 @@ struct system_basic_information_t
 	std::int8_t   number_of_processors;
 };
 
-// GROUP_AFFINITY.
 struct group_affinity_t
 {
 	std::uint64_t mask;
@@ -53,7 +49,6 @@ struct group_affinity_t
 	std::uint16_t reserved[3];
 };
 
-// LOGICAL_PROCESSOR_RELATIONSHIP, the values the input buffer can name.
 enum processor_relationship : std::uint32_t
 {
 	relation_processor_core    = 0,
@@ -67,8 +62,6 @@ enum processor_relationship : std::uint32_t
 	relation_all               = 0xFFFF,
 };
 
-// NUMA_NODE_RELATIONSHIP. One node, every processor in it, which is the same
-// machine SystemNumaProcessorMap describes.
 struct numa_node_relationship_t
 {
 	std::uint32_t    node_number;
@@ -77,7 +70,6 @@ struct numa_node_relationship_t
 	group_affinity_t group_mask[1];
 };
 
-// PROCESSOR_RELATIONSHIP. One GROUP_AFFINITY: one group, one processor in it.
 struct processor_relationship_t
 {
 	std::uint8_t     flags;
@@ -87,7 +79,6 @@ struct processor_relationship_t
 	group_affinity_t group_mask[1];
 };
 
-// PROCESSOR_GROUP_INFO.
 struct processor_group_info_t
 {
 	std::uint8_t  maximum_processor_count;
@@ -96,7 +87,6 @@ struct processor_group_info_t
 	std::uint64_t active_processor_mask;
 };
 
-// GROUP_RELATIONSHIP, cut to the one group this machine has.
 struct group_relationship_t
 {
 	std::uint16_t          maximum_group_count;
@@ -105,8 +95,7 @@ struct group_relationship_t
 	processor_group_info_t group_info[1];
 };
 
-// SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX. Size is this entry's own length --
-// what a caller steps by, rather than the size of the widest member.
+// Size is this entry's own length, what a caller steps by, not the size of the widest member.
 struct system_logical_processor_information_ex_t
 {
 	std::uint32_t relationship;
@@ -122,7 +111,6 @@ struct system_logical_processor_information_ex_t
 constexpr std::size_t logical_processor_header = offsetof(
 	system_logical_processor_information_ex_t, processor);
 
-// SYSTEM_NUMA_INFORMATION, cut to the one node this machine has.
 struct system_numa_information_t
 {
 	std::uint32_t   highest_node_number;
@@ -142,21 +130,16 @@ struct system_time_of_day_information_t
 };
 #pragma pack(pop)
 
-// The allocation granularity every Windows has had, and the clock tick the
-// KeQueryTimeIncrement handler already reports.
+// The granularity every Windows has had, and the clock tick KeQueryTimeIncrement reports.
 constexpr std::uint32_t allocation_granularity = 0x10000;
 constexpr std::uint32_t clock_increment_100ns = 156250;
 
-// LANGID 0x0409, en-US: the one the guest is set up as everywhere else.
 constexpr std::uint32_t langid_en_us = 0x0409;
 
-// The same pseudo-handle the task handlers use for the process itself.
 constexpr std::uint64_t current_process_handle = ~std::uint64_t{0};
 
 }
 
-// What the guest asks the system about itself, and the handle operations that
-// are not tied to any one kind of object.
 void modules::register_ntoskrnl_sysinfo_ops(win_kernel_state& state, proc_module& mod)
 {
 	auto* st = &state;
@@ -175,8 +158,6 @@ void modules::register_ntoskrnl_sysinfo_ops(win_kernel_state& state, proc_module
 			return STATUS_SUCCESS;
 		});
 
-	// The same steady clock KeQueryPerformanceCounter reads, so the two agree
-	// about how much time passed between them.
 	state.redirect_ntzw(mod, "QueryPerformanceCounter",
 		[](vcpu&, emu_object<std::int64_t> performance_counter,
 			emu_object<std::int64_t> performance_frequency) -> NTSTATUS
@@ -292,10 +273,7 @@ void modules::register_ntoskrnl_sysinfo_ops(win_kernel_state& state, proc_module
 		}
 	};
 
-	// The processor topology. ntdll treats a failure here as fatal the way it
-	// does the NUMA map above: LdrpInitializeProcess asks on its way up, and a
-	// loader that cannot learn the group layout never reaches the entry point.
-	// One group, every processor its own core, no SMT.
+	// LdrpInitializeProcess asks on its way up, and a loader that cannot learn the layout stops.
 	auto query_processor_topology = [](vcpu& cpu, const addr_t input_buffer,
 		const std::uint32_t input_buffer_length, const addr_t system_information,
 		const std::uint32_t length, emu_object<std::uint32_t> return_length) -> NTSTATUS
@@ -332,7 +310,6 @@ void modules::register_ntoskrnl_sysinfo_ops(win_kernel_state& state, proc_module
 				add(relation_processor_core, sizeof(processor_relationship_t),
 					[i](auto& entry)
 					{
-						// Flags is LTP_PC_SMT, and nothing here is threaded.
 						entry.processor.flags = 0;
 						entry.processor.efficiency_class = 0;
 						entry.processor.group_count = 1;
@@ -342,9 +319,6 @@ void modules::register_ntoskrnl_sysinfo_ops(win_kernel_state& state, proc_module
 			}
 		}
 
-		// The Ex spelling asks for the same node, only saying the caller can read
-		// a group array longer than one. Both are answered: a caller told there
-		// are no nodes sizes whatever it indexes by node number to nothing.
 		if (wanted == relation_numa_node || wanted == relation_numa_node_ex
 			|| wanted == relation_all)
 		{
@@ -376,8 +350,6 @@ void modules::register_ntoskrnl_sysinfo_ops(win_kernel_state& state, proc_module
 				});
 		}
 
-		// A relationship this does not model. Saying so beats an empty list,
-		// which reads as "none of those exist" and is then relied on.
 		if (answer.empty())
 		{
 			THREAD_LOG_WARN("NtQuerySystemInformationEx(SystemLogicalProcessorAndGroup"
@@ -390,7 +362,6 @@ void modules::register_ntoskrnl_sysinfo_ops(win_kernel_state& state, proc_module
 		if (return_length)
 			return_length.write(static_cast<std::uint32_t>(answer.size()));
 
-		// How the caller sizes the buffer, not a failure.
 		if (length < answer.size())
 			return STATUS_INFO_LENGTH_MISMATCH;
 
@@ -403,9 +374,6 @@ void modules::register_ntoskrnl_sysinfo_ops(win_kernel_state& state, proc_module
 		return STATUS_SUCCESS;
 	};
 
-	// The Ex form takes an input buffer naming which processor group or handle
-	// the question is about. There is one group, so for the classes the plain
-	// form also answers, the input is only reported.
 	auto query_system_information_ex = [query_system_information, query_processor_topology](
 		vcpu& cpu, const std::uint32_t system_information_class, const addr_t input_buffer,
 		const std::uint32_t input_buffer_length, const addr_t system_information,
@@ -457,8 +425,7 @@ void modules::register_ntoskrnl_sysinfo_ops(win_kernel_state& state, proc_module
 			return query_langid(cpu, install_ui_language, "NtQueryInstallUILanguage");
 		});
 
-	// Nothing here sleeps or dims a display, so the request is recorded and the
-	// previous state handed back is the one nothing ever changed it from.
+	// Nothing here sleeps or dims a display, so the previous state is the one nothing changed.
 	state.redirect_ntzw(mod, "SetThreadExecutionState",
 		[](vcpu&, const std::uint32_t new_flags,
 			emu_object<std::uint32_t> previous_flags) -> NTSTATUS
@@ -473,8 +440,7 @@ void modules::register_ntoskrnl_sysinfo_ops(win_kernel_state& state, proc_module
 			return STATUS_SUCCESS;
 		});
 
-	// The emulator fetches from the same memory the guest writes, so an icache
-	// that could go stale does not exist and there is nothing to flush.
+	// The emulator fetches from the same memory the guest writes, so there is nothing to flush.
 	state.redirect_ntzw(mod, "FlushInstructionCache",
 		[](vcpu&, const std::uint64_t process_handle, const addr_t base_address,
 			const std::uint64_t length) -> NTSTATUS
@@ -485,16 +451,12 @@ void modules::register_ntoskrnl_sysinfo_ops(win_kernel_state& state, proc_module
 			return STATUS_SUCCESS;
 		});
 
-	// A full barrier across every processor. Every cpu here shares one host
-	// memory model already, so the barrier is implicit.
+	// Every cpu here shares one host memory model already, so the barrier is implicit.
 	state.redirect_ntzw(mod, "FlushProcessWriteBuffers", [](vcpu&)
 	{
 		THREAD_LOG_INFO("NtFlushProcessWriteBuffers()");
 	});
 
-	// One handle table, so a duplicate is a second handle onto the same object.
-	// DUPLICATE_CLOSE_SOURCE closes the one it came from, which is the whole of
-	// what the options decide here.
 	state.redirect_ntzw(mod, "DuplicateObject",
 		[st](vcpu&, const std::uint64_t source_process_handle,
 			const std::uint64_t source_handle, const std::uint64_t target_process_handle,
@@ -536,9 +498,7 @@ void modules::register_ntoskrnl_sysinfo_ops(win_kernel_state& state, proc_module
 			return STATUS_SUCCESS;
 		});
 
-	// A permanent object outlives its last handle because it is in the object
-	// namespace; nothing here puts one there, so every object is already
-	// temporary and this only has to agree.
+	// Nothing here puts an object in the namespace, so every object is already temporary.
 	auto make_temporary = [st](vcpu&, const std::uint64_t handle) -> NTSTATUS
 	{
 		if (!st->sys_proc->handle_table().lookup_handle(handle))
@@ -554,9 +514,6 @@ void modules::register_ntoskrnl_sysinfo_ops(win_kernel_state& state, proc_module
 	state.redirect_ntzw(mod, "QuerySystemInformation", query_system_information);
 	state.redirect_ntzw(mod, "QuerySystemInformationEx", query_system_information_ex);
 
-	// The NLS tables are files in System32, so they come out of the guest
-	// filesystem -- and one that does not carry them says so rather than
-	// handing back a mapping of nothing.
 	auto map_nls_file = [st](vcpu& cpu, const std::string& path,
 		emu_object<addr_t> base_out, const std::string_view who) -> NTSTATUS
 	{
@@ -593,15 +550,13 @@ void modules::register_ntoskrnl_sysinfo_ops(win_kernel_state& state, proc_module
 			emu_object<std::uint32_t> default_locale_id,
 			emu_object<std::int64_t> default_casing_table_size) -> NTSTATUS
 		{
-			// Without this file kernelbase cannot resolve LOCALE_INVARIANT and
-			// its DllMain fails, taking the process down before it runs.
+			// Without this file kernelbase cannot resolve LOCALE_INVARIANT and its DllMain fails.
 			const auto status = map_nls_file(cpu, std::string(system32_dir_narrow) + "locale.nls",
 				base_address, "NtInitializeNlsFiles");
 
 			if (status != STATUS_SUCCESS)
 				return status;
 
-			// en-US, as everything else here reports.
 			if (default_locale_id)
 				default_locale_id.write(0x0409);
 
@@ -611,7 +566,6 @@ void modules::register_ntoskrnl_sysinfo_ops(win_kernel_state& state, proc_module
 			return STATUS_SUCCESS;
 		});
 
-	// NlsSectionCodePage is the only kind of section there is a file for.
 	state.redirect_ntzw(mod, "GetNlsSectionPtr",
 		[st, map_nls_file](vcpu& cpu, const std::uint32_t section_type,
 			const std::uint32_t section_data, [[maybe_unused]] const addr_t context_data,

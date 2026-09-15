@@ -15,8 +15,6 @@
 namespace
 {
 
-// AllocationType, of which only the two that decide whether pages appear
-// matter here: there is no reserved-but-not-committed state to keep.
 enum allocation_type : std::uint32_t
 {
 	mem_commit  = 0x00001000,
@@ -25,7 +23,6 @@ enum allocation_type : std::uint32_t
 	mem_free    = 0x00010000,
 };
 
-// PAGE_* protection, and what it means to the emulator's mmu.
 enum page_protection : std::uint32_t
 {
 	page_noaccess          = 0x01,
@@ -38,8 +35,6 @@ enum page_protection : std::uint32_t
 	page_execute_writecopy = 0x80,
 };
 
-// The memory manager for the calling thread's process, or null for a kernel
-// thread: kernel memory comes straight off the address space.
 win_user_mem* user_mem(vcpu& cpu)
 {
 	const auto t = cpu.thread();
@@ -49,8 +44,6 @@ win_user_mem* user_mem(vcpu& cpu)
 
 mem_prot prot_from_page(const std::uint32_t protect)
 {
-	// The low byte names the access; the flags above it are caching and guard
-	// bits that the mmu here has no notion of.
 	switch (protect & 0xFF)
 	{
 	case page_noaccess:          return static_cast<mem_prot>(0);
@@ -83,11 +76,9 @@ constexpr std::uint32_t memory_basic_information = 0;
 constexpr std::uint32_t memory_working_set_ex_information = 4;
 constexpr std::uint32_t memory_image_information = 6;
 
-// Asked about every image the loader maps, on builds new enough to have it.
 // Nothing here carries an image extension -- the ARM64X and hotpatch metadata.
 constexpr std::uint32_t memory_image_extension_information = 14;
 
-// SECTION_INFORMATION_CLASS.
 constexpr std::uint32_t section_basic_information = 0;
 
 // kernel32 maps this while it is initialising.
@@ -116,7 +107,6 @@ struct memory_image_information_t
 	std::uint32_t padding;
 };
 
-// MEMORY_WORKING_SET_EX_INFORMATION: an address in, the page's state out.
 struct memory_working_set_ex_information_t
 {
 	addr_t        virtual_address;
@@ -139,14 +129,11 @@ static_assert(sizeof(memory_basic_information_t) == 0x30);
 static_assert(sizeof(memory_image_information_t) == 0x18);
 static_assert(sizeof(section_basic_information_t) == 0x18);
 
-// MEM_COMMIT / MEM_FREE as MEMORY_BASIC_INFORMATION reports them.
 constexpr std::uint32_t mem_state_commit = 0x1000;
 constexpr std::uint32_t mem_state_free = 0x10000;
 constexpr std::uint32_t mem_type_private = 0x20000;
 
-// Only the current process is addressable: there is one address space, and a
-// handle naming any other has nothing behind it. -1 is the pseudo-handle for
-// the caller itself, which is what a driver reaching for its own memory passes.
+// -1 is the pseudo-handle for the caller itself, and only the current process is addressable.
 constexpr std::uint64_t current_process_handle = ~std::uint64_t{0};
 
 bool is_current_process(const std::uint64_t handle)
@@ -156,16 +143,11 @@ bool is_current_process(const std::uint64_t handle)
 
 }
 
-// Virtual memory and the sections it can be made out of. The page tables behind
-// these are the guest's own, so an address handed out here is one the guest
-// faults against exactly as it would on real hardware.
+// The page tables behind these are the guest's own, so it faults exactly as on real hardware.
 void modules::register_ntoskrnl_vm_ops(win_kernel_state& state, proc_module& mod)
 {
 	auto* st = &state;
 
-	// The allocation lands where the address space puts it: the caller names a
-	// preferred base, and nothing here can honour one, so the base it gets back
-	// is the one it has to use.
 	auto allocate = [](vcpu& cpu, const std::uint64_t process_handle,
 		emu_object<addr_t> base_address, emu_object<std::uint64_t> region_size,
 		const std::uint32_t allocation_type, const std::uint32_t protect,
@@ -189,14 +171,11 @@ void modules::register_ntoskrnl_vm_ops(win_kernel_state& state, proc_module& mod
 		const auto wanted = base_address.read();
 		const auto size = (requested + mdl_page_size - 1) & ~static_cast<std::uint64_t>(mdl_page_size - 1);
 
-		// Reserve without commit still gets pages: there is no reserved state
-		// to hold an address range in, and a caller that reserves then commits
-		// the same range would otherwise be handed two different bases.
+		// Reserve without commit still gets pages: there is no reserved state to hold a range in.
 		if (!(allocation_type & (mem_commit | mem_reserve)))
 			return STATUS_INVALID_PARAMETER;
 
-		// The address space's own cursor hands out supervisor pages in the
-		// kernel half, which ring 3 cannot touch.
+		// The address space's own cursor hands out supervisor pages, which ring 3 cannot touch.
 		if (auto* const mem = user_mem(cpu))
 		{
 			addr_t base = wanted;
@@ -257,8 +236,6 @@ void modules::register_ntoskrnl_vm_ops(win_kernel_state& state, proc_module& mod
 			protect, "NtAllocateVirtualMemory");
 	};
 
-	// The extended parameters describe which node or partition the pages should
-	// come from. There is one of each, so they are only reported.
 	auto allocate_vm_ex = [allocate](vcpu& cpu, const std::uint64_t process_handle,
 		emu_object<addr_t> base_address, emu_object<std::uint64_t> region_size,
 		const std::uint32_t allocation_type, const std::uint32_t protect,
@@ -302,15 +279,12 @@ void modules::register_ntoskrnl_vm_ops(win_kernel_state& state, proc_module& mod
 			return STATUS_SUCCESS;
 		}
 
-		// MEM_RELEASE takes down the whole allocation and demands a size of
-		// zero; MEM_DECOMMIT takes down what the caller names.
 		if (free_type & mem_release)
 		{
 			if (size)
 				return STATUS_INVALID_PARAMETER;
 
-			// The address space has no record of how long the run was, so the
-			// release takes down the page the base names and no more.
+			// Nothing records the run length, so a release takes down only the page the base names.
 			size = mdl_page_size;
 		}
 
@@ -373,9 +347,7 @@ void modules::register_ntoskrnl_vm_ops(win_kernel_state& state, proc_module& mod
 
 		auto& space = *cpu.curr_addr_space();
 
-		// The old protection is per page on real Windows and the caller is told
-		// the first page's. There is no way to read one back out of the tables
-		// here, so what it is told is what a freshly allocated page has.
+		// No protection can be read back out of the tables, so the caller is told a fresh page's.
 		if (old_protect)
 			old_protect.write(page_readwrite);
 
@@ -398,10 +370,7 @@ void modules::register_ntoskrnl_vm_ops(win_kernel_state& state, proc_module& mod
 		return STATUS_SUCCESS;
 	};
 
-	// Answered by walking the page tables: an address that translates is
-	// committed, and one that does not is free. The real one reports the run
-	// either state covers, which needs a VAD tree -- so the run here is the one
-	// page the caller asked about.
+	// Reporting the real run would need a VAD tree, so the run here is the one page asked about.
 	auto query_vm = [](vcpu& cpu, const std::uint64_t process_handle, const addr_t base_address,
 		const std::uint32_t memory_information_class, const addr_t memory_information,
 		const std::uint64_t memory_information_length,
@@ -446,7 +415,6 @@ void modules::register_ntoskrnl_vm_ops(win_kernel_state& state, proc_module& mod
 			return STATUS_SUCCESS;
 		}
 
-		// Which image an address belongs to, from the process's module list.
 		if (memory_information_class == memory_image_information)
 		{
 			if (return_length)
@@ -479,10 +447,8 @@ void modules::register_ntoskrnl_vm_ops(win_kernel_state& state, proc_module& mod
 			return STATUS_SUCCESS;
 		}
 
-		// Three outcomes here, not two: LdrpProcessMappedModule tests the status
-		// against STATUS_NOT_SUPPORTED and carries on when it matches -- "no
-		// extension" -- before testing for failure. The invalid class below
-		// lands in that failure path and kills the process instead.
+		// LdrpProcessMappedModule treats STATUS_NOT_SUPPORTED as "no extension" and carries on;
+		// an invalid class lands in the failure path below it and kills the process.
 		if (memory_information_class == memory_image_extension_information)
 		{
 			if (return_length)
@@ -508,8 +474,6 @@ void modules::register_ntoskrnl_vm_ops(win_kernel_state& state, proc_module& mod
 
 		auto& space = *cpu.curr_addr_space();
 
-		// The manager knows the whole run, not just the one page the tables
-		// can speak for.
 		if (auto* const mem = user_mem(cpu))
 		{
 			win::memory_basic_info info{};
@@ -545,8 +509,6 @@ void modules::register_ntoskrnl_vm_ops(win_kernel_state& state, proc_module& mod
 		return STATUS_SUCCESS;
 	};
 
-	// The same section objects MmCreateSection makes, reached by handle rather
-	// than by pointer.
 	auto create_section = [st](vcpu& cpu, emu_object<std::uint64_t> section_handle,
 		const std::uint32_t desired_access, emu_object<_OBJECT_ATTRIBUTES> object_attributes,
 		emu_object<std::int64_t> maximum_size, const std::uint32_t section_page_protection,
@@ -611,9 +573,6 @@ void modules::register_ntoskrnl_vm_ops(win_kernel_state& state, proc_module& mod
 		return STATUS_SUCCESS;
 	};
 
-	// Nothing gives a section a name, so there is no namespace to open one out
-	// of -- which is the same answer the real one gives for a name that is not
-	// there.
 	auto open_section = [st](vcpu& cpu, emu_object<std::uint64_t> section_handle,
 		const std::uint32_t desired_access,
 		emu_object<_OBJECT_ATTRIBUTES> object_attributes) -> NTSTATUS
@@ -629,8 +588,6 @@ void modules::register_ntoskrnl_vm_ops(win_kernel_state& state, proc_module& mod
 
 		const auto name = narrow_wstring(win::read_unicode_string(name_obj));
 
-		// kernel32 will not finish starting without this, so it gets the memory
-		// and nobody to share it with.
 		if (name == shared_section_name)
 		{
 			auto host = std::make_shared<section_host>();
@@ -700,9 +657,7 @@ void modules::register_ntoskrnl_vm_ops(win_kernel_state& state, proc_module& mod
 		return STATUS_SUCCESS;
 	};
 
-	// A view is a copy of the section rather than a shared mapping of it, the
-	// same way MmMapViewInSystemSpace makes one: nothing here shares pages
-	// between a view and the file behind it.
+	// A view is a copy of the section, not a shared mapping of the file behind it.
 	state.redirect_ntzw(mod, "MapViewOfSection",
 		[st](vcpu& cpu, const std::uint64_t section_handle, const std::uint64_t process_handle,
 			emu_object<addr_t> base_address, [[maybe_unused]] const std::uint64_t zero_bits,
@@ -734,8 +689,6 @@ void modules::register_ntoskrnl_vm_ops(win_kernel_state& state, proc_module& mod
 
 			auto& space = *cpu.curr_addr_space();
 
-			// An image section maps the image laid out the way it is run. The
-			// guest's loader does the relocations and imports itself.
 			std::vector<std::uint8_t> image;
 
 			if (host->is_image)
@@ -756,8 +709,7 @@ void modules::register_ntoskrnl_vm_ops(win_kernel_state& state, proc_module& mod
 
 			auto* const mem = user_mem(cpu);
 
-			// STATUS_IMAGE_NOT_AT_BASE, not an error, is how the loader learns
-			// it has relocating to do.
+			// STATUS_IMAGE_NOT_AT_BASE is not an error: it tells the loader to relocate.
 			addr_t preferred = 0;
 
 			if (!image.empty())
@@ -859,9 +811,7 @@ void modules::register_ntoskrnl_vm_ops(win_kernel_state& state, proc_module& mod
 	state.redirect_ntzw(mod, "OpenSection", open_section);
 	state.redirect_ntzw(mod, "QuerySection", query_section);
 
-	// Every class is a hint, and there is no pager here to take one. Nothing
-	// enforces control flow guard either, so a caller that registered its call
-	// targets and one that did not are in the same position.
+	// Every class is a hint and nothing enforces control flow guard.
 	state.redirect_ntzw(mod, "SetInformationVirtualMemory",
 		[](vcpu&, const std::uint64_t process_handle,
 			const std::uint32_t information_class, const std::uint64_t entry_count,

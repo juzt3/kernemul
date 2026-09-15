@@ -11,11 +11,7 @@ struct string_view_hash
 	size_t operator()(std::string_view s) const { return std::hash<std::string_view>{}(s); }
 };
 
-// NT folds case against its own upcase table rather than the host locale, which
-// differs from either above ascii -- and ascii is the whole of what a guest
-// driver names. Folding here rather than reaching for a CRT routine also keeps
-// one spelling: _stricmp and _wcsnicmp are MSVC's, strcasecmp and wcsncasecmp
-// are POSIX's, and neither pair exists for char16_t at all.
+// _stricmp/_wcsnicmp are MSVC's, strcasecmp/wcsncasecmp POSIX's; neither exists for char16_t.
 constexpr char ascii_lower(const char c)
 {
 	return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c;
@@ -34,9 +30,7 @@ inline std::string ascii_lower(const std::string_view s)
 	return out;
 }
 
-// The sign of the first folded difference, which is all the Rtl and CRT
-// comparisons promise. Bounded by `count`, so neither side is read past its end
-// -- a counted guest string is very often not terminated at all.
+// A counted guest string is very often not terminated at all, so neither side is read past its end.
 template <typename T>
 constexpr int compare_ascii_nocase(const T* const a, const T* const b, const std::size_t count)
 {
@@ -52,8 +46,6 @@ constexpr int compare_ascii_nocase(const T* const a, const T* const b, const std
 	return 0;
 }
 
-// The whole of both strings: a shared prefix leaves the shorter one the lesser,
-// which the bounded compare above cannot say on its own.
 template <typename T>
 constexpr int compare_ascii_nocase(const std::basic_string_view<T> a, const std::basic_string_view<T> b)
 {
@@ -130,8 +122,6 @@ inline void write_wstring_buffer(addr_space& space, addr_t addr, std::size_t buf
 	write_basic_string_buffer<char16_t>(space, addr, buf_count, str);
 }
 
-// Space is anything exposing addr_space's alloc/write_mem interface, so guest strings
-// can be placed either by the raw address space or by a tracking allocator
 template <typename T, typename Space>
 addr_t allocate_basic_string(Space& space, std::basic_string_view<T> str, bool terminate = true)
 {

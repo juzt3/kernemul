@@ -36,7 +36,6 @@ constexpr addr_t user_alloc_base  = 0x0000000100000000;
 constexpr addr_t user_addr_limit  = 0x00007FFFFFFEFFFF;
 constexpr std::size_t alloc_granularity = 0x10000;
 
-// layout of MEMORY_BASIC_INFORMATION as seen by the guest
 struct memory_basic_info
 {
 	std::uint64_t base_address;
@@ -54,10 +53,7 @@ static_assert(sizeof(memory_basic_info) == 0x30);
 
 } // namespace win
 
-// tracks the usermode virtual address space of a single process: which ranges are
-// reserved, which parts of them are committed and at what protection. pages that
-// must fault on access (PAGE_GUARD, PAGE_NOACCESS) are left unmapped in the page
-// tables and resolved lazily through handle_fault().
+// pages that must fault on access (PAGE_GUARD, PAGE_NOACCESS) are left unmapped and resolved lazily
 class win_user_mem
 {
 public:
@@ -71,12 +67,9 @@ public:
 		std::uint32_t& old_prot);
 	NTSTATUS query(addr_t addr, win::memory_basic_info& info) const;
 
-	// convenience wrapper for internal allocations that just need backing pages
 	addr_t alloc_pages(std::size_t size, std::uint32_t prot = win::page_readwrite);
 
-	// tracked stand-in for addr_space::alloc, so that loader allocations (PEB, TEBs,
-	// stacks, process parameters) are placed by this manager instead of racing the
-	// address space's own bump allocator
+	// tracked stand-in for addr_space::alloc, so loader allocations do not race its bump allocator
 	addr_t alloc(std::size_t size, mem_prot prot = prot_rw);
 
 	[[nodiscard]] addr_space& space() const { return *space_; }
@@ -93,8 +86,6 @@ public:
 	void register_image(addr_t base, std::size_t size);
 	void register_mapped(addr_t base, std::size_t size, std::uint32_t prot);
 
-	// resolves a page fault against the tracked regions, returns true if the
-	// faulting access may be retried
 	bool handle_fault(addr_t fault_addr);
 
 private:
@@ -144,8 +135,7 @@ private:
 	std::shared_ptr<addr_space> space_;
 	addr_t next_free_ = win::user_alloc_base;
 	reservation_map reservations_;
-	// physical pages kept alive while their virtual page is unmapped, so that
-	// arming a guard page does not discard its contents
+	// kept alive while their virtual page is unmapped, so arming a guard page does not discard them
 	std::map<addr_t, addr_t> backing_;
 	mutable std::mutex mtx_;
 };

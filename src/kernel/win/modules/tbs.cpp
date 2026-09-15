@@ -7,12 +7,10 @@
 namespace
 {
 
-// TBS_RESULT.
 constexpr std::uint32_t tbs_success = 0;
 constexpr std::uint32_t tbs_e_buffer_too_small = 0x80284002;
 constexpr std::uint32_t tbs_e_service_not_running = 0x80284008;
 
-// TPM_DEVICE_INFO, which is a TBS header type rather than a kernel one.
 #pragma pack(push, 4)
 struct tpm_device_info_t
 {

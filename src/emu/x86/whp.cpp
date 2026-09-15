@@ -100,10 +100,7 @@ hm::reg_t to_hm_reg(const reg_t reg)
 	}
 }
 
-// Segment attributes reach the emulator in the descriptor's own layout, where
-// the type field starts at bit 8 -- the shape Unicorn's uc_x86_mmr takes. The
-// partition wants the compact form the VMCS uses. Bits 19:16 of the descriptor
-// form are the high limit nibble and have no place in the compact one.
+// Descriptor form: type at bit 8, bits 19:16 the high limit nibble, neither in the compact form.
 constexpr std::uint16_t to_hm_seg_attr(const std::uint32_t flags)
 {
 	return static_cast<std::uint16_t>((flags >> 8) & 0xF0FF);
@@ -114,8 +111,6 @@ constexpr std::uint32_t from_hm_seg_attr(const std::uint16_t attributes)
 	return static_cast<std::uint32_t>(attributes & 0xF0FF) << 8;
 }
 
-// The supervisor bit lives in the guest page tables, which the mmu writes
-// itself. What reaches the partition is the physical page's own protection.
 hm::mem_prot to_hm_prot(const mem_prot prot)
 {
 	return static_cast<hm::mem_prot>(prot & prot_rwx);
@@ -139,15 +134,12 @@ hm::hook_insn_t to_hm_insn(const hook_insn_t insn)
 	case hook_insn_t::cpuid: return hm::hook_insn_t::cpuid;
 	case hook_insn_t::rdtsc: return hm::hook_insn_t::rdtsc;
 	default:
-		// A syscall exit is not one the partition offers.
 		throw std::runtime_error("instruction hook unsupported by the hypermulator backend");
 	}
 }
 
 }
 
-// One virtual hook is any number of native ones, and they go together: the
-// emulator removes hooks by the handle it was given.
 struct x86_whp_emu::whp_hook : emu_hook
 {
 	hm::emu* backend = nullptr;
@@ -181,9 +173,7 @@ void x86_whp_vcpu::try_stop()
 
 void x86_whp_vcpu::flush_tlb()
 {
-	// The partition has no flush of its own for the guest's paging. Reloading
-	// cr3 is the architectural one, and a register write is a load as far as
-	// the processor is concerned.
+	// The partition has no flush of its own; reloading cr3 is the architectural one.
 	reg(x86::cr3, reg<addr_t>(x86::cr3));
 }
 
@@ -303,9 +293,6 @@ std::vector<x86_whp_emu::phys_run> x86_whp_emu::phys_runs(const addr_t start_add
 	if (start_addr > end_addr)
 		throw std::runtime_error("the whp backend needs a bounded hook range");
 
-	// The space the range is meant to be in: the one the cpu is running in, or
-	// the kernel's, which is where a hook installed while the machine is still
-	// being built belongs.
 	const auto cpu = hook_cpu();
 	const auto current = cpu ? cpu->curr_addr_space() : nullptr;
 	const auto fallback = default_addr_space();
@@ -367,8 +354,7 @@ emu::hook_handle x86_whp_emu::hook_mem(const addr_t start_addr, const addr_t end
 		hook->native.push_back(hm_->hook_mem(to_hm_prot(prot),
 			[this, &callback](const hm::addr_t addr, const hm::mem_vmexit::access access)
 			{
-				// hypermulator reports the address it resolved the access to
-				// and not its width, which no caller of this asks for.
+				// hypermulator reports the address it resolved the access to, not its width.
 				callback(*hook_cpu(), addr, 0, to_prot(access));
 			},
 			begin, end));
@@ -501,14 +487,7 @@ void x86_whp_emu::remove_hook(const hook_handle handle)
 
 void x86_whp_emu::map_phys_mem(const addr_t addr, const std::size_t size)
 {
-	// Physical pages are mapped wide open on purpose. What a page may be used
-	// for is decided by the guest page tables the mmu writes, and the physical
-	// protection is what the hooks spend: hypermulator serves one by taking a
-	// permission away from the page and putting it back afterwards, and what it
-	// puts back is everything the hook did not ask about. Mapping a page any
-	// narrower than this would have a hook hand it permissions it never had.
-	// The Unicorn backend arrives at the same place, since every region is
-	// remapped rwx when an engine opens.
+	// Wide open on purpose: a hook puts back all it did not ask about, so narrower grants more.
 	if (!hm_->map_phys_mem(addr, size, hm::prot_rwx))
 		throw std::runtime_error(std::format("failed to map 0x{:X} bytes at 0x{:X}", size, addr));
 }

@@ -3,25 +3,18 @@
 #include "../../emu/object.hpp"
 #include <cstdint>
 
-// The guest-side half of a process, as the handlers that answer questions about
-// one read it. Most of what a driver asks about lives in bitfields inside
-// anonymous unions, which a guest-memory read cannot reach: emu_object can name
-// _EPROCESS::Flags but not _EPROCESS::ProcessExiting. So the bits are named
-// here, at the positions the generated header documents, and each word gets its
-// own type -- a Flags3 bit tested against Flags would otherwise compile.
+// Bitfields in anonymous unions that emu_object cannot name, at the positions the header documents.
 
 namespace win
 {
 
 enum eprocess_flag : std::uint32_t
 {
-	// _EPROCESS::Flags, bit 2.
 	process_exiting = 1u << 2,
 };
 
 enum eprocess_flag3 : std::uint32_t
 {
-	// _EPROCESS::Flags3, bit 12.
 	system_process = 1u << 12,
 };
 
@@ -35,8 +28,7 @@ enum eprocess_flag3 : std::uint32_t
 	return (process.field(&_EPROCESS::Flags3).read() & flag) != 0;
 }
 
-// PS_PROTECTION::Level is the type in its low three bits with the signer above
-// it, so the byte a driver reads is not the level it compares against.
+// PS_PROTECTION::Level is the type in its low three bits with the signer above it.
 [[nodiscard]] inline PS_PROTECTED_TYPE protection_type(const emu_object<_EPROCESS>& process)
 {
 	constexpr std::uint8_t protection_type_bits = 0x7;

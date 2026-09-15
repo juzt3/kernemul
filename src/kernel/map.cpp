@@ -7,8 +7,6 @@
 
 namespace {
 
-// The name an import carries is not always the name of a file: the process
-// decides what it really means before anything looks for it.
 std::shared_ptr<proc_module> find_or_load(process& proc, const std::string_view name,
 	const std::string_view importer, const bool supervisor)
 {
@@ -20,9 +18,6 @@ std::shared_ptr<proc_module> find_or_load(process& proc, const std::string_view 
 	return proc.load_module(real_name, supervisor);
 }
 
-// A forwarded export names another module's, which may itself be forwarded --
-// kernel32 forwards to kernelbase, which forwards on to ntdll. The depth is
-// only there so a schema that points at itself stops.
 std::optional<addr_t> resolve_export(process& proc, const proc_module& mod,
 	const std::string_view sym, const bool supervisor, const int depth = 0)
 {
@@ -47,8 +42,6 @@ std::optional<addr_t> resolve_export(process& proc, const proc_module& mod,
 
 	const auto target_sym = forward.substr(dot + 1);
 
-	// The module holding the forwarder is the importer here, which is what the
-	// schema needs to send a self-referencing contract somewhere else.
 	const auto target = find_or_load(proc, std::string(forward.substr(0, dot)) + ".dll",
 		mod.name, supervisor);
 
@@ -128,10 +121,7 @@ std::shared_ptr<proc_module> krnl::map_img(process& proc, const std::string_view
 		space->write_mem(reloc_addr, val + delta);
 	}
 
-	// Registered before its own imports are resolved, the way the real loader
-	// does it: two modules that import from each other then resolve against a
-	// module that is already in the list rather than loading it for ever. What
-	// an importer needs is the exports, and those are ready here.
+	// Registered before its own imports resolve, or modules that import each other load for ever.
 	auto mod = proc.add_module(name, addr, img);
 
 	if (skip_imports)

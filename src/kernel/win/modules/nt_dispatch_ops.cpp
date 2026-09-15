@@ -17,10 +17,8 @@
 namespace
 {
 
-// EVENT_TYPE, which is the dispatcher type under a different name.
 constexpr std::uint32_t notification_event = 0;
 
-// EVENT_INFORMATION_CLASS.
 constexpr std::uint32_t event_basic_information = 0;
 
 #pragma pack(push, 4)
@@ -31,8 +29,6 @@ struct event_basic_information_t
 };
 #pragma pack(pop)
 
-// The object body is the dispatcher object itself, so a driver handed the
-// pointer behind the handle can pass it to Ke* as-is.
 template <typename T>
 std::uint64_t create_dispatcher(win_kernel_state& state, const win::dispatcher_type type,
 	const std::int32_t signal_state, const std::uint32_t access, std::string name)
@@ -50,9 +46,6 @@ std::uint64_t create_dispatcher(win_kernel_state& state, const win::dispatcher_t
 	return state.sys_proc->handle_table().create_handle(addr, access);
 }
 
-// The dispatcher object a handle names, and the type it turned out to be: a
-// caller passing an event handle to NtReleaseMutant gets told, rather than
-// having the wrong fields written over it.
 struct resolved
 {
 	addr_t address = 0;
@@ -78,7 +71,6 @@ resolved resolve(win_kernel_state& state, const std::uint64_t handle,
 		return {};
 	}
 
-	// An event has two types, and either answers to an event handle.
 	const bool event_pair = (expected == win::event_notification_object
 			|| expected == win::event_synchronization_object)
 		&& (host->type == win::event_notification_object
@@ -96,7 +88,6 @@ resolved resolve(win_kernel_state& state, const std::uint64_t handle,
 
 constexpr std::size_t keyed_event_body_size = 0x40;
 
-// The two semaphores one key's waiters and releasers meet on.
 struct keyed_event_host final : win_object
 {
 	struct gate
@@ -153,9 +144,7 @@ std::string attribute_name(vcpu& cpu, const emu_object<_OBJECT_ATTRIBUTES>& obje
 
 }
 
-// The dispatcher objects a driver makes by handle rather than by pointer. The
-// body behind each is the real KEVENT, KSEMAPHORE or KMUTANT, so the Ke*
-// handlers and the waits in nt_wait_ops.cpp see the same state.
+// The body behind each handle is the real KEVENT, KSEMAPHORE or KMUTANT.
 void modules::register_ntoskrnl_dispatch_ops(win_kernel_state& state, proc_module& mod)
 {
 	auto* st = &state;
@@ -186,8 +175,7 @@ void modules::register_ntoskrnl_dispatch_ops(win_kernel_state& state, proc_modul
 		return STATUS_SUCCESS;
 	};
 
-	// Nothing puts an event in a namespace, so there is never one to open by
-	// name -- which is the answer the real one gives for a name that is absent.
+	// Nothing puts an event in a namespace, so there is never one to open by name.
 	state.redirect_ntzw(mod, "OpenEvent",
 		[](vcpu& cpu, emu_object<std::uint64_t> event_handle, const std::uint32_t desired_access,
 			emu_object<_OBJECT_ATTRIBUTES> object_attributes) -> NTSTATUS
@@ -219,15 +207,11 @@ void modules::register_ntoskrnl_dispatch_ops(win_kernel_state& state, proc_modul
 		THREAD_LOG_INFO("NtSetEvent(0x{:X}, '{}') -> was {}",
 			event_handle, found.host->name, previous);
 
-		// Whoever is parked on it takes it from here, on this thread, because
-		// deciding that means reading the object.
 		st->sys_proc->wake_waiters(*cpu.curr_addr_space(), event.address());
 
 		return STATUS_SUCCESS;
 	};
 
-	// NtResetEvent reports the state it found; NtClearEvent does the same work
-	// and says nothing, which is the only difference between them.
 	auto reset_event = [st](vcpu& cpu, const std::uint64_t event_handle,
 		emu_object<std::int32_t> previous_state) -> NTSTATUS
 	{
@@ -320,8 +304,7 @@ void modules::register_ntoskrnl_dispatch_ops(win_kernel_state& state, proc_modul
 		if (!handle)
 			return STATUS_INSUFFICIENT_RESOURCES;
 
-		// The limit lives past the dispatcher header, and KeReleaseSemaphore
-		// checks against it.
+		// The limit lives past the dispatcher header, and KeReleaseSemaphore checks against it.
 		const auto entry = st->sys_proc->handle_table().lookup_handle(handle);
 		emu_object<_KSEMAPHORE>(*cpu.curr_addr_space(), entry->body_addr)
 			.field(&_KSEMAPHORE::Limit).write(maximum_count);
@@ -372,8 +355,7 @@ void modules::register_ntoskrnl_dispatch_ops(win_kernel_state& state, proc_modul
 		return STATUS_SUCCESS;
 	};
 
-	// A mutant is signalled when nobody holds it, so an unowned one starts at
-	// one and an owned one at zero.
+	// A mutant is signalled when nobody holds it: unowned starts at one, owned at zero.
 	auto create_mutant = [st](vcpu& cpu, emu_object<std::uint64_t> mutant_handle,
 		const std::uint32_t desired_access, emu_object<_OBJECT_ATTRIBUTES> object_attributes,
 		const bool initial_owner) -> NTSTATUS
@@ -450,15 +432,11 @@ void modules::register_ntoskrnl_dispatch_ops(win_kernel_state& state, proc_modul
 	state.redirect_ntzw(mod, "CreateMutant", create_mutant);
 	state.redirect_ntzw(mod, "ReleaseMutant", release_mutant);
 
-	// A wait and a release meet on a key: whichever arrives first blocks until
-	// the other turns up. Two counted semaphores per key is exactly that, and
-	// they are ordinary dispatcher objects, so the ordinary wait carries them.
 	auto default_keyed_event = std::make_shared<keyed_event_host>();
 
 	auto keyed_event_from_handle = [st, default_keyed_event](const std::uint64_t handle)
 		-> std::shared_ptr<keyed_event_host>
 	{
-		// A null handle is the one the system provides for everybody.
 		if (!handle)
 			return default_keyed_event;
 
@@ -472,7 +450,6 @@ void modules::register_ntoskrnl_dispatch_ops(win_kernel_state& state, proc_modul
 		if (!keyed_event_handle)
 			return STATUS_INVALID_PARAMETER;
 
-		// Zero is the only documented value, and the real one refuses the rest.
 		if (flags)
 			return STATUS_INVALID_PARAMETER_4;
 
@@ -497,7 +474,6 @@ void modules::register_ntoskrnl_dispatch_ops(win_kernel_state& state, proc_modul
 		return STATUS_SUCCESS;
 	};
 
-	// Both halves are the same two steps in opposite order.
 	auto rendezvous = [st, keyed_event_from_handle](vcpu& cpu, const std::uint64_t handle,
 		const addr_t key, const bool alertable, const emu_object<std::int64_t>& timeout,
 		const bool releasing) -> NTSTATUS

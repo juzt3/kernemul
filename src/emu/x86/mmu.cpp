@@ -33,10 +33,7 @@ std::shared_ptr<::addr_space> mmu::create_addr_space()
 	space->pml4_pa = alloc_phys_locked(page_size(), prot_rw);
 	space->mmu_ = this;
 
-	// The first space made is the kernel's; every one after it aliases the
-	// kernel half, which is where the gdt, idt and tss a thread needs on a
-	// context switch live. Copying the entries shares the tables below them, so
-	// a kernel mapping made later shows up here too.
+	// Spaces after the first alias the kernel half; copying the entries shares the tables below.
 	if (!kernel_pml4_pa_)
 	{
 		kernel_pml4_pa_ = space->pml4_pa;
@@ -108,8 +105,7 @@ void mmu::switch_to(vcpu& cpu, std::shared_ptr<::addr_space> space)
 
 void mmu::flush_all_tlb()
 {
-	// A cpu reads its tlb on every access, and uc_ctl_flush_tlb rewrites it, so
-	// flushing one that is running corrupts it under the cpu.
+	// uc_ctl_flush_tlb rewrites the tlb, so flushing a running cpu corrupts it under the cpu.
 	emu_->run_on_all([&]
 	{
 		for (auto& cpu : emu_->cpus())
@@ -307,9 +303,6 @@ void mmu::prot_virt(::addr_space& space, addr_t va, std::size_t size, mem_prot p
 	flush_all_tlb();
 }
 
-// The shadow only records mappings made *in* a space, and a space aliases the
-// kernel half without ever having made those -- so a shadow miss is a question
-// for the tables. Unlocked: both callers hold mtx_ already.
 std::optional<addr_t> mmu::translate_virt(const addr_space& s, const addr_t page)
 {
 	const virt_addr v{ .val = page };

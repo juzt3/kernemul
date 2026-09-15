@@ -3,11 +3,7 @@
 #include "emu/calling_conv.hpp"
 #include "util/log.hpp"
 
-// The backend the guest runs on, picked at build time with KERNEMUL_BACKEND.
-// Unicorn interprets; whp runs the guest on the host cpu in a Hyper-V
-// partition, which is one cpu rather than four -- its hook and step state is
-// per partition, so a second cpu stepping over a hooked access would unprotect
-// the pages under the first.
+// whp's hook and step state is per partition, so a second cpu would unprotect the first's pages.
 #if defined(KERNEMUL_HAS_WHP)
 	#include "emu/x86/whp.hpp"
 
@@ -18,9 +14,7 @@
 
 	using guest_emu = unicorn_emu;
 
-	// Everything the guest is told about the machine agrees with this number:
-	// the KUSER_SHARED_DATA count, the PEB, the affinity masks and the
-	// topology SystemInformation classes are all filled in from it.
+	// KUSER_SHARED_DATA, the PEB, affinity masks and topology classes are all filled in from this.
 	inline constexpr std::size_t vcpu_count = 4;
 #endif
 
@@ -48,7 +42,6 @@
 	}
 #endif
 
-// A driver: mapped into the system process and entered on a system thread.
 static int run_driver(guest::win_emulator& win,
 	const std::shared_ptr<guest::calling_conv>& conv, const std::string& name)
 {
@@ -63,23 +56,16 @@ static int run_driver(guest::win_emulator& win,
 		return 1;
 	}
 
-	// What Windows hands a driver: the object it hangs everything it exposes
-	// off, and the service key it was started from.
 	auto args = kernel.create_driver(*driver, u"test_driver");
 
 	win.create_vcpus(vcpu_count);
 
 	auto cpu = win.cpus().front();
 
-	// This thread drives that cpu until run_all hands it to one of its own, so
-	// anything reached while the machine is still being built says where from.
 	set_log_cpu(cpu.get());
 
-	// DriverEntry runs as a system thread like any other, so the scheduler owns
-	// its stack and the return address that says it is done.
 	const auto entry = win.create_kernel_thread(*cpu, driver->entry_point);
 
-	// DriverEntry(DriverObject, RegistryPath)
 	conv->set_arg(*cpu, *entry, 0, args.driver_object.address());
 	conv->set_arg(*cpu, *entry, 1, args.registry_path.address());
 
@@ -90,9 +76,7 @@ static int run_driver(guest::win_emulator& win,
 	return 0;
 }
 
-// An application: its own process and address space, with a thread that starts
-// inside ntdll's loader. The cpus come first here, unlike the driver path --
-// building the process queues a thread, which needs a cpu to be built against.
+// Cpus come first here: building the process queues a thread, which needs a cpu to build against.
 static int run_user(guest::win_emulator& win, const std::string_view exe_name)
 {
 	win.create_vcpus(vcpu_count);
@@ -115,8 +99,6 @@ static int run_user(guest::win_emulator& win, const std::string_view exe_name)
 	return 0;
 }
 
-// A .sys goes down the driver path, anything else runs as an application. The
-// name is looked up in the guest root for the architecture this was built for.
 int main(const int argc, const char* const* const argv)
 {
 	LOG_INFO("kernemul targeting {}", target::name);

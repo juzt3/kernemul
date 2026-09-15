@@ -13,9 +13,12 @@
 # User-specific files (MonoDevelop/Xamarin Studio)
 *.userprefs
 
+build-vcpkg-test/
 test/
 build/
 build-x64/
+build-arm64/
+build-whp/
 build_wsl/
 src/config.hpp
 

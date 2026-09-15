@@ -61,9 +61,7 @@ static x86::seg_reg make_data_sr(std::uint16_t selector, std::uint32_t dpl, std:
 	return { selector, base, 0xFFFFFFFF, ar.flags };
 }
 
-// Every vector points into ntoskrnl's trap handlers. Nothing dispatches through
-// the table -- Unicorn calls the interrupt hook and win_exception::handle sees
-// the fault first -- so it exists for guest code that reads the IDT back.
+// Nothing dispatches through the table; it exists for guest code that reads the IDT back.
 static addr_t init_idt(vcpu& cpu, const proc_module& ntoskrnl)
 {
 	auto* space = cpu.curr_addr_space().get();

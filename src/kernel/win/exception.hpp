@@ -44,8 +44,7 @@ private:
 
 	win_kernel_state& kernel_;
 
-	// Built on the first fault, from whichever cpu faults first, and only read
-	// afterwards -- so this is a build-once, not a reader/writer problem.
+	// Built once on the first fault and only read after, so this is not a reader/writer problem.
 	std::once_flag unwinder_once_;
 	std::unique_ptr<win_unwinder> unwinder_;
 };

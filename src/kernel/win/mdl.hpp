@@ -2,10 +2,7 @@
 #include "../../emu/defs.hpp"
 #include <cstdint>
 
-// A memory descriptor list: a header, then one page frame number per page of
-// the buffer it describes. The header is a WDK structure the kernel never
-// stores, so it is not in the generated types; this is what MmInitializeMdl
-// writes, and the layout is the same on both architectures.
+// Not in the generated types: a WDK header the kernel never stores, same layout on both arches.
 #pragma pack(push, 8)
 struct mdl_t
 {
@@ -42,8 +39,6 @@ inline constexpr std::size_t mdl_page_offset(const addr_t addr)
 	return addr & (mdl_page_size - 1);
 }
 
-// How many pages a buffer spans, which is how long the page frame array behind
-// the header has to be.
 inline constexpr std::size_t mdl_page_count(const addr_t va, const std::size_t bytes)
 {
 	return (mdl_page_offset(va) + bytes + mdl_page_size - 1) / mdl_page_size;

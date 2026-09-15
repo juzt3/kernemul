@@ -14,10 +14,6 @@
 namespace
 {
 
-// Every notify routine the guest has registered, by kind. Nothing delivers a
-// notification, so the only thing the guest can observe is whether a routine it
-// registered can be removed again and whether a duplicate is refused -- which
-// is what this is for.
 struct notify_routines
 {
 	std::set<addr_t> process;
@@ -50,8 +46,6 @@ NTSTATUS add_notify(std::set<addr_t>& routines, const std::size_t limit,
 
 	routines.insert(routine);
 
-	// Loud, because a driver registering a callback is expecting to be told
-	// about something and will never hear from it.
 	THREAD_LOG_WARN("{}(0x{:X}): registered, but nothing here will call it", who, routine);
 
 	return STATUS_SUCCESS;
@@ -70,8 +64,6 @@ NTSTATUS remove_notify(std::set<addr_t>& routines, const std::string_view who, c
 	return STATUS_SUCCESS;
 }
 
-// The EPROCESS a handler was handed, or the one the caller is running in when
-// it passed null -- which several of these treat as "this process".
 emu_object<_EPROCESS> process_or_current(win_kernel_state& state, vcpu& cpu,
 	const emu_object<_EPROCESS>& process)
 {
@@ -86,21 +78,13 @@ emu_object<_EPROCESS> process_or_current(win_kernel_state& state, vcpu& cpu,
 
 }
 
-// What a driver asks about a process it is holding, plus the process- and
-// thread-lifetime callbacks it registers to be told about new ones.
-//
-// Every query here reads the EPROCESS the caller passed rather than anything
-// the emulator keeps beside it: a driver can arrive with a pointer it got from
-// PsGetCurrentProcess, from a lookup, or out of a list it walked itself, and
-// only the guest-side structure is common to all three.
+// Every query here reads the EPROCESS the caller passed, not anything kept beside it.
 void modules::register_ntoskrnl_process_ops(win_kernel_state& state, proc_module& mod)
 {
 	auto* st = &state;
 	auto notify = std::make_shared<notify_routines>();
 
-	// The image name is fifteen bytes inside the EPROCESS rather than a string
-	// anywhere else, so what comes back is a pointer into the caller's own
-	// process object.
+	// The image name is fifteen bytes inside the EPROCESS, so the pointer is into the caller's own.
 	state.redirect(mod, "PsGetProcessImageFileName",
 		[](vcpu&, emu_object<_EPROCESS> process) -> addr_t
 		{
@@ -145,10 +129,7 @@ void modules::register_ntoskrnl_process_ops(win_kernel_state& state, proc_module
 			return base;
 		});
 
-	// A session id is not in the EPROCESS: it is eight bytes into the session
-	// space the process points at, which the PDB carries no layout for. A
-	// process with no session -- every process here has none -- is session 0,
-	// which is also what the real one reports for one.
+	// A session id is eight bytes into the session space, which the PDB carries no layout for.
 	state.redirect(mod, "PsGetProcessSessionId",
 		[](vcpu& cpu, emu_object<_EPROCESS> process) -> std::uint32_t
 		{
@@ -168,9 +149,6 @@ void modules::register_ntoskrnl_process_ops(win_kernel_state& state, proc_module
 			return id;
 		});
 
-	// The 32-bit PEB of a wow64 process, which is the first field of the
-	// EWOW64PROCESS the EPROCESS points at. Nothing here runs wow64, so this
-	// only ever says so.
 	state.redirect(mod, "PsGetProcessWow64Process",
 		[](vcpu& cpu, emu_object<_EPROCESS> process) -> addr_t
 		{
@@ -226,8 +204,6 @@ void modules::register_ntoskrnl_process_ops(win_kernel_state& state, proc_module
 			return light;
 		});
 
-	// Both lookups reference what they hand back, so the caller's matching
-	// ObDereferenceObject balances.
 	state.redirect(mod, "PsLookupProcessByProcessId",
 		[st](vcpu&, const std::uint64_t process_id, emu_object<addr_t> process_out) -> NTSTATUS
 		{
@@ -276,9 +252,6 @@ void modules::register_ntoskrnl_process_ops(win_kernel_state& state, proc_module
 			return STATUS_SUCCESS;
 		});
 
-	// A system thread ending itself. It does not return on real Windows either,
-	// so the status below is only ever reached by a caller that had no business
-	// calling it.
 	state.redirect(mod, "PsTerminateSystemThread",
 		[](vcpu& cpu, const NTSTATUS exit_status) -> NTSTATUS
 		{
@@ -299,10 +272,6 @@ void modules::register_ntoskrnl_process_ops(win_kernel_state& state, proc_module
 			return exit_status;
 		});
 
-	// Rundown protection on a process, which is what keeps it from being torn
-	// down while a driver holds a pointer into it. Nothing here deletes a
-	// process, so the count is only ever read back -- but a driver balances the
-	// pair itself and an unbalanced one is its own bug to see.
 	state.redirect(mod, "PsAcquireProcessExitSynchronization",
 		[st](vcpu& cpu, emu_object<_EPROCESS> process) -> NTSTATUS
 		{
@@ -326,10 +295,7 @@ void modules::register_ntoskrnl_process_ops(win_kernel_state& state, proc_module
 			return STATUS_SUCCESS;
 		});
 
-	// The other half. On x86-64 the linker folds it onto
-	// ObDereferenceProcessHandleTable -- both drop a reference on the same
-	// rundown ref -- so one handler serves both names there; on ARM64 they are
-	// two addresses and each needs the registration.
+	// On x86-64 the linker folds this onto ObDereferenceProcessHandleTable; on ARM64 it does not.
 	auto release_exit_sync = [st](vcpu& cpu, emu_object<_EPROCESS> process)
 	{
 		const auto target = process_or_current(*st, cpu, process);
@@ -353,17 +319,14 @@ void modules::register_ntoskrnl_process_ops(win_kernel_state& state, proc_module
 	state.redirect(mod, "PsReleaseProcessExitSynchronization", release_exit_sync);
 	state.redirect(mod, "ObDereferenceProcessHandleTable", release_exit_sync);
 
-	// The process token. Nothing here builds one, so this is the shape of the
-	// answer without an answer to give: a driver that gets null takes its error
-	// path rather than dereferencing a token that was never there.
+	// Nothing here builds a token, so this is the shape of the answer without an answer to give.
 	state.redirect(mod, "PsReferencePrimaryToken",
 		[st](vcpu&, emu_object<_EPROCESS> process) -> addr_t
 		{
 			if (!process)
 				return 0;
 
-			// An EX_FAST_REF keeps a cached reference count in the low bits of
-			// the pointer, so the object is what is left with those masked off.
+			// An EX_FAST_REF keeps a cached reference count in the low bits of the pointer.
 			constexpr std::uint64_t fast_ref_count_mask = 0xF;
 
 			const auto token = process.field(&_EPROCESS::Token)
@@ -384,8 +347,7 @@ void modules::register_ntoskrnl_process_ops(win_kernel_state& state, proc_module
 			return token;
 		});
 
-	// Folded onto IoDeleteController on both architectures, which has the same
-	// shape and the same effect on the object manager.
+	// Folded onto IoDeleteController on both architectures.
 	state.redirect(mod, "PsDereferencePrimaryToken",
 		[st](vcpu&, const addr_t primary_token)
 		{
@@ -395,11 +357,7 @@ void modules::register_ntoskrnl_process_ops(win_kernel_state& state, proc_module
 				st->objs.dereference_object(primary_token);
 		});
 
-	// The file object the process was mapped from. It hangs off the section
-	// object, and nothing here sections an image in, so the real one's
-	// no-section path is the honest answer.
-	// Failing without touching the out parameter, which is what the real one
-	// does: only its success path writes.
+	// Nothing here sections an image in, and the out parameter is left untouched on failure.
 	state.redirect(mod, "PsReferenceProcessFilePointer",
 		[](vcpu&, emu_object<_EPROCESS> process,
 			[[maybe_unused]] emu_object<addr_t> file_object_out) -> NTSTATUS
@@ -419,9 +377,7 @@ void modules::register_ntoskrnl_process_ops(win_kernel_state& state, proc_module
 			return STATUS_UNSUCCESSFUL;
 		});
 
-	// The lifetime callbacks. The tables are kept so that a remove and a
-	// duplicate registration answer correctly; the notification itself is not
-	// delivered, and each registration says so.
+	// The tables are kept so a remove and a duplicate answer correctly; no notification comes.
 	state.redirect(mod, "PsSetCreateProcessNotifyRoutine",
 		[notify](vcpu&, const addr_t notify_routine, const std::uint8_t remove) -> NTSTATUS
 		{
@@ -431,8 +387,6 @@ void modules::register_ntoskrnl_process_ops(win_kernel_state& state, proc_module
 					"PsSetCreateProcessNotifyRoutine", notify_routine);
 		});
 
-	// The Ex form differs in what its routine is handed, which is nothing here
-	// either way, so the two share one table exactly as they do in NT.
 	state.redirect(mod, "PsSetCreateProcessNotifyRoutineEx",
 		[notify](vcpu&, const addr_t notify_routine, const std::uint8_t remove) -> NTSTATUS
 		{
@@ -468,9 +422,7 @@ void modules::register_ntoskrnl_process_ops(win_kernel_state& state, proc_module
 			return remove_notify(notify->image, "PsRemoveLoadImageNotifyRoutine", notify_routine);
 		});
 
-	// A driver attaches for the target's user address space, and there is one
-	// address space here -- so the pair below only move the thread's ApcState,
-	// and a driver reading the target's memory silently gets its own.
+	// There is one address space here, so a driver reading the target's memory gets its own.
 	auto apc_state_of = [](vcpu& cpu) -> emu_object<_KAPC_STATE>
 	{
 		const auto t = std::dynamic_pointer_cast<win_thread>(cpu.thread());

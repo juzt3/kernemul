@@ -20,9 +20,6 @@ std::shared_ptr<proc_module> process::add_module(const std::string_view name, co
 		modules_[mod->lookup_name] = mod;
 	}
 
-	// A forwarded export has the name of another module's where its code would
-	// be, so there is no address to record for it -- find_forward reads the
-	// name back out of the image if something imports it.
 	for (const auto exp : pe->exports())
 	{
 		if (!exp.forwarded)

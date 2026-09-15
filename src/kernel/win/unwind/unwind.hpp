@@ -20,9 +20,7 @@ struct unwind_context
 	static constexpr int max_gp = 31;
 	addr_t gp[max_gp];
 
-	// d8-d15, the callee-saved half of the FP/SIMD registers. Only the low 64
-	// bits are ever spilled by a prologue, so that is all that is tracked.
-	// AArch64 only; the x64 unwinder ignores its save_xmm128 codes.
+	// Only the low 64 bits of d8-d15 are ever spilled, so that is all that is tracked.
 	static constexpr int max_fp = 8;
 	addr_t fp_regs[max_fp];
 };
@@ -54,8 +52,8 @@ struct handler_result
 	addr_t establisher_frame;
 };
 
-// One entry of the C scope table a language handler walks. Not in the generated
-// types: the kernel never stores one, it only reads them out of .xdata.
+// Not in the generated types: the kernel never stores one, it only reads them out of .xdata.
+// Not in the generated types: the kernel only ever reads these out of .xdata.
 struct scope_entry
 {
 	std::uint32_t begin_address;
@@ -70,17 +68,11 @@ struct scope_search
 	addr_t handler_data = 0;
 	addr_t control_pc = 0;
 	addr_t establisher_frame = 0;
-	// What a filter is handed, and how much room it and anything beside it take
-	// above the frame the filter call runs in.
 	addr_t exception_pointers = 0;
 	std::size_t scratch = 0;
 	std::uint32_t first_scope = 0;
 };
 
-// The C scope table search, shared by the two callers that need it: the
-// dispatcher in win_exception, and a driver that called __C_specific_handler to
-// do its own. The table is read out of guest memory, which is where both have
-// it.
 handler_result search_scope_table(vcpu& cpu, guest_caller& calls, const scope_search& search);
 
 struct filter_pointers
@@ -89,14 +81,9 @@ struct filter_pointers
 	std::size_t scratch;
 };
 
-// The EXCEPTION_POINTERS a filter is handed, built from a fault recode caught
-// itself. A driver dispatching its own already has a pair to pass on.
 filter_pointers build_exception_pointers(vcpu& cpu, windows_emulator& emulator,
 	const exception_info& info);
 
-// What a language handler is called with. The record and the context are what
-// it reads, the dispatcher context is what it answers through, and the scratch
-// is the room all three need above the frame the call itself runs in.
 struct dispatch_frame
 {
 	addr_t record = 0;

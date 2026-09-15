@@ -19,10 +19,7 @@ namespace win_target
 constexpr std::uint64_t kuser_shared_data_user_va   = 0x7FFE0000;
 constexpr std::uint64_t kuser_shared_data_kernel_va  = 0xFFFFF78000000000;
 
-// The processor count reaches the guest through several unrelated places --
-// here, the PEB, SystemBasicInformation, the NUMA map, the group relationship --
-// and they have to agree: ntdll's segment heap sizes per-processor slots from
-// one and indexes them by the processor number it is running on.
+// The processor count reaches the guest in several unrelated places, which have to agree.
 inline _KUSER_SHARED_DATA make_default_kuser_shared_data(const std::size_t processors)
 {
 	_KUSER_SHARED_DATA sd{};
@@ -41,8 +38,6 @@ inline _KUSER_SHARED_DATA make_default_kuser_shared_data(const std::size_t proce
 	sd.LargePageMinimum = 0x200000;
 	sd.TickCountMultiplier = 0x0FA00000;
 
-	// NtSystemRoot is a fixed guest array, so the copy is bounded by it rather
-	// than by trusting the source to fit, and terminated by hand.
 	const auto root_chars = std::min(windows_dir.size(), std::size(sd.NtSystemRoot) - 1);
 	std::char_traits<char16_t>::copy(sd.NtSystemRoot, windows_dir.data(), root_chars);
 	sd.NtSystemRoot[root_chars] = u'\0';
@@ -62,7 +57,6 @@ inline _PEB64 make_default_peb(const std::size_t processors)
 	peb.HeapDeCommitFreeBlockThreshold = 0x1000;
 	peb.MaximumNumberOfHeaps = 0x10;
 
-	// todo: fetch these automatically
 	peb.OSMajorVersion = 10;
 	peb.OSBuildNumber = 19045;
 	peb.OSPlatformId = 2;
@@ -79,9 +73,7 @@ inline _TEB64 make_default_teb(addr_t teb_addr, addr_t stack_base,
 {
 	_TEB64 teb{};
 
-	// The processors this thread may run on. RtlGetCurrentProcessorNumber tests
-	// the number it read out of the cpu against this mask and takes a slow path
-	// when the bit is clear -- left zero, no processor ever matches.
+	// RtlGetCurrentProcessorNumber takes a slow path when the bit is clear, so it is set.
 	teb.PrimaryGroupAffinity.Mask = processors >= 64 ? ~0ull : (1ull << processors) - 1;
 	teb.PrimaryGroupAffinity.Group = 0;
 

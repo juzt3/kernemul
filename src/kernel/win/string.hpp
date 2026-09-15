@@ -8,9 +8,7 @@
 namespace win
 {
 
-// A counted string is a length in bytes and a pointer. Neither the terminator
-// nor anything past Length is part of it -- the buffer is very often not
-// terminated at all -- so this is not guest::read_wstring's job.
+// Nothing past Length is part of it; the buffer is very often not terminated at all.
 template <typename T, typename S>
 std::basic_string<T> read_counted_string(addr_space& space, const S& str)
 {
@@ -43,10 +41,6 @@ inline std::string read_ansi_string(const emu_object<_STRING>& str)
 	return str ? read_ansi_string(*str.space(), str.read()) : std::string{};
 }
 
-// What RtlCompareUnicodeString promises is only the sign of the result. The
-// ordering comes from the library when the compare is exact, and from
-// compare_ascii_nocase when it folds -- see there for why NT's folding is not
-// the host CRT's.
 inline int compare_unicode(std::u16string_view a, std::u16string_view b,
 	const bool case_insensitive)
 {

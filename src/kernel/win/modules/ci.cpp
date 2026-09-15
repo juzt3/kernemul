@@ -12,9 +12,7 @@
 namespace
 {
 
-// MINCRYPT_POLICY_INFO, the structure Ci hands back describing what it decided
-// about a file. A WDK-adjacent type the kernel does not store, so the layout is
-// declared here; only the head of it is filled in.
+// A type the kernel does not store, so the layout is declared here; only its head is filled in.
 #pragma pack(push, 8)
 struct policy_info_t
 {
@@ -29,8 +27,6 @@ struct policy_info_t
 };
 #pragma pack(pop)
 
-// The digest a catalogue lookup is keyed by. Everything current signs with
-// SHA-256.
 constexpr std::size_t sha256_size = 32;
 
 std::array<std::uint8_t, sha256_size> sha256(const std::span<const std::uint8_t> data)
@@ -45,17 +41,11 @@ std::array<std::uint8_t, sha256_size> sha256(const std::span<const std::uint8_t>
 
 }
 
-// Code integrity. Every one of these ends in STATUS_INVALID_IMAGE_HASH: nothing
-// here holds a certificate store or a catalogue, so no file can be vouched for,
-// and a driver told an image is unsigned takes the path it takes on a machine
-// where it is. The hashing is real, so a driver that computes a digest and
-// compares it against one of its own gets the right answer.
+// All of these end in STATUS_INVALID_IMAGE_HASH: no catalogue or certificate store is here.
 void modules::register_ci(win_kernel_state& state, proc_module& mod)
 {
 	auto* st = &state;
 
-	// The real one parses the image, hashes it and walks its certificate chain.
-	// The hash is real here; there is nothing to check the chain against.
 	state.redirect(mod, "CiCheckSignedFile",
 		[](vcpu& cpu, const addr_t digest, const std::uint32_t digest_size,
 			const std::uint32_t digest_identifier, const addr_t win_certificate,
@@ -82,9 +72,7 @@ void modules::register_ci(win_kernel_state& state, proc_module& mod)
 			return STATUS_INVALID_IMAGE_HASH;
 		});
 
-	// The chain info a check would have allocated. Nothing is allocated on the
-	// failure path above, so there is nothing to give back -- and a driver that
-	// calls this on a policy it never got a chain for is doing the right thing.
+	// Nothing is allocated on the failure path above, so there is nothing to give back.
 	state.redirect(mod, "CiFreePolicyInfo", [](vcpu&, emu_object<policy_info_t> policy_info)
 	{
 		if (!policy_info)
@@ -95,8 +83,6 @@ void modules::register_ci(win_kernel_state& state, proc_module& mod)
 		policy_info.write({});
 	});
 
-	// A catalogue lookup, keyed by the digest of the file. No catalogue is
-	// loaded, so no digest is in one.
 	state.redirect(mod, "CiVerifyHashInCatalog",
 		[](vcpu& cpu, const addr_t hash, const std::uint32_t hash_size,
 			const std::uint32_t hash_algorithm, const bool is_reload_catalogs,
@@ -114,8 +100,6 @@ void modules::register_ci(win_kernel_state& state, proc_module& mod)
 				policy_info.write(info);
 			}
 
-			// The digest the caller is asking about, read back so the log names
-			// what was looked up rather than an address.
 			std::string digest;
 
 			if (hash && hash_size)
@@ -135,9 +119,6 @@ void modules::register_ci(win_kernel_state& state, proc_module& mod)
 			return STATUS_INVALID_IMAGE_HASH;
 		});
 
-	// The same question about a file that is already open. The file is one the
-	// io manager here made, so its contents are hashed for real -- and then
-	// there is still nothing to check the result against.
 	state.redirect(mod, "CiValidateFileObject",
 		[st](vcpu& cpu, const addr_t file_object, const std::uint32_t unknown1,
 			const std::uint32_t unknown2, emu_object<policy_info_t> policy_info,
@@ -155,8 +136,6 @@ void modules::register_ci(win_kernel_state& state, proc_module& mod)
 
 			const auto computed = sha256(host->file->data());
 
-			// The digest is real and the caller gets it; what it cannot get is
-			// a verdict, because nothing here is authorised to give one.
 			if (digest && digest_size)
 			{
 				const auto room = digest_size.read();

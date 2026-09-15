@@ -3,11 +3,7 @@
 #include "../win_kernel.hpp"
 #include "../../../util/log.hpp"
 
-// The window manager's message dispatch. There is no desktop and no window, so
-// the message goes to the log and the caller is told it was handled.
-//
-// ResultInfo is where a message that answers with more than a return value puts
-// it, and nothing here writes one.
+// There is no desktop and no window, so the message is logged and reported as handled.
 void modules::register_win32k(win_kernel_state& state, proc_module& mod)
 {
 	state.redirect(mod, "NtUserMessageCall",

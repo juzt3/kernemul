@@ -15,7 +15,6 @@
 namespace
 {
 
-// An ntdll shape rather than a kernel one, so not in the generated types.
 #pragma pack(push, 8)
 struct file_io_completion_information_t
 {
@@ -37,8 +36,6 @@ struct completion_packet
 	std::uint64_t information = 0;
 };
 
-// The body is a real KQUEUE, so the signal state is the depth and a wait on the
-// handle works. The packets are host side: nothing in the guest walks the list.
 struct io_completion_host final : win_object
 {
 	std::string name;
@@ -144,8 +141,7 @@ struct worker_factory_basic_information_t
 };
 #pragma pack(pop)
 
-// The four bytes before start_routine are an alignment hole rather than a
-// member, so the size is the only thing that pins the tail of this down.
+// The four bytes before start_routine are an alignment hole, so the size pins the tail down.
 static_assert(sizeof(worker_factory_basic_information_t) == 0x70);
 
 std::string attribute_name(vcpu& cpu, const emu_object<_OBJECT_ATTRIBUTES>& object_attributes)
@@ -161,9 +157,7 @@ std::string attribute_name(vcpu& cpu, const emu_object<_OBJECT_ATTRIBUTES>& obje
 
 }
 
-// A port carries real packets. What is missing is blocking inside the remove: a
-// wait parks the thread and lets the scheduler write the status, and a remove
-// has packets to hand back too, so an empty port answers STATUS_TIMEOUT.
+// What is missing is blocking inside the remove, so an empty port answers STATUS_TIMEOUT.
 void modules::register_ntoskrnl_iocp_ops(win_kernel_state& state, proc_module& mod)
 {
 	auto* st = &state;
@@ -198,7 +192,6 @@ void modules::register_ntoskrnl_iocp_ops(win_kernel_state& state, proc_module& m
 			queue.field(&_KQUEUE::MaximumCount).write(concurrent_threads
 				? concurrent_threads : 1);
 
-			// Anchored in itself, so a guest walking either list finds it empty.
 			const auto head = addr + offsetof(_KQUEUE, EntryListHead);
 			queue.field(&_KQUEUE::EntryListHead).write(guest_links(head, head));
 
@@ -246,8 +239,6 @@ void modules::register_ntoskrnl_iocp_ops(win_kernel_state& state, proc_module& m
 
 	state.redirect_ntzw(mod, "SetIoCompletion", set_completion);
 
-	// The Ex form posts through a pre-allocated packet; nothing here allocates
-	// either, so the handle only has to name a real one.
 	state.redirect_ntzw(mod, "SetIoCompletionEx",
 		[st, set_completion](vcpu& cpu, const std::uint64_t handle,
 			const std::uint64_t packet_handle, const addr_t key_context,
@@ -391,8 +382,6 @@ void modules::register_ntoskrnl_iocp_ops(win_kernel_state& state, proc_module& m
 			return STATUS_SUCCESS;
 		});
 
-	// Nothing here watches an object, so a target signalled now is posted now
-	// and one that is not never fires.
 	state.redirect_ntzw(mod, "AssociateWaitCompletionPacket",
 		[st, port_from_handle](vcpu& cpu, const std::uint64_t packet_handle,
 			const std::uint64_t port_handle, const std::uint64_t target_handle,
@@ -529,7 +518,6 @@ void modules::register_ntoskrnl_iocp_ops(win_kernel_state& state, proc_module& m
 		return st->sys_proc->handle_table().get_object<worker_factory_host>(handle);
 	};
 
-	// Every class is a knob on a pool that never runs.
 	state.redirect_ntzw(mod, "SetInformationWorkerFactory",
 		[factory_from_handle](vcpu&, const std::uint64_t handle,
 			const std::uint32_t information_class, const addr_t buffer,
@@ -585,7 +573,6 @@ void modules::register_ntoskrnl_iocp_ops(win_kernel_state& state, proc_module& m
 			return STATUS_SUCCESS;
 		});
 
-	// Both are called by a pool thread, and there are none.
 	auto worker_call = [factory_from_handle](const std::uint64_t handle,
 		const std::string_view who) -> NTSTATUS
 	{

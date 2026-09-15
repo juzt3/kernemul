@@ -7,14 +7,12 @@
 #include <cstring>
 #include <span>
 
-// CONTEXT_*, the x86-64 tag and the halves asked for on top of it.
 inline constexpr context_flags context_amd64    { 0x00100000 };
 inline constexpr context_flags context_control  = context_amd64.with(0x1);
 inline constexpr context_flags context_integer  = context_amd64.with(0x2);
 inline constexpr context_flags context_segments = context_amd64.with(0x4);
 inline constexpr context_flags context_float    = context_amd64.with(0x8);
 
-// CONTEXT_FULL: what ntdll stamps on a context it means to continue through.
 inline constexpr context_flags context_full =
 	context_control | context_integer | context_float;
 
@@ -29,8 +27,7 @@ struct x86_win_syscall : win_syscall
 	[[nodiscard]] std::optional<std::uint32_t> decode_id(
 		const std::span<const std::uint8_t> stub) const override
 	{
-		//   4C 8B D1        mov r10, rcx
-		//   B8 XX XX XX XX  mov eax, service_number
+		// 4C 8B D1 mov r10, rcx; B8 XX XX XX XX mov eax, service_number.
 		constexpr std::uint8_t opening[]{ 0x4C, 0x8B, 0xD1, 0xB8 };
 
 		if (stub.size() < sizeof(opening) + sizeof(std::uint32_t))
@@ -46,10 +43,6 @@ struct x86_win_syscall : win_syscall
 	}
 };
 
-// Windows on x86-64: the TEB is reached through the GS base, and the CPU needs
-// a GDT, a TSS and an IDT before any of that works. The KPCR shares that same
-// GS base, which is why a thread going on a cpu has to put its cpu's block back
-// -- see win_thread::restore.
 class x86_win_emulator : public windows_emulator
 {
 public:
@@ -59,15 +52,11 @@ public:
 	{
 		auto cpu = emu_->add_vcpu();
 
-		// None of a cpu's state is worth building without ntoskrnl: the IDT's
-		// handlers are its symbols, and a machine that could not map it has
-		// nothing to run anyway.
 		if (const auto nt = kernel().sys_proc->find_module("ntoskrnl.exe"))
 		{
 			const auto tables = x86_win_seg::init_vcpu(*cpu, *nt);
 
-			// After the tables, because the KPCR carries the pointers to them
-			// and the guest reads its own descriptor tables back out of it.
+			// After the tables: the KPCR carries the pointers the guest reads back out of it.
 			const auto& pcpu = kernel().init_per_cpu(*cpu);
 			const auto& kpcr = pcpu.object();
 
@@ -88,17 +77,11 @@ public:
 		x86_win_seg::set_kernel_gs(cpu, kpcr_va);
 	}
 
-	// cr8 is the task priority register, and on x86-64 Windows the IRQL is
-	// exactly what it holds: a driver reads its own IRQL with __readcr8 rather
-	// than calling anything, so the register has to agree with the KPCR.
 	void set_hw_irql(vcpu& cpu, const irql_t irql) override
 	{
 		cpu.reg(x86::cr8, static_cast<std::uint64_t>(irql));
 	}
 
-	// A user thread is born in ring 3 and never leaves it: a syscall is served
-	// natively, so nothing swaps these back. cs, ss and gs are saved registers,
-	// so a context switch carries the mode with them.
 	void init_thread_teb(thread& t, vcpu& cpu, addr_t teb_addr) override
 	{
 		t.set_reg_val(cpu, x86::cs, x86_win_seg::make_usermode_cs());
@@ -106,9 +89,7 @@ public:
 		t.set_reg_val(cpu, x86::gs, x86_win_seg::make_usermode_gs(teb_addr));
 	}
 
-	// LdrInitializeThunk(context, ntdll_base). The loader ends by handing that
-	// context to NtContinue, arriving at RtlUserThreadStart with the entry
-	// point in rcx.
+	// LdrInitializeThunk(context, ntdll_base); the loader hands that context to NtContinue.
 	void setup_loader_frame(thread& t, vcpu& cpu, const addr_t entry_point,
 		const addr_t ntdll_base) override
 	{
@@ -120,7 +101,6 @@ public:
 		auto& space = *t.proc()->addr_space();
 		const auto thread_start = t.proc()->thread_exit_addr();
 
-		// Clear of the guard page, and aligned: this goes straight to NtContinue.
 		const addr_t stack_top = (ut->stack_base() - 0x1000) & ~addr_t(0xF);
 		const addr_t context_addr = (stack_top - sizeof(_CONTEXT)) & ~addr_t(0xF);
 
@@ -136,12 +116,10 @@ public:
 
 		space.write_mem(context_addr, &ctx, sizeof(ctx));
 
-		// enqueue() already pushed a return address, but the stack pointer moves
-		// here, so the same one goes where the loader will find it.
+		// enqueue() already pushed a return address, but the stack pointer moves here.
 		const addr_t sp = context_addr - sizeof(addr_t);
 		space.write_mem<addr_t>(sp, thread_start);
 
-		// ntdll's GetCurrentNlsCache takes a much shorter path when this is set.
 		if (const auto& teb = ut->teb())
 			space.write_mem<std::uint8_t>(teb.address() + 0x179C, 1);
 
@@ -155,27 +133,12 @@ public:
 			thread_start, entry_point);
 	}
 
-	// KiUserExceptionDispatcher reads both of its arguments off its own stack:
-	//
-	//   mov rcx, rsp ; add rcx, 4F0h    -- the record
-	//   mov rdx, rsp                    -- the context
-	//   call RtlDispatchException
-	//
-	// so rsp is the context and the record sits at a fixed offset above it.
-	// Taken from the ntdll in the guest filesystem rather than assumed.
+	// From the guest's ntdll: "add rcx, 4F0h" the record, "mov rdx, rsp" the context.
 	static constexpr addr_t exception_record_offset = 0x4F0;
 	static_assert(sizeof(_CONTEXT) <= exception_record_offset,
 		"a CONTEXT has to fit under the record the dispatcher expects above it");
 
-	// Unwinding back out of the dispatcher is the other half of the contract,
-	// and its unwind codes end with
-	//
-	//   UWOP_ALLOC_LARGE 0x590
-	//   UWOP_PUSH_MACHFRAME
-	//
-	// so above the record there is a machine frame -- rip, cs, eflags, rsp, ss
-	// -- and that is what the faulting frame is rebuilt from. Without it the
-	// unwinder reads a zero rsp and pops a return address off address zero.
+	// Unwind codes end UWOP_ALLOC_LARGE 0x590, UWOP_PUSH_MACHFRAME: rip, cs, eflags, rsp, ss.
 	static constexpr addr_t machine_frame_offset = 0x590;
 	static_assert(exception_record_offset + sizeof(_EXCEPTION_RECORD) <= machine_frame_offset,
 		"the record has to fit under the machine frame");
@@ -196,14 +159,9 @@ public:
 
 		constexpr addr_t frame = machine_frame_offset + sizeof(machine_frame);
 
-		// Below the faulting frame, clear of anything it may read past its own
-		// stack pointer, and aligned the way a call would have left it.
 		const addr_t context_addr = (cpu.sp() - 0x100 - frame) & ~addr_t(0xF);
 		const addr_t record_addr = context_addr + exception_record_offset;
 
-		// Everything the architecture can say, because ntdll both dispatches and
-		// unwinds through this one: what is left out here is what a handler
-		// taking the frame restores over the registers the fault came in with.
 		emu_object<_CONTEXT> context(space, context_addr);
 		context.write(_CONTEXT{});
 		capture_context({cpu}, context, context_all);
@@ -221,7 +179,6 @@ public:
 
 		space.write_mem(record_addr, record);
 
-		// The faulting frame, as the machine frame an interrupt would have left.
 		const machine_frame mframe{
 			.rip = info.exception_address,
 			.cs = x86_win_seg::user_cs,
@@ -238,10 +195,7 @@ public:
 		return true;
 	}
 
-	// x87 and sse control words. The backend has no register for either, so
-	// these are what a thread runs with rather than what the cpu holds -- but a
-	// zero is worse than a stand-in: an MxCsr of zero unmasks every sse
-	// exception, and ntdll continues through a captured context with ldmxcsr.
+	// The backend has no register for either; an MxCsr of zero unmasks every sse exception.
 	static constexpr std::uint32_t default_mxcsr = 0x1F80;
 	static constexpr std::uint16_t default_fpcw  = 0x27F;
 
@@ -301,10 +255,7 @@ public:
 			ctx.SegGs = data_sel;
 		}
 
-		// xmm6-15 are nonvolatile, and this is the only place they reach a
-		// CONTEXT: a frame that spilled one and is then unwound past gets it
-		// back out of here. Leaving the half out meant ntdll restoring zeroes
-		// over every one of them on the way out of an exception.
+		// xmm6-15 are nonvolatile, and leaving the half out had ntdll restore zeroes over them.
 		if (flags.has(context_float))
 		{
 			filled |= context_float;
@@ -374,8 +325,6 @@ public:
 			// Bit 1 reads as one, and a hand-built CONTEXT often leaves it clear.
 			regs.set(x86::rflags, ctx.EFlags | 0x2u);
 
-			// How a thread leaves ntdll's loader. A context naming ring 0 needs
-			// nothing -- the thread is already there.
 			if (static_cast<std::uint16_t>(ctx.SegCs) == x86_win_seg::user_cs)
 			{
 				regs.set_reg(x86::cs, x86_win_seg::make_usermode_cs());

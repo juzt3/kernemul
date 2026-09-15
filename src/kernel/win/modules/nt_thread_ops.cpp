@@ -10,10 +10,7 @@ void modules::register_ntoskrnl_thread_ops(win_kernel_state& state, proc_module&
 {
 	auto* sys_proc = state.sys_proc.get();
 
-	// A system thread starts inside this stub in real Windows: it calls the
-	// start routine and ends the thread when it returns. Nothing of it is
-	// executed here -- threads are given it as their return address, so landing
-	// on it means the start routine returned.
+	// Nothing of this stub is executed; threads are given it as their return address.
 	state.redirect(mod, kernel_thread_startup, [](vcpu& cpu)
 	{
 		if (const auto t = cpu.thread())
@@ -34,8 +31,6 @@ void modules::register_ntoskrnl_thread_ops(win_kernel_state& state, proc_module&
 			auto t = sys_proc->create_thread(cpu, start_routine);
 			cpu.emu()->call_conv()->set_arg(cpu, *t, 0, start_context);
 
-			// The thread's ETHREAD is already a registered object, so the
-			// handle names it directly and the guest can read what it gets.
 			const auto ethread = std::static_pointer_cast<win_thread>(t)->ethread().address();
 
 			if (!ethread)
@@ -61,10 +56,7 @@ void modules::register_ntoskrnl_thread_ops(win_kernel_state& state, proc_module&
 			return STATUS_SUCCESS;
 		});
 
-	// The interval is in 100ns units: negative is a delay from now, positive an
-	// absolute guest time to wait until. Nothing here queues APCs, so an
-	// alertable wait has nothing to be interrupted by and always runs its
-	// course -- which is why the result is only ever success.
+	// Nothing here queues APCs, so an alertable wait always runs its course.
 	state.redirect(mod, "KeDelayExecutionThread",
 		[](vcpu& cpu, const std::uint8_t wait_mode, const std::uint8_t alertable,
 			emu_object<std::int64_t> interval) -> NTSTATUS
@@ -82,10 +74,6 @@ void modules::register_ntoskrnl_thread_ops(win_kernel_state& state, proc_module&
 			THREAD_LOG_INFO("KeDelayExecutionThread(wait_mode={}, alertable={}, interval={}): {}ms",
 				wait_mode, alertable, ticks, ms.count());
 
-			// An absolute time already past, or a delay too short to name in
-			// milliseconds, is a request to give up the rest of the quantum
-			// rather than to wait: the thread is runnable the moment it is off
-			// the cpu, so it goes back on the queue awake.
 			if (ms > std::chrono::milliseconds::zero())
 				thread_scheduler::sleep_current(cpu, ms);
 			else
@@ -94,10 +82,7 @@ void modules::register_ntoskrnl_thread_ops(win_kernel_state& state, proc_module&
 			return STATUS_SUCCESS;
 		});
 
-	// The increment is relative to the owning process's base priority, and what
-	// comes back is the increment the thread had before. Nothing here schedules
-	// by priority, so moving it changes only what the guest reads back -- which
-	// it does, to restore the level it found.
+	// Nothing here schedules by priority, so moving it changes only what the guest reads back.
 	state.redirect(mod, "KeSetBasePriorityThread",
 		[](vcpu& cpu, emu_object<_KTHREAD> thread, const std::int32_t increment) -> std::int32_t
 		{
@@ -123,10 +108,7 @@ void modules::register_ntoskrnl_thread_ops(win_kernel_state& state, proc_module&
 			return previous;
 		});
 
-	// The irp a filesystem filter is re-entered under, which is per thread and
-	// lives in the ETHREAD rather than anywhere the io manager keeps. Nothing
-	// here builds an irp, so what the guest reads back is only ever what the
-	// guest itself put there -- which is exactly what a filter checks it for.
+	// Nothing here builds an irp, so the guest reads back only what the guest put there.
 	state.redirect(mod, "IoGetTopLevelIrp", [](vcpu& cpu) -> addr_t
 	{
 		const auto t = std::dynamic_pointer_cast<win_thread>(cpu.thread());

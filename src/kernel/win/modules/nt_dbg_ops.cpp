@@ -3,8 +3,7 @@
 #include "../status.hpp"
 #include "../../../util/format.hpp"
 
-// What a driver says about itself, and what it asks the debugger. Everything it
-// prints goes to the emulator log, which is the only debugger there is.
+// Everything a driver prints goes to the emulator log, which is the only debugger there is.
 void modules::register_ntoskrnl_dbg_ops(win_kernel_state& state, proc_module& mod)
 {
 	state.redirect(mod, "DbgPrint",
@@ -25,9 +24,6 @@ void modules::register_ntoskrnl_dbg_ops(win_kernel_state& state, proc_module& mo
 			return 0;
 		});
 
-	// A kernel debugger is what answers all of these, and none is attached.
-	// KdChangeOption sets a debugger option -- there is no debugger to hold one,
-	// and the option a caller cannot set is one it must not believe it did.
 	state.redirect(mod, "KdChangeOption",
 		[](vcpu&, const std::uint32_t option, const std::uint32_t in_buffer_bytes,
 			const addr_t in_buffer, const std::uint32_t out_buffer_bytes,
@@ -43,9 +39,6 @@ void modules::register_ntoskrnl_dbg_ops(win_kernel_state& state, proc_module& mo
 			return STATUS_DEBUGGER_INACTIVE;
 		});
 
-	// Reading and writing memory, io ports and MSRs through the debugger. The
-	// same answer, and for the same reason -- a caller told the debugger is
-	// inactive stops, where one handed success would act on an untouched buffer.
 	auto system_debug_control = [](vcpu&, const std::uint32_t command,
 		const addr_t input_buffer, const std::uint32_t input_buffer_length,
 		const addr_t output_buffer, const std::uint32_t output_buffer_length,
@@ -58,19 +51,13 @@ void modules::register_ntoskrnl_dbg_ops(win_kernel_state& state, proc_module& mo
 			"debugger is attached",
 			command, input_buffer, input_buffer_length, output_buffer, output_buffer_length);
 
-		// What the real one returns without a debugger present, rather than
-		// STATUS_DEBUGGER_INACTIVE: the check that fails first is the privilege.
+		// What the real one returns without a debugger: the privilege is the check that fails.
 		return STATUS_ACCESS_DENIED;
 	};
 
 	state.redirect(mod, "KdSystemDebugControl", system_debug_control);
 	state.redirect_ntzw(mod, "SystemDebugControl", system_debug_control);
 
-	// The callback would be handed every line DbgPrint produces. Everything
-	// DbgPrint produces goes to the emulator log instead, so a driver that
-	// registered one to capture its own output captures nothing -- and a driver
-	// told the registration failed knows that, where one told it succeeded
-	// would wait for lines that never come.
 	state.redirect(mod, "DbgSetDebugPrintCallback",
 		[](vcpu&, const addr_t debug_print_callback, const bool enable) -> NTSTATUS
 		{
@@ -78,8 +65,7 @@ void modules::register_ntoskrnl_dbg_ops(win_kernel_state& state, proc_module& mo
 				"output goes to the emulator log and nothing forwards it on",
 				debug_print_callback, enable);
 
-			// The registration itself succeeds -- a driver that is told it failed
-			// treats its own logging as broken and several refuse to load.
+			// The registration succeeds: a driver told it failed treats its own logging as broken.
 			return STATUS_SUCCESS;
 		});
 }

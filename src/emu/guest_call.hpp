@@ -7,8 +7,6 @@
 #include <span>
 #include <vector>
 
-// Hands the rest of the call to `routine`: the return address is left alone, so
-// it returns straight to whoever called the export, with its own result.
 inline void guest_tail_call(vcpu& cpu, const addr_t routine,
 	const std::span<const std::uint64_t> args)
 {
@@ -20,14 +18,9 @@ inline void guest_tail_call(vcpu& cpu, const addr_t routine,
 	cpu.set_pc(routine);
 }
 
-// Runs a guest routine and comes back with what it returned. The quantum timer
-// cannot take a nested run away (see vcpu::try_stop), so this is only for the
-// routines the guest hands over expecting them back.
 class guest_caller
 {
 public:
-	// `scratch` bytes above the routine's frame survive the call; scratch_base
-	// says where they are.
 	std::uint64_t call(vcpu& cpu, addr_t routine, std::span<const std::uint64_t> args,
 		std::size_t scratch = 0)
 	{
@@ -63,8 +56,7 @@ public:
 	}
 
 private:
-	// Clear of the handler's frame, so a routine reading past its arguments --
-	// x64 home space, a varargs spill -- stays off it.
+	// Clear of the handler frame, so a routine reading past its arguments stays off it.
 	static constexpr addr_t red_zone = 0x100;
 
 	// Returned to rather than executed: the hook fires on the address.

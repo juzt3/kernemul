@@ -1,9 +1,5 @@
 #pragma once
-// Selects the generated Windows type set for the guest architecture.
-//
-// Both headers are produced by tools/gen_types.py from the matching ntoskrnl
-// PDB. They define the same tag names with different layouts, so exactly one
-// may be included -- see src/target.hpp for why the choice is compile time.
+// They define the same tag names with different layouts, so exactly one may be included.
 
 #include "../../target.hpp"
 

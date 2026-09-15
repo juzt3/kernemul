@@ -6,11 +6,7 @@
 #include <optional>
 #include <string>
 
-// The executive pool. addr_space::alloc is page-granular and never frees, so
-// this reserves from it in large runs and does its own splitting, coalescing
-// and reuse inside them. The bookkeeping is host side rather than in a header
-// in front of each block, so a driver overrunning its allocation cannot rewrite
-// the allocator's own state.
+// Bookkeeping is host side, so a driver overrunning its allocation cannot rewrite the allocator.
 class win_pool
 {
 public:
@@ -18,7 +14,6 @@ public:
 
 	struct allocation
 	{
-		// As the caller asked for it, not the aligned block it landed in.
 		std::size_t size = 0;
 		std::uint32_t tag = 0;
 	};
@@ -30,7 +25,6 @@ public:
 private:
 	struct block
 	{
-		// Including the alignment padding, so blocks tile their run.
 		std::size_t size = 0;
 		std::size_t requested = 0;
 		std::uint32_t tag = 0;
@@ -44,15 +38,12 @@ private:
 	addr_space* space_;
 	std::mutex mtx_;
 
-	// Free and busy alike, ordered by address: neighbours here are neighbours
-	// in memory exactly when one ends where the next starts.
 	std::map<addr_t, block> blocks_;
 };
 
 [[nodiscard]] std::string pool_tag_name(std::uint32_t tag);
 
-// The inverse: 'Abcd' packed low byte first, which is how a tag is stored and
-// how pool_tag_name reads it back.
+// 'Abcd' packed low byte first, which is how a tag is stored.
 constexpr std::uint32_t pool_tag(const char (&name)[5])
 {
 	return static_cast<std::uint32_t>(static_cast<unsigned char>(name[0]))

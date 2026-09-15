@@ -12,9 +12,6 @@
 namespace
 {
 
-// The filter a driver registers, and the ports it opens on it. Nothing here
-// sends an operation through a filter, so what these objects carry is what the
-// driver put in them and can read back.
 struct filter_host final : win_object
 {
 	addr_t driver_object = 0;
@@ -29,8 +26,7 @@ struct port_host final : win_object
 	addr_t message_notify = 0;
 };
 
-// FLT_FILE_NAME_INFORMATION, a WDK structure ending in the buffer its counted
-// strings point into. The same on both architectures.
+// A WDK structure ending in the buffer its counted strings point into; the same on both.
 #pragma pack(push, 8)
 struct flt_file_name_information_t
 {
@@ -48,8 +44,7 @@ struct flt_file_name_information_t
 };
 #pragma pack(pop)
 
-// A filter object body is opaque to the driver: it holds the pointer and hands
-// it back. Sized so a driver poking about inside one stays in its own memory.
+// Sized so a driver poking about inside one stays in its own memory.
 constexpr std::size_t filter_body_size = 0x100;
 constexpr std::size_t port_body_size = 0x100;
 constexpr std::size_t security_descriptor_size = 0x40;
@@ -65,17 +60,11 @@ addr_t create_opaque(win_kernel_state& state, const std::size_t size,
 
 }
 
-// The filter manager. A minifilter registers, opens its communication port and
-// starts filtering; nothing here sends it an operation to filter, so what these
-// do is give it the objects it needs to get that far and report what it asked
-// for -- which is how far a minifilter gets before it waits for io that never
-// comes.
+// Nothing here sends a minifilter an operation, so it waits for io that never comes.
 void modules::register_fltmgr(win_kernel_state& state, proc_module& mod)
 {
 	auto* st = &state;
 
-	// A push lock with no contention is bookkeeping: one thread at a time
-	// reaches a handler, and nothing here blocks.
 	auto push_lock = [](vcpu&, const addr_t push_lock_address)
 	{
 		THREAD_LOG_INFO("FltPushLock(0x{:X})", push_lock_address);
@@ -85,9 +74,6 @@ void modules::register_fltmgr(win_kernel_state& state, proc_module& mod)
 	state.redirect(mod, "FltAcquirePushLockShared", push_lock);
 	state.redirect(mod, "FltReleasePushLock", push_lock);
 
-	// The registration structure names the callbacks the filter wants. They are
-	// read out and reported, because a filter registering for operations that
-	// will never arrive is the thing worth knowing from a run.
 	state.redirect(mod, "FltRegisterFilter",
 		[st](vcpu& cpu, const addr_t driver_object, emu_object<void> registration,
 			emu_object<addr_t> ret_filter) -> NTSTATUS
@@ -95,10 +81,7 @@ void modules::register_fltmgr(win_kernel_state& state, proc_module& mod)
 			if (!ret_filter || !registration)
 				return STATUS_INVALID_PARAMETER;
 
-			// FLT_REGISTRATION begins with Size and Version, then Flags, then a
-			// context registration pointer and the operation registration
-			// pointer. Only the counts are read; the callback table behind them
-			// is the filter's own shape.
+			// Only the counts are read out of FLT_REGISTRATION; the callback table is the filter's.
 			auto& space = *cpu.curr_addr_space();
 			const auto size = space.read_mem<std::uint16_t>(registration.address());
 			const auto version = space.read_mem<std::uint16_t>(registration.address() + 2);
@@ -150,9 +133,7 @@ void modules::register_fltmgr(win_kernel_state& state, proc_module& mod)
 		st->objs.dereference_object(filter);
 	});
 
-	// A descriptor the caller frees with FltFreeSecurityDescriptor, so it comes
-	// out of the pool. Nothing checks a descriptor, so what is in it is only
-	// what makes it a distinct allocation.
+	// Nothing checks a descriptor, so what is in it is only what makes it a distinct allocation.
 	state.redirect(mod, "FltBuildDefaultSecurityDescriptor",
 		[st](vcpu&, emu_object<addr_t> security_descriptor,
 			const std::uint32_t desired_access) -> NTSTATUS
@@ -189,8 +170,7 @@ void modules::register_fltmgr(win_kernel_state& state, proc_module& mod)
 			THREAD_LOG_INFO("FltFreeSecurityDescriptor(0x{:X})", security_descriptor);
 		});
 
-	// The port a filter opens for user mode to connect to. Nothing here is user
-	// mode, so the connect and message callbacks are recorded and never called.
+	// Nothing here is user mode, so the connect and message callbacks are never called.
 	state.redirect(mod, "FltCreateCommunicationPort",
 		[st](vcpu& cpu, const addr_t filter, emu_object<addr_t> server_port,
 			emu_object<_OBJECT_ATTRIBUTES> object_attributes, const addr_t server_port_cookie,
@@ -247,8 +227,6 @@ void modules::register_fltmgr(win_kernel_state& state, proc_module& mod)
 				client_port.write(0);
 		});
 
-	// The name of the file an operation is about. The file object behind it is
-	// one the io manager here made, so the name is the path it was opened by.
 	state.redirect(mod, "FltGetFileNameInformationUnsafe",
 		[st](vcpu& cpu, const addr_t file_object, const addr_t instance,
 			const std::uint32_t name_options, emu_object<addr_t> file_name_information) -> NTSTATUS
@@ -276,8 +254,6 @@ void modules::register_fltmgr(win_kernel_state& state, proc_module& mod)
 
 			const auto buffer = addr + sizeof(flt_file_name_information_t);
 
-			// Name covers the whole path; the components are what
-			// FltParseFileNameInformation fills in afterwards.
 			flt_file_name_information_t info{};
 			info.size = static_cast<std::uint16_t>(size);
 			info.name_length = bytes;
@@ -314,9 +290,6 @@ void modules::register_fltmgr(win_kernel_state& state, proc_module& mod)
 			THREAD_LOG_INFO("FltReleaseFileNameInformation(0x{:X})", file_name_information);
 		});
 
-	// Splits the whole path the structure already carries into the components a
-	// filter matches on: the last path separator divides the parent directory
-	// from the final component, and the last dot in that gives the extension.
 	state.redirect(mod, "FltParseFileNameInformation",
 		[](vcpu& cpu, emu_object<flt_file_name_information_t> file_name_information) -> NTSTATUS
 		{

@@ -27,8 +27,7 @@ struct xdata_header
 	const std::uint32_t* after_codes;
 };
 
-// Byte length of one unwind code. Every code describes exactly one instruction,
-// which is what lets a pc inside an epilogue be mapped to a code index.
+// Every code describes exactly one instruction, which maps a pc inside an epilogue to a code index.
 constexpr std::size_t code_len(const std::uint8_t b0)
 {
 	if ((b0 & 0x80) == 0x00) return 1;   // alloc_s, save_r19r20_x, save_fplr
@@ -39,9 +38,7 @@ constexpr std::size_t code_len(const std::uint8_t b0)
 	return 2;                            // the 0xC0-0xDF two-byte group
 }
 
-// Layout of an .xdata record: one header word, optionally an extension word
-// when both counts overflow their fields, the epilog scope words, the unwind
-// code words, then the exception handler RVA and its data.
+// Header word, an extension word when both counts overflow, scope words, code words, handler RVA.
 std::optional<xdata_header> parse_xdata(const std::uint8_t* img_base, const std::uint32_t rva)
 {
 	const auto* words = reinterpret_cast<const std::uint32_t*>(img_base + rva);
@@ -71,8 +68,7 @@ std::optional<xdata_header> parse_xdata(const std::uint8_t* img_base, const std:
 		h.code_words   = (w1 >> 16) & 0xFF;
 	}
 
-	// With E set there are no scope words: the header's epilog_count field
-	// holds the start index of the function's single epilogue instead.
+	// With E set there are no scope words: epilog_count holds the single epilogue's start index.
 	h.epilog_scopes = h.epilog_in_header ? nullptr : (words + next);
 	if (!h.epilog_in_header)
 		next += h.epilog_count;
@@ -82,16 +78,14 @@ std::optional<xdata_header> parse_xdata(const std::uint8_t* img_base, const std:
 	return h;
 }
 
-// Replays the unwind codes, which describe the prologue in reverse, so running
-// them in array order undoes it.
+// The unwind codes describe the prologue in reverse, so running them in array order undoes it.
 class code_replayer
 {
 public:
 	code_replayer(addr_space& mem, unwind_context& ctx)
 		: mem_(mem), ctx_(ctx) {}
 
-	// Returns false if a code we do not model turned up, in which case the
-	// context is left untrustworthy and the caller should give up.
+	// False if a code we do not model turned up, which leaves the context untrustworthy.
 	bool run(const std::uint8_t* codes, const std::size_t size)
 	{
 		for (std::size_t i = 0; i < size; )
@@ -219,8 +213,7 @@ public:
 			}
 			else if (b0 == 0xE6)                // save_next
 			{
-				// Continues whichever run the previous save_*regp started, at
-				// the next 16-byte slot.
+				// Continues the previous save_*regp run, at the next 16-byte slot.
 				last_pair_reg_ += 2;
 				last_pair_off_ += 16;
 
@@ -233,9 +226,7 @@ public:
 			}
 			else if (b0 == 0xFC)                // pac_sign_lr
 			{
-				// The return address was signed with PACIBSP. Nothing to undo
-				// here: Unicorn runs without pointer authentication, so the
-				// value on the stack is unsigned.
+				// Unicorn runs without pointer authentication, so the stack value is unsigned.
 				i += 1;
 			}
 			else
@@ -289,13 +280,9 @@ private:
 	bool last_pair_fp_ = false;
 };
 
-// If rva sits inside an epilogue, returns {code index where that epilogue's
-// codes begin, how many of its instructions have already run}.
 std::optional<std::pair<std::size_t, std::uint32_t>> find_epilog(
 	const xdata_header& hdr, const std::uint32_t rva, const std::size_t total)
 {
-	// Number of instructions the codes from `at` describe, up to and including
-	// the terminating end / end_c.
 	auto extent = [&](std::size_t at) -> std::uint32_t
 	{
 		std::uint32_t insns = 0;
@@ -312,8 +299,6 @@ std::optional<std::pair<std::size_t, std::uint32_t>> find_epilog(
 
 	if (hdr.epilog_in_header)
 	{
-		// One epilogue, its codes starting at the index stored in the
-		// epilog_count field, ending at the end of the function.
 		const std::size_t at = hdr.epilog_count;
 		if (at >= total)
 			return std::nullopt;
@@ -343,14 +328,8 @@ std::optional<std::pair<std::size_t, std::uint32_t>> find_epilog(
 	return std::nullopt;
 }
 
-// Unwinds a frame described by packed .pdata.
-//
-// The layout below was derived from what MSVC actually emits and cross-checked
-// against dumpbin's own reading of the packed word. The saved-register area
-// sits at the *top* of the frame, and within it: integer registers x19 upward
-// first, then LR, then d8 upward. A chained frame instead puts the {fp, lr}
-// pair at the bottom of the frame, with everything else above it.
-//
+// Derived from what MSVC emits, cross-checked against dumpbin's reading of the packed word.
+// Saved area at the top: x19 up, then LR, then d8 up; a chained frame puts {fp, lr} at the bottom.
 //   RegI=0 RegF=0 CR=1 size=0x20 -> lr at +0x10   (0x10 of locals below)
 //   RegI=0 RegF=3 CR=1 size=0x30 -> lr at +0,    d8 at +8
 //   RegI=2 RegF=2 CR=1 size=0x30 -> x19 +0, lr +0x10, d8 +0x18
@@ -374,14 +353,12 @@ bool apply_packed(addr_space& mem, const std::uint32_t packed, unwind_context& c
 
 	if (chained)
 	{
-		// {fp, lr} at the bottom; the rest of the saved area follows it.
 		ctx.gp[reg_fp] = load(0);
 		ctx.gp[reg_lr] = load(8);
 		area = 0x10;
 	}
 	else
 	{
-		// Saved area is top-aligned within the frame.
 		std::uint64_t saved = 8ull * (reg_i + (lr_saved ? 1 : 0) + fp_count) + (h ? 64ull : 0ull);
 		saved = (saved + 15) & ~std::uint64_t{15};
 
@@ -406,8 +383,7 @@ bool apply_packed(addr_space& mem, const std::uint32_t packed, unwind_context& c
 
 	ctx.sp += frame_size;
 
-	// cr == 0b00 is a leaf that never spilled LR, so x30 still holds the
-	// return address and needs no recovery.
+	// cr == 0b00 is a leaf that never spilled LR, so x30 still holds the return address.
 	return true;
 }
 
@@ -441,8 +417,6 @@ std::optional<arm64_function_entry> arm64_unwinder::lookup_function_entry(
 	const std::uint32_t count = exc.size / sizeof(pe::runtime_function_arm64);
 	const auto rva = static_cast<std::uint32_t>(pc - mod.addr);
 
-	// Entries record a length rather than an end, so find the last one that
-	// starts at or before rva and then range check it.
 	std::uint32_t lo = 0, hi = count;
 
 	while (lo < hi)
@@ -463,9 +437,7 @@ std::optional<arm64_function_entry> arm64_unwinder::lookup_function_entry(
 	out.begin_rva = entry.begin_address;
 	out.unwind_data = entry.unwind_data;
 
-	// Flag is the low two bits: 0 selects .xdata, 1 and 2 are packed forms.
-	// pe::runtime_function_arm64::is_packed only looks at bit 0, which would
-	// misread flag 2, so decode it here.
+	// is_packed only looks at bit 0 and would misread flag 2, so the low two bits are decoded here.
 	const std::uint32_t flag = entry.unwind_data & 3;
 	out.packed = flag != 0;
 
@@ -495,8 +467,6 @@ bool arm64_unwinder::unwind_frame(
 
 	if (!func)
 	{
-		// No unwind data: treat it as a leaf and return through the link
-		// register, which is all that can be said without a frame description.
 		result.establisher_frame = ctx.sp;
 		ctx.pc = ctx.gp[reg_lr];
 		return ctx.pc != 0;
@@ -504,13 +474,7 @@ bool arm64_unwinder::unwind_frame(
 
 	result.establisher_frame = ctx.sp;
 
-	// At the function's first instruction none of the prologue has executed, so
-	// there is no frame to undo and the return address is still in the link
-	// register. This is the case every redirect handler creates -- the hook
-	// fires before the first instruction runs -- and replaying the prologue
-	// codes against a frame that was never built restores a meaningless sp and
-	// lr instead. A pc further into a prologue needs the codes counted off
-	// instruction by instruction, which is not done here.
+	// A pc further into a prologue needs the codes counted off one by one, which is not done here.
 	if (ctx.pc == mod.addr + func->begin_rva)
 	{
 		ctx.pc = ctx.gp[reg_lr];
@@ -532,17 +496,12 @@ bool arm64_unwinder::unwind_frame(
 	if (!hdr)
 		return false;
 
-	// Where in the code stream to start replaying, and how many of those codes
-	// have already taken effect.
 	const auto rva_in_func = static_cast<std::uint32_t>(ctx.pc - mod.addr) - func->begin_rva;
 	const std::size_t total = hdr->code_words * 4;
 	std::size_t start = 0;
 
 	if (const auto epi = find_epilog(*hdr, rva_in_func, total))
 	{
-		// pc sits inside an epilogue, so part of the frame is already torn
-		// down. Each unwind code describes one instruction, so skip as many
-		// codes as the epilogue has already executed and replay the rest.
 		start = epi->first;
 		for (std::uint32_t k = 0; k < epi->second && start < total; ++k)
 			start += code_len(hdr->codes[start]);

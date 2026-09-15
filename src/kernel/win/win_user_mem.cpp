@@ -165,8 +165,6 @@ void win_user_mem::release_pages(const addr_t base, const std::size_t size)
 
 void win_user_mem::commit_pages(const addr_t base, const std::size_t size, const std::uint32_t prot)
 {
-	// guarded and no-access pages stay out of the page tables so that touching
-	// them traps into handle_fault()
 	if (is_resident(prot))
 		map_pages(base, size, prot);
 }
@@ -279,7 +277,6 @@ NTSTATUS win_user_mem::allocate(addr_t& base, std::size_t& size, const std::uint
 	if (!do_reserve && !do_commit)
 		return STATUS_INVALID_PARAMETER;
 
-	// commit inside an existing reservation
 	if (do_commit && !do_reserve && base)
 	{
 		if (const auto res = find_reservation(start); res != reservations_.end())
@@ -413,7 +410,6 @@ NTSTATUS win_user_mem::protect(addr_t& base, std::size_t& size, const std::uint3
 
 	if (res == reservations_.end())
 	{
-		// not tracked here (loader allocation) - still honour the page table update
 		space_->mmu_->prot_virt(*space_, start, region, to_mem_prot(new_prot));
 
 		base = start;
@@ -495,8 +491,6 @@ NTSTATUS win_user_mem::query(const addr_t addr, win::memory_basic_info& info) co
 		return STATUS_SUCCESS;
 	}
 
-	// inside the reservation but not committed - the region runs up to the next
-	// committed sub-region, or to the end of the reservation
 	const auto next = committed.upper_bound(info.base_address);
 
 	info.state = win::mem_reserve;
@@ -568,8 +562,7 @@ bool win_user_mem::handle_fault(const addr_t fault_addr)
 	auto& committed = res->second.committed;
 	const auto sub = find_committed(committed, page);
 
-	// reserved but never committed: back it on demand so that lazily grown
-	// regions (thread stacks, heap segments) keep running
+	// reserved but never committed: backed on demand, so lazily grown stacks and heaps keep running
 	if (sub == committed.end())
 	{
 		const auto prot = res->second.initial_prot;

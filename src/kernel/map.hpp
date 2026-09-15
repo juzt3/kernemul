@@ -11,8 +11,7 @@ class process;
 
 namespace krnl
 {
-	// The file laid out the way it is run: every section at its virtual
-	// address, gaps zeroed. Empty if the bytes are not a PE.
+	// The file laid out the way it is run, every section at its virtual address; empty if not a PE.
 	std::vector<std::uint8_t> pe_virtual_image(std::span<const std::uint8_t> raw);
 
 	std::shared_ptr<proc_module> map_img(process& proc, std::string_view name, const pe::image* img, bool supervisor, bool skip_imports = false);

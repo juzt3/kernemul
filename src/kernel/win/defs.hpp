@@ -14,10 +14,7 @@ using active_process_list_t = win_linked_list<
 	offsetof(_EPROCESS, ActiveProcessLinks)
 >;
 
-// A thread appears on two lists, both anchored in its own process: the
-// scheduler's, whose head is in the KPROCESS, and the executive's, whose head
-// is in the EPROCESS wrapped around it. Both thread through the same ETHREAD,
-// at different offsets.
+// Two lists anchored in the process thread through the same ETHREAD, at different offsets.
 using kprocess_thread_list_t = win_linked_list<
 	_ETHREAD,
 	offsetof(_ETHREAD, Tcb.ThreadListEntry)
@@ -55,8 +52,6 @@ struct _RTL_OSVERSIONINFOEXW
 };
 #pragma pack(pop)
 
-// The guest's WCHAR is two bytes whatever the host compiler makes of its own,
-// and these structs are the guest's.
 static_assert(sizeof(char16_t) == 2, "guest WCHAR is 2 bytes");
 static_assert(sizeof(_RTL_OSVERSIONINFOW) == 0x114);
 static_assert(sizeof(_RTL_OSVERSIONINFOEXW) == 0x11C);
@@ -64,12 +59,7 @@ static_assert(sizeof(_RTL_OSVERSIONINFOEXW) == 0x11C);
 inline constexpr std::uint32_t ver_platform_win32_nt = 2;
 inline constexpr std::uint8_t ver_nt_workstation = 1;
 
-// Which halves of the register set a CONTEXT is being asked for, and which it
-// came back with. Every CONTEXT_* is the architecture's own tag or'd with one
-// bit per half, so a half is named only when both are there -- which is why
-// there is no operator& to test against zero: that would read CONTEXT_CONTROL
-// on its own as naming every other half as well, and on the way back in means
-// writing registers out of a buffer the caller never filled.
+// Every CONTEXT_* is the architecture tag or'd with one bit per half, so there is no operator&.
 struct context_flags
 {
 	std::uint32_t bits = 0;
@@ -79,8 +69,6 @@ struct context_flags
 		return (bits & part.bits) == part.bits;
 	}
 
-	// The tag with one more bit set, which is how every CONTEXT_* past the tag
-	// itself is spelled.
 	[[nodiscard]] constexpr context_flags with(const std::uint32_t bit) const
 	{
 		return { bits | bit };
@@ -99,8 +87,7 @@ struct context_flags
 	}
 };
 
-// Windows counts 100ns ticks from 1601-01-01 and the host clock counts seconds
-// from 1970-01-01, so a guest timestamp is the host's plus the gap.
+// Windows counts 100ns ticks from 1601-01-01, the host clock seconds from 1970-01-01.
 inline constexpr std::int64_t win_epoch_delta_100ns = 116444736000000000;
 
 using win_ticks = std::chrono::duration<std::int64_t, std::ratio<1, 10000000>>;

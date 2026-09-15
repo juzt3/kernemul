@@ -6,9 +6,6 @@ namespace ia32 {
 #include <ia32.hpp>
 }
 
-// Three kinds of x86 register need a shape other than a plain 64-bit value:
-// MSRs carry an id alongside the value, segment and descriptor-table registers
-// are a uc_x86_mmr, and XMM registers are 128 bits.
 class x86_unicorn_vcpu final : public unicorn_vcpu_base
 {
 public:
@@ -28,7 +25,6 @@ public:
 			uc_x86_mmr mmr{};
 			uc_reg_read(uc_, to_uc_reg(reg), &mmr);
 
-			// A selector register hands back only the selector.
 			if (const auto base_reg = to_uc_base_reg(reg); base_reg >= 0)
 				uc_reg_read(uc_, base_reg, &mmr.base);
 
@@ -83,7 +79,6 @@ public:
 		uc_reg_write(uc_, to_uc_reg(reg), &tmp);
 	}
 
-	// MSRs are addressed through a single pseudo-register carrying the MSR id.
 	static constexpr std::uint32_t to_msr(reg_t reg)
 	{
 		switch (reg)
@@ -108,7 +103,6 @@ public:
 		return reg >= x86::xmm0 && reg <= x86::xmm15;
 	}
 
-	// Where a segment's base lives, or -1 for one with no base in long mode.
 	static constexpr int to_uc_base_reg(reg_t reg)
 	{
 		switch (reg)
@@ -180,8 +174,6 @@ public:
 class x86_unicorn_emu final : public unicorn_emu_base
 {
 public:
-	// The arch goes with the backend, so callers never have to pair them up
-	// by hand.
 	explicit x86_unicorn_emu(std::shared_ptr<mmu> mem, std::shared_ptr<calling_conv> call_conv = {})
 		:	unicorn_emu_base(std::make_shared<x86::arch>(), std::move(mem), std::move(call_conv)) { }
 

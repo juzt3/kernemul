@@ -25,8 +25,6 @@ std::shared_ptr<thread> windows_process::create_thread(vcpu& cpu, const addr_t s
 {
 	const auto id = static_cast<thread_id_type>(objs_.allocate_id());
 
-	// A kernel thread's stack is kernel memory in its own process's address
-	// space, which for the system process is the kernel's.
 	const addr_t stack_base = addr_space_->alloc(default_stack_size, prot_rw | prot_supervisor);
 	auto self = std::static_pointer_cast<windows_process>(shared_from_this());
 	auto t = std::make_shared<win_kernel_thread>(
@@ -36,8 +34,7 @@ std::shared_ptr<thread> windows_process::create_thread(vcpu& cpu, const addr_t s
 	t->set_emulator(emulator_);
 	setup_ethread(t, start_addr);
 
-	// On the queue last: another cpu can pick the thread up and run it to the
-	// end the moment it is there, and retiring it needs to find it here.
+	// On the queue last: another cpu can run it to the end the moment it is there.
 	{
 		std::unique_lock lock(thread_mtx_);
 		threads_[t->id()] = t;
@@ -91,23 +88,17 @@ void windows_process::setup_ethread(const std::shared_ptr<win_thread>& t, const 
 
 	const auto et = make_default_ethread(p);
 
-	// Through the object manager, so a handle to the thread resolves to the
-	// ETHREAD itself rather than to a body the guest cannot read.
 	auto obj = emu_object<_ETHREAD>(space,
 		objs_.create_object(0, &et, sizeof(et), std::make_shared<thread_object>(t),
 			prot_rw | prot_supervisor));
 
 	t->set_ethread(obj);
 
-	// Both heads live in this process's EPROCESS, so a process the guest has no
-	// view of has no lists to join.
 	if (!eprocess_)
 		return;
 
 	auto& espace = *eprocess_.space();
 
-	// The lists are the guest's own, and a push rewrites the head and the old
-	// tail, so two threads starting at once would tangle the links.
 	std::scoped_lock lock(emulator_->kernel().list_mtx_);
 
 	kprocess_thread_list(espace, eprocess_.address()).push_back(obj);
@@ -127,9 +118,6 @@ void windows_process::destroy_ethread(const win_thread& t)
 	set_thread_state(et, Terminated, false);
 	set_thread_exit_time(et, win_system_time());
 
-	// A thread object is signalled once the thread is done with, and stays that
-	// way: waiting for a worker to finish is a wait on its ETHREAD, and this is
-	// what releases it.
 	win::set_state_at(*et.space(), et.address(), 1);
 	wake_waiters(*et.space(), et.address());
 
@@ -151,8 +139,7 @@ void windows_process::destroy_ethread(const win_thread& t)
 
 void windows_process::terminate_thread(const thread_id_type id)
 {
-	// The guest keeps its own record of the thread, and it outlives the
-	// scheduler's: nothing frees the ETHREAD, so it is only unlinked.
+	// Nothing frees the ETHREAD, so it is only unlinked.
 	if (const auto t = std::dynamic_pointer_cast<win_thread>(find_thread(id)))
 		destroy_ethread(*t);
 
@@ -164,8 +151,7 @@ std::shared_ptr<win_file> windows_process::open_system_image(const std::string_v
 	return fs_.open(std::string(system32_dir_narrow) + std::string(name));
 }
 
-// A driver is what MiLoadSystemImage would have loaded, and there is no loader
-// in the guest behind it -- so the imports are resolved here.
+// There is no loader in the guest behind a driver, so the imports are resolved here.
 std::shared_ptr<proc_module> win_kernel_proc::load_module(const std::string_view name,
 	const bool supervisor)
 {
@@ -177,10 +163,7 @@ std::shared_ptr<proc_module> win_kernel_proc::load_module(const std::string_view
 	return krnl::map_img(*this, name, file->data(), supervisor);
 }
 
-// A user image is what ntdll's loader would have loaded, and it resolves its
-// own: it maps what it needs through sections the guest can see and runs each
-// DllMain. Doing it here as well would map every module a second time, under
-// loader entries for copies that were never initialised.
+// A user image resolves its own; doing it here too would map every module a second time.
 std::shared_ptr<proc_module> win_user_proc::load_module(const std::string_view name,
 	const bool supervisor)
 {
@@ -199,8 +182,6 @@ void win_user_proc::module_add_cb(proc_module& mod)
 {
 	mem_.register_image(mod.addr, mod.size);
 
-	// The exe stays off the initialisation order list: that is what the loader
-	// walks to call DllMain, and an exe has none.
 	const bool image = is_process_image(mod);
 
 	ldr_.add_module(mem_, mod.addr, mod.entry_point, mod.size, mod.name,
@@ -220,8 +201,6 @@ void win_kernel_proc::module_add_cb(proc_module& mod)
 	std::scoped_lock lock(kernel_.list_mtx_);
 	const auto obj = kernel_.loaded_module_list.push_back(entry);
 
-	// Keep where the entry landed: a driver reaches its own entry only through
-	// its DRIVER_OBJECT, and nothing else remembers the address.
 	kernel_.set_ldr_entry(mod.addr, obj.address());
 }
 

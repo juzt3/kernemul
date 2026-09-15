@@ -1,10 +1,5 @@
 #pragma once
-// Selects the Unicorn backend for the guest architecture.
-//
-// Both backends derive from unicorn_emu_base and differ only in register
-// translation and the uc_open arguments. Include this rather than an
-// emu/<arch>/unicorn.hpp directly: `unicorn_emu` then names the right one and
-// brings its own arch, so nothing outside this header has to pair the two up.
+// Include this rather than emu/<arch>/unicorn.hpp: `unicorn_emu` names the right backend and arch.
 
 #include "../target.hpp"
 

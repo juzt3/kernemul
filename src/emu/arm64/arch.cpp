@@ -6,8 +6,6 @@ namespace arm64
 
 addr_t arch::ret_addr(vcpu& cpu) const
 {
-	// AArch64 keeps the return address in the link register, so unlike x86
-	// there is nothing to pop -- the stack is untouched.
 	return cpu.reg(lr);
 }
 
@@ -18,8 +16,7 @@ void arch::set_ret_addr(vcpu& cpu, const addr_t addr) const
 
 std::span<const reg_t> arch::regs() const
 {
-	// The set a thread context is saved from and restored to. tpidr_el0 is in
-	// here because it holds the TEB, which is per thread.
+	// tpidr_el0 is in the saved context because it holds the TEB, which is per thread.
 	static constexpr reg_t regs[] = {
 		x0,  x1,  x2,  x3,  x4,  x5,  x6,  x7,
 		x8,  x9,  x10, x11, x12, x13, x14, x15,
@@ -42,24 +39,8 @@ std::size_t arch::reg_size(const reg_t r) const
 
 void arch::init_vcpu(vcpu& cpu)
 {
-	// QEMU resets an AArch64 core into the highest implemented exception
-	// level, and every CPU model Unicorn exposes implements EL2 and EL3 -- so
-	// without this the core runs at EL3, where translation is governed by
-	// TTBR0_EL3 and SCTLR_EL3 and the EL1 registers the MMU configures are
-	// simply ignored. Drop to EL1h (EL1 using SP_EL1), which is where a
-	// Windows kernel driver believes it is running.
-	//   PSTATE.M[3:0] = 0b0101 : EL1, SP_ELx
-	//   DAIF          = 0xF<<6 : interrupts masked, since nothing delivers any
-	//
-	// Getting to EL1 is not enough on its own: the core also comes out of
-	// reset in Secure state, and QEMU aliases sctlr_el[1] onto sctlr_ns while
-	// a banked write from Secure state lands in sctlr_s. The EL1 translation
-	// regime would then read an SCTLR whose M bit is still clear, translation
-	// would stay off, and every guest VA would be treated as a physical
-	// address. So drop to Non-secure first, while still at EL3.
-	//   SCR_EL3.NS  (bit 0)  : lower levels are Non-secure
-	//   SCR_EL3     (bits 4,5): RES1
-	//   SCR_EL3.RW  (bit 10) : EL1 is AArch64
+	// QEMU resets into the highest implemented EL; drop to EL1h or the EL1 registers are ignored.
+	// QEMU aliases sctlr_el[1] onto sctlr_ns, so drop to Non-secure first or translation stays off.
 	constexpr std::uint64_t scr_ns = 1ull << 0, scr_res1 = 3ull << 4, scr_rw = 1ull << 10;
 	cpu.reg(scr_el3, scr_ns | scr_res1 | scr_rw);
 
@@ -70,8 +51,7 @@ void arch::init_vcpu(vcpu& cpu)
 	constexpr std::uint64_t pstate_daif = 0xFull << 6;
 	cpu.reg(pstate, pstate_el1h | pstate_daif);
 
-	// CPACR_EL1.FPEN[21:20] = 0b11: do not trap FP/SIMD at EL0 or EL1. The
-	// compiler emits SIMD for plain struct copies, so this is not optional.
+	// FPEN[21:20]: the compiler emits SIMD for plain struct copies, so this is not optional.
 	auto cpacr = cpu.reg(cpacr_el1);
 	cpacr |= (0b11ull << 20);
 	cpu.reg(cpacr_el1, cpacr);
@@ -79,9 +59,7 @@ void arch::init_vcpu(vcpu& cpu)
 
 cpu_exception arch::intr_to_excp(const int vector) const
 {
-	// Unicorn hands us QEMU's exception index (target/arm/cpu.h) rather than a
-	// vector number, because it calls the interrupt hook in place of
-	// arm_cpu_do_interrupt.
+	// Unicorn hands QEMU's exception index (target/arm/cpu.h), not a vector number.
 	switch (vector)
 	{
 	case 1:  return cpu_exception::illegal_instruction; // EXCP_UDEF

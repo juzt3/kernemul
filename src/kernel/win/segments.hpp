@@ -13,9 +13,6 @@ namespace x86_win_seg
 	constexpr std::uint16_t user_cs   = 0x33;
 	constexpr std::uint16_t tss_sel   = 0x40;
 
-	// Where a cpu's descriptor tables ended up. The KPCR carries the same
-	// pointers, and the cpu that owns them is the only thing that knows where
-	// they are.
 	struct cpu_tables
 	{
 		addr_t gdt = 0;
@@ -23,9 +20,7 @@ namespace x86_win_seg
 		addr_t idt = 0;
 	};
 
-	// Everything a cpu needs before it can run kernel code: the GDT, the TSS,
-	// the segment registers and the IDT. ntoskrnl is needed because the IDT's
-	// handlers are its symbols.
+	// ntoskrnl is needed because the IDT's handlers are its symbols.
 	cpu_tables init_vcpu(vcpu& cpu, const proc_module& ntoskrnl);
 
 	void set_kernel_gs(vcpu& cpu, std::uint64_t base);
@@ -33,7 +28,6 @@ namespace x86_win_seg
 
 	x86::seg_reg make_usermode_gs(std::uint64_t teb_addr);
 
-	// As values, for a thread that is not on a cpu yet.
 	x86::seg_reg make_usermode_cs();
 	x86::seg_reg make_usermode_ss();
 

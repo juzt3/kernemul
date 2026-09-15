@@ -35,8 +35,6 @@ bool win_exception::handle_page_fault(vcpu& cpu)
 	if (!proc)
 		return false;
 
-	// guard pages and lazily committed pages are resolved here, everything else
-	// falls through and gets dispatched as an access violation
 	return proc->mem().handle_fault(cpu.arch()->fault_addr(cpu));
 }
 
@@ -69,16 +67,7 @@ bool win_exception::handle(vcpu& cpu, const cpu_exception ex)
 	info.exception_address = original_pc;
 	info.fault_address = cpu.arch()->fault_addr(cpu);
 
-	// A user thread's fault goes where the kernel sends it: onto ntdll's own
-	// dispatcher, on the thread's own stack. RtlDispatchException calls
-	// whatever personality routine each frame names -- __C_specific_handler,
-	// a C++ one, anything -- so nothing here has to know what any of them
-	// mean, and nothing here decides the outcome. An exception the guest
-	// raised itself never reaches this function at all: ntdll dispatches
-	// those without entering the kernel, which is the same path.
-	//
-	// The walk below is what a driver gets. There is no loader under a driver
-	// to own a dispatcher, so that one stays here.
+	// There is no loader under a driver to own a dispatcher, so the walk below stays here.
 	if (dynamic_cast<win_user_proc*>(&proc))
 	{
 		std::optional<addr_t> dispatcher;
@@ -128,11 +117,7 @@ bool win_exception::handle(vcpu& cpu, const cpu_exception ex)
 
 	for (std::size_t depth = 0; depth < 64; ++depth)
 	{
-		// Only the faulting frame's pc is an instruction address. Every frame
-		// above it holds a return address, which points at the instruction
-		// *after* the call -- outside the try scope that was active, and
-		// potentially past the end of the function entirely. Step back into the
-		// call before looking up the function or its scopes.
+		// Every frame above the faulting one holds a return address, so step back into the call.
 		if (depth > 0)
 			uw_ctx.pc -= 1;
 
@@ -161,11 +146,7 @@ bool win_exception::handle(vcpu& cpu, const cpu_exception ex)
 		if (!emulator)
 			break;
 
-		// The frame names its own personality routine, so ask that rather than
-		// assume what its handler data means. For a driver it is ntoskrnl's
-		// __C_specific_handler, which is redirected, so the scope table is read
-		// by the implementation that owns that format -- and a frame built by
-		// anything else is asked in its own terms instead of being misread.
+		// The frame names its own personality routine, so ask it rather than assume.
 		const auto frame = build_dispatch_frame(cpu, *emulator, info);
 
 		dispatcher_context64 dispatch{};
@@ -186,9 +167,7 @@ bool win_exception::handle(vcpu& cpu, const cpu_exception ex)
 		const auto disposition = static_cast<std::int32_t>(
 			kernel_.calls.call(cpu, result.handler, args, frame.scratch));
 
-		// A handler that took the frame says so through the dispatcher context:
-		// the jump it wants cannot survive the call it was made in, because
-		// every register is put back when that returns.
+		// A handler's jump cannot survive the call it was made in, so it says so in the context.
 		const auto answered = space.read_mem<dispatcher_context64>(frame.dispatcher);
 
 		if (disposition == exception_execute_handler && answered.target_ip)

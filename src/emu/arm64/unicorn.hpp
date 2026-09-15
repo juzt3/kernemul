@@ -2,9 +2,6 @@
 #include "../unicorn_base.hpp"
 #include "arch.hpp"
 
-// Two kinds of AArch64 register need a shape other than a plain 64-bit value:
-// the Q registers are 128 bits, and the system registers Unicorn does not name
-// go through UC_ARM64_REG_CP_REG addressed by their encoding.
 class arm64_unicorn_vcpu final : public unicorn_vcpu_base
 {
 public:
@@ -58,12 +55,7 @@ public:
 			rebuild_hflags();
 	}
 
-	// QEMU caches the exception level and its mmu index in env->hflags, and
-	// Unicorn's PSTATE write does not rebuild them -- only the CP_REG path
-	// does. Without this a thread moved to EL0 keeps EL1's mmu index, so it
-	// runs with no protection at all while every register reads back correctly.
-	// Rewriting a system register with its own value rebuilds them and, since
-	// sctlr_write returns early when nothing changed, does nothing else.
+	// Unicorn's PSTATE write does not rebuild QEMU's cached hflags; only the CP_REG path does.
 	void rebuild_hflags()
 	{
 		std::uint64_t sctlr{};
@@ -71,7 +63,6 @@ public:
 		reg_write(arm64::sctlr_el1, &sctlr, sizeof(sctlr));
 	}
 
-	// Both of these classify by enum range, so the order of arm64::regs matters.
 	static constexpr bool is_cp_reg(reg_t reg)
 	{
 		return reg >= arm64::sys_first && reg <= arm64::sys_last;
@@ -84,8 +75,7 @@ public:
 
 	static constexpr int to_uc_reg(reg_t reg)
 	{
-		// X0-X28 and Q0-Q31 are each contiguous in uc_arm64_reg; X29 and X30
-		// are declared apart from the rest, so they are named explicitly.
+		// X29/X30 sit apart from the contiguous X0-X28 run in uc_arm64_reg.
 		if (reg >= arm64::x0 && reg <= arm64::x28)
 			return UC_ARM64_REG_X0 + (reg - arm64::x0);
 
@@ -120,8 +110,6 @@ public:
 class arm64_unicorn_emu final : public unicorn_emu_base
 {
 public:
-	// The arch goes with the backend, so callers never have to pair them up
-	// by hand.
 	explicit arm64_unicorn_emu(std::shared_ptr<mmu> mem, std::shared_ptr<calling_conv> call_conv = {})
 		:	unicorn_emu_base(std::make_shared<arm64::arch>(), std::move(mem), std::move(call_conv)) { }
 
@@ -132,10 +120,7 @@ protected:
 		if (uc_open(UC_ARCH_ARM64, UC_MODE_ARM, &uc) != UC_ERR_OK)
 			throw std::runtime_error("uc_open failed for aarch64");
 
-		// Unicorn defaults to Cortex-A57, which is ARMv8.0 and has no LSE
-		// atomics. MSVC targets ARMv8.1 for Windows on ARM and emits casal /
-		// ldadd freely, so an A57 would take an undefined-instruction fault on
-		// the first one. "max" turns on everything QEMU implements.
+		// MSVC targets ARMv8.1 and emits casal; the default Cortex-A57 has no LSE atomics.
 		if (uc_ctl_set_cpu_model(uc, UC_CPU_ARM64_MAX) != UC_ERR_OK)
 		{
 			uc_close(uc);
@@ -152,16 +137,13 @@ protected:
 
 	int to_uc_insn(hook_insn_t) const override
 	{
-		// Unicorn only hooks MRS/MSR/SYS/SYSL on this target, none of which
-		// correspond to an entry in hook_insn_t.
+		// Unicorn only hooks MRS/MSR/SYS/SYSL here, none of which match an entry in hook_insn_t.
 		return -1;
 	}
 
 	int insn_as_intr(const hook_insn_t insn) const override
 	{
-		// SVC raises EXCP_SWI (target/arm/cpu.h), and Unicorn hands the
-		// exception index to the interrupt hook in place of calling
-		// arm_cpu_do_interrupt -- so a syscall hook can be served from there.
+		// SVC raises EXCP_SWI (target/arm/cpu.h), served from the interrupt hook.
 		constexpr int excp_swi = 2;
 		return insn == hook_insn_t::syscall ? excp_swi : -1;
 	}

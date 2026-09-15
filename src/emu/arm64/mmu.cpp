@@ -29,9 +29,6 @@ std::shared_ptr<::addr_space> mmu::create_addr_space()
 	space->ttbr_pa = alloc_phys_locked(page_size(), prot_rw);
 	space->mmu_ = this;
 
-	// The kernel is reachable from every address space: a thread that traps
-	// into it does not change tables. Level 0 index is VA[47:39], so sharing
-	// entries 256-511 aliases the whole kernel half and nothing below it.
 	if (!kernel_ttbr_pa_)
 	{
 		kernel_ttbr_pa_ = space->ttbr_pa;
@@ -62,8 +59,6 @@ void mmu::destroy_addr_space(std::shared_ptr<::addr_space> space)
 
 std::shared_ptr<::addr_space> mmu::curr_addr_space(vcpu& cpu)
 {
-	// Both TTBRs hold the same table, so either identifies the space. The ASID
-	// lives in bits 63:48 and is always zero here, but mask it off anyway.
 	const addr_t ttbr = cpu.reg<addr_t>(ttbr0_el1) & desc_addr_mask;
 
 	std::shared_lock lk(mtx_);
@@ -75,15 +70,11 @@ std::shared_ptr<::addr_space> mmu::curr_addr_space(vcpu& cpu)
 
 void mmu::init_vcpu(vcpu& cpu)
 {
-	// Attr0: normal memory, inner/outer write-back non-transient, RW-allocate.
-	// Every page we map uses AttrIndx = 0.
+	// Attr0: normal memory, write-back non-transient RW-allocate; every page uses AttrIndx = 0.
 	cpu.reg(mair_el1, std::uint64_t{0xFF});
 
-	// 4KB granule, 48-bit VA on both halves, inner shareable, write-back
-	// cacheable walks, 40-bit intermediate physical addresses:
-	//   T0SZ=16 IRGN0=1 ORGN0=1 SH0=3 TG0=0 (4KB)
-	//   T1SZ=16 IRGN1=1 ORGN1=1 SH1=3 TG1=2 (4KB)   IPS=2 (40-bit)
-	// TG1 encodes the granule differently to TG0, which is why they differ.
+	// T0SZ=16 IRGN0=1 ORGN0=1 SH0=3 TG0=0 (4KB)
+	// T1SZ=16 IRGN1=1 ORGN1=1 SH1=3 TG1=2 (4KB)   IPS=2 (40-bit)
 	constexpr std::uint64_t t0sz = 16, t1sz = 16;
 	const std::uint64_t tcr =
 		  (t0sz <<  0) | (1ull <<  8) | (1ull << 10) | (3ull << 12) | (0ull << 14)
@@ -91,8 +82,7 @@ void mmu::init_vcpu(vcpu& cpu)
 		| (2ull << 32);
 	cpu.reg(tcr_el1, tcr);
 
-	// MMU on, data and instruction caches on. Read-modify-write so the RES1
-	// bits Unicorn already set survive.
+	// Read-modify-write so the RES1 bits Unicorn already set survive.
 	auto sctlr = cpu.reg<std::uint64_t>(sctlr_el1);
 	sctlr |= (1ull << 0)   // M: enable stage 1 translation
 	      |  (1ull << 2)   // C: data accesses cacheable
@@ -106,8 +96,6 @@ void mmu::switch_to(vcpu& cpu, std::shared_ptr<::addr_space> space)
 
 	std::shared_lock lk(mtx_);
 
-	// The single level 0 table backs both halves of the address space; see the
-	// comment on addr_space::ttbr_pa.
 	cpu.reg(ttbr0_el1, s.ttbr_pa);
 	cpu.reg(ttbr1_el1, s.ttbr_pa);
 	cpu.flush_tlb();
@@ -115,8 +103,7 @@ void mmu::switch_to(vcpu& cpu, std::shared_ptr<::addr_space> space)
 
 void mmu::flush_all_tlb()
 {
-	// A cpu reads its tlb on every access, and uc_ctl_flush_tlb rewrites it, so
-	// flushing one that is running corrupts it under the cpu.
+	// uc_ctl_flush_tlb rewrites the tlb, so flushing a running cpu corrupts it under the cpu.
 	emu_->run_on_all([&]
 	{
 		for (auto& cpu : emu_->cpus())
@@ -126,20 +113,15 @@ void mmu::flush_all_tlb()
 
 std::uint64_t mmu::page_attrs(const mem_prot prot)
 {
-	// AttrIndx = 0 (normal memory), inner shareable, access flag set so the
-	// first touch does not take an access fault.
 	std::uint64_t attrs = desc_valid | desc_table | desc_af | desc_sh_is;
 
-	// prot_supervisor means EL1 only; otherwise EL0 gets access too.
 	if (!(prot & prot_supervisor))
 		attrs |= desc_ap_el0;
 
 	if (!(prot & prot_write))
 		attrs |= desc_ap_ro;
 
-	// Execution stays enabled at both levels, matching the x86 walker, which
-	// never sets the NX bit. Marking a kernel page PXN would fault the driver
-	// on its own code.
+	// Execution stays enabled at both levels: PXN would fault the driver on its own code.
 	return attrs;
 }
 
@@ -152,8 +134,6 @@ addr_t mmu::ensure_table(const addr_t table_pa, const std::size_t index)
 
 	const addr_t child = alloc_phys_locked(page_size(), prot_rw);
 
-	// A table descriptor carries no permissions of its own; leaving the
-	// APTable / xNTable bits clear means "defer to the leaf".
 	write_phys<std::uint64_t>(table_pa + index * sizeof(std::uint64_t),
 		(child & desc_addr_mask) | desc_valid | desc_table);
 
@@ -191,8 +171,6 @@ addr_t mmu::walk_to_l3(const addr_space& space, const addr_t va)
 	return step(l2, v.l2);
 }
 
-// The shadow only records mappings made *in* a space, and the kernel half is
-// aliased rather than made -- so a miss there is a question for the tables.
 std::optional<addr_t> mmu::translate_virt(const addr_space& space, const addr_t page)
 {
 	const addr_t l3 = walk_to_l3(space, page);
@@ -231,9 +209,7 @@ void mmu::map_virt(::addr_space& space, const addr_t va, const std::size_t size,
 
 	const addr_t pa_block = alloc_phys_locked(aligned, phys_prot);
 
-	// Mapped writable and narrowed later by prot_virt, the way the x86 walker
-	// does it -- krnl::map_img writes the image through the MMU before it
-	// applies the section protections.
+	// Mapped writable and narrowed later by prot_virt, since krnl::map_img writes the image first.
 	for (std::size_t off = 0; off < aligned; off += page_size())
 		map_page(s, start + off, pa_block + off, prot | prot_write);
 
@@ -334,8 +310,6 @@ void mmu::prot_virt(::addr_space& space, const addr_t va, const std::size_t size
 		const auto entry = read_phys<std::uint64_t>(slot);
 		if (!(entry & desc_valid)) continue;
 
-		// Keep the EL0 accessibility map_page derived from prot_supervisor;
-		// only the read/write half is being changed here.
 		auto attrs = page_attrs(prot);
 		attrs &= ~desc_ap_el0;
 		attrs |= entry & desc_ap_el0;

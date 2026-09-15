@@ -48,12 +48,10 @@ handler_result search_scope_table(vcpu& cpu, guest_caller& calls, const scope_se
 		if (pc_rva < scope.begin_address || pc_rva >= scope.end_address)
 			continue;
 
-		// No jump target is a __finally, which belongs to the unwind pass.
 		if (!scope.jump_target)
 			continue;
 
-		// 1 is EXCEPTION_EXECUTE_HANDLER written straight into the table, with
-		// no filter to ask.
+		// 1 is EXCEPTION_EXECUTE_HANDLER written straight into the table, with no filter to ask.
 		if (scope.handler_address != 1)
 		{
 			const auto filter = search.image_base + scope.handler_address;
@@ -109,8 +107,6 @@ filter_pointers build_exception_pointers(vcpu& cpu, windows_emulator& emulator,
 
 	space.write_mem(record_addr, record);
 
-	// The cpu still holds the faulting registers, pc included, so this is the
-	// context the filter should see.
 	emu_object<_CONTEXT> context(space, context_addr);
 	context.write(_CONTEXT{});
 	emulator.capture_context({cpu}, context, windows_emulator::context_all);
@@ -150,8 +146,6 @@ dispatch_frame build_dispatch_frame(vcpu& cpu, windows_emulator& emulator,
 
 	space.write_mem(record_addr, record);
 
-	// The cpu still holds the faulting registers, so this is the context the
-	// handler and its filters should see.
 	emu_object<_CONTEXT> context(space, context_addr);
 	context.write(_CONTEXT{});
 	emulator.capture_context({cpu}, context, windows_emulator::context_all);

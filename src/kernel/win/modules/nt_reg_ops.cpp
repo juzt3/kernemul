@@ -13,17 +13,12 @@
 namespace
 {
 
-// The key a handle names, and where it sits. win_registry stores keys by path
-// rather than by pointer, so the path is what makes a handle useful: enumerating
-// subkeys and deleting both go through it.
 struct registry_key_host final : win_object
 {
 	std::shared_ptr<win_registry_key> key;
 	std::string path;
 };
 
-// KEY_INFORMATION_CLASS and KEY_VALUE_INFORMATION_CLASS, as far as they are
-// answered here.
 enum key_information_class : std::uint32_t
 {
 	key_basic_information = 0,
@@ -38,14 +33,12 @@ enum key_value_information_class : std::uint32_t
 	key_value_partial_information = 2,
 };
 
-// ZwCreateKey's Disposition.
 enum key_disposition : std::uint32_t
 {
 	reg_created_new_key     = 1,
 	reg_opened_existing_key = 2,
 };
 
-// RtlQueryRegistryValues' RelativeTo, and the entry flags it reads.
 enum rtl_registry_relative : std::uint32_t
 {
 	rtl_registry_absolute  = 0,
@@ -55,7 +48,6 @@ enum rtl_registry_relative : std::uint32_t
 	rtl_registry_devicemap = 4,
 	rtl_registry_user      = 5,
 
-	// The high bit only says the caller will tolerate the key being absent.
 	rtl_registry_optional  = 0x80000000,
 	rtl_registry_handle    = 0x40000000,
 };
@@ -71,11 +63,7 @@ enum rtl_query_registry_flags : std::uint32_t
 	rtl_query_registry_delete   = 0x40,
 };
 
-// The KEY_*_INFORMATION structures are WDK types ending in a variable-length
-// array, so the kernel never stores one and they are not in the PDB. Only the
-// fixed head of each is declared; the name or data is appended after it. They
-// are packed to 4 because a LARGE_INTEGER at the front would otherwise pad the
-// tail out past where the array starts.
+// Not in the PDB, and packed to 4 so a LARGE_INTEGER does not pad the tail past the array start.
 #pragma pack(push, 4)
 
 struct key_basic_information_t
@@ -122,7 +110,6 @@ struct key_value_full_information_t
 	std::uint32_t name_length;
 };
 
-// One entry of the table RtlQueryRegistryValues walks.
 struct rtl_query_registry_table_t
 {
 	std::uint64_t query_routine;
@@ -150,9 +137,7 @@ std::uint32_t byte_length(const std::u16string& str)
 	return static_cast<std::uint32_t>(str.size() * sizeof(char16_t));
 }
 
-// Every query here answers the same three questions: how big the answer is,
-// whether it fit, and what to copy. ResultLength is written on every path,
-// because a caller sizing a buffer asks with a length of zero on purpose.
+// ResultLength is written on every path: a caller sizing a buffer asks with a length of zero.
 NTSTATUS write_info(addr_space& space, const std::vector<std::uint8_t>& response,
 	const addr_t buffer, const std::uint32_t length,
 	emu_object<std::uint32_t> result_length, const std::string_view who)
@@ -170,8 +155,6 @@ NTSTATUS write_info(addr_space& space, const std::vector<std::uint8_t>& response
 
 	if (length < required)
 	{
-		// As much as asked for, so a caller reading a truncated head still sees
-		// the lengths that tell it how much more to ask for.
 		space.write_mem(buffer, response.data(), length);
 		THREAD_LOG_INFO("{}: {} bytes given, {} needed", who, length, required);
 		return STATUS_BUFFER_OVERFLOW;
@@ -183,8 +166,6 @@ NTSTATUS write_info(addr_space& space, const std::vector<std::uint8_t>& response
 	return STATUS_SUCCESS;
 }
 
-// A fixed head followed by a variable tail, which is the shape of every one of
-// these structures.
 template <typename T>
 std::vector<std::uint8_t> with_tail(const T& head, const void* tail, const std::size_t tail_size,
 	const std::size_t tail_offset = sizeof(T))
@@ -221,8 +202,7 @@ std::vector<std::uint8_t> value_response(const std::uint32_t info_class,
 
 	case key_value_full_information:
 	{
-		// The name sits directly behind the head and the data behind the name,
-		// which is what DataOffset has to say.
+		// The name sits behind the head and the data behind the name, as DataOffset says.
 		const auto data_offset = static_cast<std::uint32_t>(
 			sizeof(key_value_full_information_t) + name_bytes);
 
@@ -248,8 +228,6 @@ std::shared_ptr<registry_key_host> key_from_handle(win_kernel_state& state,
 	return state.sys_proc->handle_table().get_object<registry_key_host>(handle);
 }
 
-// A key handle is an object manager object like any other, so ZwClose closes it
-// without knowing what it is.
 std::uint64_t open_key_handle(win_kernel_state& state, std::shared_ptr<win_registry_key> key,
 	std::string path, const std::uint32_t access)
 {
@@ -257,7 +235,6 @@ std::uint64_t open_key_handle(win_kernel_state& state, std::shared_ptr<win_regis
 	host->key = std::move(key);
 	host->path = std::move(path);
 
-	// The body is opaque: a driver only ever passes the handle back.
 	const std::uint8_t body[sizeof(addr_t)] = {};
 	const auto addr = state.objs.create_object(0, body, sizeof(body),
 		std::move(host), prot_rw | prot_supervisor);
@@ -265,8 +242,6 @@ std::uint64_t open_key_handle(win_kernel_state& state, std::shared_ptr<win_regis
 	return addr ? state.sys_proc->handle_table().create_handle(addr, access) : 0;
 }
 
-// OBJECT_ATTRIBUTES names a key either absolutely or relative to a key already
-// open, which is how a driver walks down from the key DriverEntry was handed.
 std::string resolve_key_path(win_kernel_state& state, addr_space& space,
 	const emu_object<_OBJECT_ATTRIBUTES>& object_attributes)
 {
@@ -294,9 +269,7 @@ std::string resolve_key_path(win_kernel_state& state, addr_space& space,
 	return relative.empty() ? parent->path : parent->path + "/" + relative;
 }
 
-// RelativeTo names one of a handful of well known roots, and the caller's path
-// hangs off it. RTL_REGISTRY_HANDLE instead means Path is a handle, which
-// nothing here hands out for this purpose.
+// RTL_REGISTRY_HANDLE means Path is a handle, which nothing here hands out for this purpose.
 std::string resolve_rtl_path(const std::uint32_t relative_to, const std::u16string& path)
 {
 	const auto relative = win_registry::normalize_path(path);
@@ -320,9 +293,7 @@ std::string resolve_rtl_path(const std::uint32_t relative_to, const std::u16stri
 
 }
 
-// The configuration manager. win_registry is a real store, so these are real
-// reads and writes rather than a shape a driver is shown -- a value written
-// through one of them is found again by every other.
+// win_registry is a real store, so a value written through one is found again by every other.
 void modules::register_ntoskrnl_reg_ops(win_kernel_state& state, proc_module& mod)
 {
 	auto* st = &state;
@@ -396,8 +367,6 @@ void modules::register_ntoskrnl_reg_ops(win_kernel_state& state, proc_module& mo
 		return STATUS_SUCCESS;
 	};
 
-	// The name a key reports is its last component, which is all NT puts in
-	// KEY_BASIC_INFORMATION -- the full path is the caller's to remember.
 	auto query_key = [st](vcpu& cpu, const std::uint64_t key_handle,
 		const std::uint32_t key_information_class, const addr_t key_information,
 		const std::uint32_t length, emu_object<std::uint32_t> result_length) -> NTSTATUS
@@ -623,9 +592,6 @@ void modules::register_ntoskrnl_reg_ops(win_kernel_state& state, proc_module& mo
 		return deleted ? STATUS_SUCCESS : STATUS_OBJECT_NAME_NOT_FOUND;
 	};
 
-	// The key goes out of the store, but the handle stays open: NT keeps a
-	// deleted key alive until its last handle closes, and only refuses further
-	// use of it.
 	auto delete_key = [st](vcpu&, const std::uint64_t key_handle) -> NTSTATUS
 	{
 		const auto host = key_from_handle(*st, key_handle);
@@ -654,8 +620,7 @@ void modules::register_ntoskrnl_reg_ops(win_kernel_state& state, proc_module& mo
 		return STATUS_SUCCESS;
 	};
 
-	// Nt and Zw are one function at one address for all of these, so both names
-	// are bound to the same handler.
+	// Nt and Zw are one function at one address here, so both names bind to one handler.
 	state.redirect_ntzw(mod, "CreateKey", create_key);
 	state.redirect_ntzw(mod, "OpenKey", open_key);
 	state.redirect_ntzw(mod, "QueryKey", query_key);
@@ -667,8 +632,6 @@ void modules::register_ntoskrnl_reg_ops(win_kernel_state& state, proc_module& mo
 	state.redirect_ntzw(mod, "DeleteKey", delete_key);
 	state.redirect(mod, "ZwFlushKey", flush_key);
 
-	// The Rtl forms name a key by path and a root rather than by handle, and do
-	// the open and the close themselves.
 	state.redirect(mod, "RtlWriteRegistryValue",
 		[st](vcpu& cpu, const std::uint32_t relative_to, const addr_t path,
 			const addr_t value_name, const std::uint32_t value_type,
@@ -719,11 +682,7 @@ void modules::register_ntoskrnl_reg_ops(win_kernel_state& state, proc_module& mo
 			return deleted ? STATUS_SUCCESS : STATUS_OBJECT_NAME_NOT_FOUND;
 		});
 
-	// A table of entries, each naming a value to read back. RTL_QUERY_REGISTRY_DIRECT
-	// writes the value straight into the caller's EntryContext, which is the
-	// form a driver reading its own parameters uses. Every other form calls the
-	// entry's QueryRoutine, and nothing here calls back into the guest -- so
-	// those entries are refused rather than quietly skipped.
+	// Nothing here calls back into the guest, so entries naming a QueryRoutine are refused.
 	state.redirect(mod, "RtlQueryRegistryValues",
 		[st](vcpu& cpu, const std::uint32_t relative_to, const addr_t path,
 			const addr_t query_table, [[maybe_unused]] const addr_t context,
@@ -744,8 +703,6 @@ void modules::register_ntoskrnl_reg_ops(win_kernel_state& state, proc_module& mo
 
 				const auto row = entry.read();
 
-				// The table ends at the first entry with neither a name nor a
-				// routine, which is how the caller terminates it.
 				if (!row.name && !row.query_routine)
 					break;
 
@@ -771,7 +728,6 @@ void modules::register_ntoskrnl_reg_ops(win_kernel_state& state, proc_module& mo
 						return STATUS_OBJECT_NAME_NOT_FOUND;
 					}
 
-					// A default is the entry's answer to the value being absent.
 					if (row.default_data && row.default_length && row.entry_context)
 					{
 						std::vector<std::uint8_t> bytes(row.default_length);
@@ -797,9 +753,7 @@ void modules::register_ntoskrnl_reg_ops(win_kernel_state& state, proc_module& mo
 			return STATUS_SUCCESS;
 		});
 
-	// A registry callback is told about every operation as it happens. Nothing
-	// notifies one, so the cookie is only something to unregister with -- and a
-	// driver filtering the registry sees none of the traffic these handlers make.
+	// Nothing notifies a registry callback, so a driver filtering the registry sees no traffic.
 	state.redirect(mod, "CmRegisterCallbackEx",
 		[](vcpu&, const addr_t function, emu_object<_UNICODE_STRING> altitude,
 			const addr_t driver, const addr_t context,
@@ -808,8 +762,7 @@ void modules::register_ntoskrnl_reg_ops(win_kernel_state& state, proc_module& mo
 			if (!cookie)
 				return STATUS_INVALID_PARAMETER;
 
-			// Monotonic so that two registrations never share one, which is the
-			// only thing a caller can tell about the value.
+			// Monotonic so that two registrations never share one, which is all a caller can tell.
 			static std::int64_t next_cookie = 1;
 			const auto value = next_cookie++;
 
@@ -828,9 +781,7 @@ void modules::register_ntoskrnl_reg_ops(win_kernel_state& state, proc_module& mo
 		return STATUS_SUCCESS;
 	});
 
-	// Nothing here notices a registry write, so the notification never arrives:
-	// the watch is accepted, the event stays unset and a synchronous caller is
-	// told the wait is already over.
+	// Nothing here notices a registry write, so the watch is accepted and the event stays unset.
 	state.redirect_ntzw(mod, "NotifyChangeKey",
 		[st](vcpu&, const std::uint64_t key_handle, const addr_t event, const addr_t apc_routine,
 			const addr_t apc_context, emu_object<_IO_STATUS_BLOCK> io_status_block,

@@ -32,16 +32,13 @@ class win_obj_manager
 public:
 	explicit win_obj_manager(addr_space& space);
 
-	// prot is the object's memory: everything the guest reaches only from
-	// kernel mode belongs behind prot_supervisor.
 	addr_t create_object(std::uint8_t type_index,
 		const void* body_data, std::size_t body_size,
 		std::shared_ptr<win_object> host = {}, mem_prot prot = prot_rw);
 
 	void register_object(addr_t body_addr, std::shared_ptr<win_object> host);
 
-	// The object namespace, holding exactly what the guest put in it: nothing
-	// here builds \Device or \BaseNamedObjects up front.
+	// Nothing here builds \Device or \BaseNamedObjects up front.
 	void register_named_object(std::string name, addr_t body_addr);
 
 	[[nodiscard]] addr_t lookup_named_object(std::string_view name) const;
@@ -58,8 +55,6 @@ public:
 
 	[[nodiscard]] bool has_object(addr_t body_addr) const;
 
-	// The header sits directly in front of the body, which is all a caller
-	// holding an object pointer needs to know to reach it.
 	[[nodiscard]] emu_object<_OBJECT_HEADER> header_of(addr_t body_addr) const
 	{
 		return emu_object<_OBJECT_HEADER>(space_, body_addr - sizeof(_OBJECT_HEADER));

@@ -30,9 +30,7 @@ struct calling_conv
 	virtual void write_arg(vcpu& cpu, std::size_t index, std::uint64_t value) const = 0;
 	virtual std::uint64_t read_ret(vcpu& cpu) const = 0;
 
-	// Against a thread's saved context rather than the live cpu: a thread that
-	// has not been scheduled yet, or one that has already run to completion,
-	// holds its state itself.
+	// Against the thread's saved context, not the live cpu: an unscheduled thread holds its state.
 	virtual void set_ret_addr(vcpu& cpu, thread& t, addr_t addr) const = 0;
 	virtual std::uint64_t read_ret(vcpu& cpu, const thread& t) const = 0;
 
@@ -160,12 +158,7 @@ void call_with_conv(vcpu& cpu, const calling_conv& conv, F& fn, std::index_seque
 
 }
 
-// A source of successive arguments for a variadic routine, starting at `index`.
-// guest::vsprintf walks a format string and asks for one argument at a time
-// without knowing where they live, which is the other half of this.
-//
-// For a routine taking `...`; one handed a va_list gets its arguments out of
-// guest memory instead -- see guest::va_list_args.
+// For a routine taking `...`; one handed a va_list uses guest::va_list_args instead.
 inline auto varargs(vcpu& cpu, const std::size_t index)
 {
 	return [&cpu, i = index]() mutable -> std::uint64_t

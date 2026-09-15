@@ -37,7 +37,7 @@ enum create_result : std::uint64_t
 	file_overwritten = 3,
 };
 
-// FILE_INFORMATION_CLASS, the ones answerable about a file in this store.
+// The FILE_INFORMATION_CLASS values answerable about a file in this store.
 enum file_information_class : std::uint32_t
 {
 	file_directory_information      = 1,
@@ -50,20 +50,15 @@ enum file_information_class : std::uint32_t
 	file_network_open_information   = 34,
 };
 
-// FS_INFORMATION_CLASS and the device type it reports.
 constexpr std::uint32_t file_fs_device_information = 4;
 constexpr std::uint32_t file_device_disk = 0x07;
 
-// What GetFileType turns into FILE_TYPE_CHAR, and with it what the crt decides
-// a stream is: a stream on a disk file is buffered until something flushes it,
-// and nothing flushes an exe that returns straight out of its entry point.
+// FILE_TYPE_CHAR keeps the crt unbuffered; a disk stream would never be flushed here.
 constexpr std::uint32_t file_device_console = 0x50;
 
-// FILE_ATTRIBUTE_*.
 constexpr std::uint32_t file_attribute_normal = 0x80;
 constexpr std::uint32_t file_attribute_directory = 0x10;
 
-// CreateOptions, the two that say what kind of thing the caller expects.
 constexpr std::uint32_t file_directory_file = 0x00000001;
 constexpr std::uint32_t file_non_directory_file = 0x00000040;
 
@@ -130,7 +125,6 @@ static_assert(sizeof(file_standard_information_t) == 0x18);
 static_assert(sizeof(file_network_open_information_t) == 0x38);
 static_assert(sizeof(file_directory_information_t) == 0x40);
 
-// The path an OBJECT_ATTRIBUTES names, in the form the store keeps.
 std::string object_path(vcpu& cpu, const emu_object<_OBJECT_ATTRIBUTES>& object_attributes)
 {
 	auto& space = *cpu.curr_addr_space();
@@ -142,8 +136,6 @@ std::string object_path(vcpu& cpu, const emu_object<_OBJECT_ATTRIBUTES>& object_
 	return win_filesystem::normalize(narrow_wstring(win::read_unicode_string(name)));
 }
 
-// Where a read or write starts. A null pointer or either sentinel means the
-// position the file object is already at.
 std::uint64_t file_offset(const emu_object<std::int64_t>& byte_offset,
 	const std::uint64_t position)
 {
@@ -212,8 +204,6 @@ open_result write_file_information(addr_space& space, const file_host& host,
 
 	case file_internal_information:
 	{
-		// The file id, which only has to be stable and unique. The address of
-		// the host object is both.
 		if (length < sizeof(std::int64_t))
 			return {STATUS_INFO_LENGTH_MISMATCH, 0};
 
@@ -228,8 +218,6 @@ open_result write_file_information(addr_space& space, const file_host& host,
 	}
 }
 
-// What every create path comes down to: find or make the file, and say which of
-// the two happened. The disposition is the whole of the decision.
 open_result open_file(win_kernel_state& state, const std::string& path,
 	const std::uint32_t disposition, const std::uint32_t create_options,
 	emu_object<std::uint64_t> file_handle)
@@ -240,16 +228,12 @@ open_result open_file(win_kernel_state& state, const std::string& path,
 	const bool is_directory = state.fs.dir_exists(path);
 	const bool existed = state.fs.exists(path) || is_directory;
 
-	// A caller that said which of the two it wanted gets told when it is the
-	// other, rather than a handle it will misuse.
 	if (existed && is_directory && (create_options & file_non_directory_file))
 		return { STATUS_FILE_IS_A_DIRECTORY, 0 };
 
 	if (existed && !is_directory && (create_options & file_directory_file))
 		return { STATUS_NOT_A_DIRECTORY, 0 };
 
-	// A directory has no contents to open, only entries to enumerate, so the
-	// file object behind one is empty and the path is what makes it useful.
 	if (is_directory)
 	{
 		auto host = std::make_shared<file_host>();
@@ -319,8 +303,6 @@ open_result open_file(win_kernel_state& state, const std::string& path,
 	host->file = std::move(file);
 	host->path = path;
 
-	// The body is opaque: a driver passes the handle back, and a file object
-	// pointer only ever reaches the object manager.
 	const std::uint8_t body[sizeof(addr_t)] = {};
 	const auto addr = state.objs.create_object(0, body, sizeof(body),
 		std::move(host), prot_rw | prot_supervisor);
@@ -334,8 +316,6 @@ open_result open_file(win_kernel_state& state, const std::string& path,
 	return { STATUS_SUCCESS, information };
 }
 
-// Both halves, because a caller that ignores the return value reads Status out
-// of the block instead.
 void write_status_block(emu_object<_IO_STATUS_BLOCK> block, const open_result& result)
 {
 	if (!block)
@@ -350,15 +330,12 @@ void write_status_block(emu_object<_IO_STATUS_BLOCK> block, const open_result& r
 
 }
 
-// The io manager beyond the device object: the descriptor lists a driver builds
-// over its own buffers, and the file and namespace queries it makes about them.
+// The io manager beyond the device object.
 void modules::register_ntoskrnl_io_ops(win_kernel_state& state, proc_module& mod)
 {
 	auto* st = &state;
 
-	// IoAllocateMdl only describes the buffer; the page frame array behind the
-	// header stays empty until MmProbeAndLockPages or MmBuildMdlForNonPagedPool
-	// fills it, which is also true of the real one.
+	// The page frame array stays empty until something fills it, as in the real one.
 	state.redirect(mod, "IoAllocateMdl",
 		[st](vcpu& cpu, const addr_t virtual_address, const std::uint32_t length,
 			const bool secondary_buffer, const bool charge_quota,
@@ -381,9 +358,6 @@ void modules::register_ntoskrnl_io_ops(win_kernel_state& state, proc_module& mod
 
 			emu_object<mdl_t>(*cpu.curr_addr_space(), addr).write(mdl);
 
-			// A secondary buffer is chained onto the IRP behind the one already
-			// there; the primary one is the IRP's own. Nothing dispatches IRPs
-			// here, so neither link is made.
 			if (irp)
 				THREAD_LOG_WARN("IoAllocateMdl: not chaining onto irp 0x{:X} ({}), because "
 					"nothing dispatches IRPs", irp.address(),
@@ -409,8 +383,6 @@ void modules::register_ntoskrnl_io_ops(win_kernel_state& state, proc_module& mod
 		THREAD_LOG_INFO("IoFreeMdl(0x{:X}): {} bytes", mdl, freed->size);
 	});
 
-	// The counterpart of IoCreateSymbolicLink, which has no namespace to put a
-	// link in -- so there is none to take out either.
 	state.redirect(mod, "IoDeleteSymbolicLink",
 		[](vcpu&, emu_object<_UNICODE_STRING> symbolic_link_name) -> NTSTATUS
 		{
@@ -420,10 +392,7 @@ void modules::register_ntoskrnl_io_ops(win_kernel_state& state, proc_module& mod
 			return STATUS_SUCCESS;
 		});
 
-	// A create really opens a file out of win_filesystem, so a section mapped
-	// over the handle it returns reads the bytes that are there. The disposition
-	// says what to do about the file existing or not; the rest of the arguments
-	// describe sharing and caching, which nothing here enforces.
+	// A create really opens a win_filesystem file, so a section over the handle reads real bytes.
 	state.redirect(mod, "IoCreateFileEx",
 		[st](vcpu& cpu, emu_object<std::uint64_t> file_handle, const std::uint32_t desired_access,
 			emu_object<_OBJECT_ATTRIBUTES> object_attributes,
@@ -460,9 +429,7 @@ void modules::register_ntoskrnl_io_ops(win_kernel_state& state, proc_module& mod
 			return result.status;
 		});
 
-	// What a file object is called in the DOS namespace. Nothing here gives a
-	// device a DOS name, so the answer is the path the file was opened by --
-	// which is the name a caller logging it or comparing it actually wants.
+	// Nothing gives a device a DOS name, so the answer is the path the file was opened by.
 	state.redirect(mod, "IoQueryFileDosDeviceName",
 		[st](vcpu& cpu, const addr_t file_object,
 			emu_object<addr_t> object_name_information) -> NTSTATUS
@@ -482,8 +449,6 @@ void modules::register_ntoskrnl_io_ops(win_kernel_state& state, proc_module& mod
 				return STATUS_OBJECT_NAME_NOT_FOUND;
 			}
 
-			// OBJECT_NAME_INFORMATION is a UNICODE_STRING with the characters
-			// behind it, allocated for the caller to free with ExFreePool.
 			auto& space = *cpu.curr_addr_space();
 			const auto wide = widen_string(host->path);
 			const auto bytes = static_cast<std::uint16_t>(wide.size() * sizeof(char16_t));
@@ -512,9 +477,6 @@ void modules::register_ntoskrnl_io_ops(win_kernel_state& state, proc_module& mod
 			return STATUS_SUCCESS;
 		});
 
-	// Reached from a file object rather than a handle, and answered out of the
-	// same file. Only the classes a driver asks about a file it just opened are
-	// answered; the rest say so rather than leaving the buffer untouched.
 	state.redirect(mod, "IoQueryFileInformation",
 		[st](vcpu& cpu, const addr_t file_object, const std::uint32_t file_information_class,
 			const std::uint32_t length, const addr_t file_information,
@@ -543,8 +505,6 @@ void modules::register_ntoskrnl_io_ops(win_kernel_state& state, proc_module& mod
 			return result.status;
 		});
 
-	// NtCreateFile and NtOpenFile are the same create underneath; open is the
-	// one that will not make a file that is not there.
 	auto create_file = [st](vcpu& cpu, emu_object<std::uint64_t> file_handle,
 		const std::uint32_t desired_access, emu_object<_OBJECT_ATTRIBUTES> object_attributes,
 		emu_object<_IO_STATUS_BLOCK> io_status_block,
@@ -591,9 +551,6 @@ void modules::register_ntoskrnl_io_ops(win_kernel_state& state, proc_module& mod
 			return result.status;
 		});
 
-	// The file position carries between calls, which is what a caller that
-	// passes no ByteOffset relies on. A negative offset is one of the two
-	// documented sentinels for "use the current position".
 	auto read_file = [st](vcpu& cpu, const std::uint64_t file_handle,
 		[[maybe_unused]] const std::uint64_t event,
 		[[maybe_unused]] const addr_t apc_routine, [[maybe_unused]] const addr_t apc_context,
@@ -666,8 +623,7 @@ void modules::register_ntoskrnl_io_ops(win_kernel_state& state, proc_module& mod
 		std::vector<std::uint8_t> bytes(length);
 		cpu.curr_addr_space()->read_mem(buffer, bytes.data(), length);
 
-		// Straight out of the emulator, unbuffered: what the guest prints and
-		// what the emulator logs are then in the order they happened.
+		// Unbuffered, so guest output and emulator logs stay in the order they happened.
 		if (host->console)
 		{
 			std::fwrite(bytes.data(), 1, bytes.size(), stdout);
@@ -680,8 +636,7 @@ void modules::register_ntoskrnl_io_ops(win_kernel_state& state, proc_module& mod
 
 		const auto offset = file_offset(byte_offset, host->position);
 
-		// win_file::write replaces the file, so a write at an offset grows a
-		// copy of what is there, drops the new bytes in, and puts it back.
+		// win_file::write replaces the file, so an offset write rebuilds it around the new bytes.
 		const auto current = host->file->data();
 
 		if (offset + length > current.size())
@@ -729,7 +684,6 @@ void modules::register_ntoskrnl_io_ops(win_kernel_state& state, proc_module& mod
 		return status.status;
 	};
 
-	// Nothing sits behind the store to push a write out to.
 	auto flush_buffers_file = [st](vcpu&, const std::uint64_t file_handle,
 		emu_object<_IO_STATUS_BLOCK> io_status_block) -> NTSTATUS
 	{
@@ -749,9 +703,7 @@ void modules::register_ntoskrnl_io_ops(win_kernel_state& state, proc_module& mod
 		return STATUS_SUCCESS;
 	};
 
-	// One entry per call, which is what ReturnSingleEntry asks for and what a
-	// caller looping until STATUS_NO_MORE_FILES handles either way. The scan
-	// position rides on the file object, so RestartScan is what rewinds it.
+	// One entry per call; the scan position rides on the file object, so RestartScan rewinds it.
 	auto query_directory_file = [st](vcpu& cpu, const std::uint64_t file_handle,
 		[[maybe_unused]] const std::uint64_t event,
 		[[maybe_unused]] const addr_t apc_routine, [[maybe_unused]] const addr_t apc_context,
@@ -824,7 +776,6 @@ void modules::register_ntoskrnl_io_ops(win_kernel_state& state, proc_module& mod
 		return STATUS_SUCCESS;
 	};
 
-	// Answered without opening the file, which is the point of them.
 	auto query_attributes_file = [st](vcpu& cpu,
 		emu_object<_OBJECT_ATTRIBUTES> object_attributes, const addr_t file_information,
 		const bool full) -> NTSTATUS
@@ -867,8 +818,6 @@ void modules::register_ntoskrnl_io_ops(win_kernel_state& state, proc_module& mod
 		return STATUS_SUCCESS;
 	};
 
-	// One volume, and a caller asking about it wants to know it is a fixed disk
-	// with room on it rather than anything specific.
 	auto query_volume_information_file = [st](vcpu& cpu, const std::uint64_t file_handle,
 		emu_object<_IO_STATUS_BLOCK> io_status_block, const addr_t fs_information,
 		const std::uint32_t length, const std::uint32_t fs_information_class) -> NTSTATUS
@@ -932,10 +881,7 @@ void modules::register_ntoskrnl_io_ops(win_kernel_state& state, proc_module& mod
 			return query_attributes_file(cpu, object_attributes, file_information, true);
 		});
 
-	// Nothing builds an irp, so there is no dispatch routine to send the code to
-	// and no driver to write the output buffer. The call is reported as having
-	// worked with nothing returned, which is what a control code the target
-	// ignores looks like.
+	// Nothing builds an irp, so the call is reported as having worked with nothing returned.
 	auto control_file = [st](vcpu& cpu, const std::uint64_t file_handle, const addr_t event,
 		const addr_t apc_routine, const addr_t apc_context,
 		emu_object<_IO_STATUS_BLOCK> io_status_block, const std::uint32_t control_code,

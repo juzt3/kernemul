@@ -9,9 +9,6 @@
 namespace
 {
 
-// The filter driver registration, kept so deregistering it has something to
-// find. Nothing here has a network adapter to attach a filter to, so what a
-// filter driver gets is the handle and nothing to filter.
 struct ndis_filter_host final : win_object
 {
 	addr_t driver_object = 0;
@@ -21,9 +18,7 @@ constexpr std::size_t filter_driver_body_size = 0x40;
 
 }
 
-// NDIS, as far as a filter driver gets before it waits for a packet. There is
-// no adapter here and no packet path, so registering a filter driver succeeds
-// and nothing is ever sent through it.
+// There is no adapter and no packet path, so a filter registers and nothing is sent through it.
 void modules::register_ndis(win_kernel_state& state, proc_module& mod)
 {
 	auto* st = &state;
@@ -35,9 +30,6 @@ void modules::register_ndis(win_kernel_state& state, proc_module& mod)
 			if (!filter_driver_handle || !characteristics)
 				return STATUS_INVALID_PARAMETER;
 
-			// NDIS_FILTER_DRIVER_CHARACTERISTICS opens with an NDIS_OBJECT_HEADER
-			// -- Type, Revision, Size -- then the NDIS version the driver was
-			// built against, which is the part worth reporting.
 			auto& space = *cpu.curr_addr_space();
 			const auto major = space.read_mem<std::uint8_t>(characteristics.address() + 4);
 			const auto minor = space.read_mem<std::uint8_t>(characteristics.address() + 5);

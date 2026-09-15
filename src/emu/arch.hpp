@@ -22,11 +22,9 @@ struct arch
 	virtual ~arch() = default;
 	virtual reg_t pc() const = 0;
 	virtual reg_t sp() const = 0;
-	// Consumes the return address of the call in progress. On x86 that pops
-	// it off the stack; on AArch64 it just reads the link register.
+	// Consumes the return address: x86 pops it off the stack, AArch64 reads the link register.
 	virtual addr_t ret_addr(vcpu& cpu) const = 0;
 
-	// The inverse: arrange for a call about to be made to return to addr.
 	virtual void set_ret_addr(vcpu& cpu, addr_t addr) const = 0;
 	virtual void init_vcpu(vcpu&) {}
 	virtual std::span<const reg_t> regs() const = 0;

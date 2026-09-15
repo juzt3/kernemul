@@ -2,9 +2,6 @@
 #include "../calling_conv.hpp"
 #include "arch.hpp"
 
-// AAPCS64, which Windows on ARM follows: the first eight integer arguments in
-// x0-x7, the rest on the stack with no home space reserved, and the result in
-// x0. SP is 16-byte aligned at every public interface.
 struct arm64_win_conv : calling_conv
 {
 	static constexpr reg_t arg_regs[] = {
@@ -15,8 +12,7 @@ struct arm64_win_conv : calling_conv
 	void set_arg(vcpu& cpu, thread& t, std::size_t index, std::uint64_t value) const override;
 	void set_ret(vcpu& cpu, thread& t, std::uint64_t value) const override;
 
-	// AAPCS64 reserves no home space, so the ninth argument is the first thing
-	// on the stack and sits right at the stack pointer on entry to the callee.
+	// AAPCS64 reserves no home space, so the ninth argument sits right at the stack pointer.
 	static constexpr addr_t stack_arg_off(const std::size_t index)
 	{
 		return (index - std::size(arg_regs)) * sizeof(addr_t);

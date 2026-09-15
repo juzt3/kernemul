@@ -10,8 +10,6 @@
 
 namespace win {
 
-// The two entry shapes the schema is made of. Only the header is in the
-// generated types, because only the header is ever handed to the guest.
 struct api_set_namespace_entry
 {
 	std::uint32_t flags;
@@ -31,29 +29,17 @@ struct api_set_value_entry
 	std::uint32_t value_length;
 };
 
-// One contract: the module that keeps it, and the importers it answers
-// differently for.
 struct api_set_entry
 {
 	std::string host;
 
-	// Six of the schema's names carry any of these, and they are what keeps
-	// resolution from going in circles. kernel32 forwards CreateRemoteThreadEx
-	// to api-ms-win-core-processthreads, which everyone else gets kernel32 for
-	// -- kernel32 itself gets kernelbase, where the code actually is.
+	// Six of the schema's names carry any of these, and they keep resolution from going in circles.
 	std::vector<std::pair<std::string, std::string>> overrides;
 };
 
-// What an api-ms-* or ext-ms-* name really means. The guest gets the schema
-// bytes through its PEB and resolves its own; this is the host's copy, for the
-// imports the emulator resolves itself.
 struct api_set_map
 {
-	// Keyed by the part of the name the schema hashes, which is the name with
-	// its last dash-separated piece removed. An import names a version the
-	// schema need not carry -- ucrtbase asks for
-	// api-ms-win-core-errorhandling-l1-1-0 and the schema holds -l1-1-3 -- so
-	// matching on the whole name finds nothing.
+	// Keyed by what the schema hashes: the name with its last dash-separated piece removed.
 	std::unordered_map<std::string, api_set_entry, string_view_hash, std::equal_to<>> hosts;
 
 	[[nodiscard]] bool empty() const noexcept { return hosts.empty(); }
@@ -71,8 +57,6 @@ struct api_set_map
 		return key;
 	}
 
-	// `importer` is the module that named this contract, which is the only
-	// thing that tells the overrides apart.
 	[[nodiscard]] std::optional<std::string> resolve(const std::string_view name,
 		const std::string_view importer = {}) const
 	{
@@ -98,8 +82,7 @@ struct api_set_map
 	}
 };
 
-// `section` is the .apiset section, which is what every offset in it counts
-// from. Names are utf-16 and carry their own length rather than a terminator.
+// Every offset counts from the .apiset section; names are utf-16 and carry their own length.
 inline api_set_map parse_api_set_map(const std::span<const std::uint8_t> section)
 {
 	api_set_map map;

@@ -5,8 +5,7 @@
 namespace
 {
 
-// MEMORY_ALLOCATION_ALIGNMENT, which a driver putting an slist entry in a pool
-// block depends on.
+// MEMORY_ALLOCATION_ALIGNMENT, which a driver putting an slist entry in a block depends on.
 constexpr std::size_t pool_alignment = 16;
 
 constexpr std::size_t run_size = 0x100000;
@@ -33,8 +32,6 @@ std::string pool_tag_name(const std::uint32_t tag)
 
 win_pool::block_iter win_pool::reserve(const std::size_t size)
 {
-	// addr_space::alloc rounds up to a page, and a run claiming less than it was
-	// given would leave the tail unusable.
 	const auto reserved = align_up(std::max(size, run_size), 0x1000);
 	const auto base = space_->alloc(reserved, prot_rw | prot_supervisor);
 
@@ -95,9 +92,6 @@ std::optional<win_pool::allocation> win_pool::free(const addr_t addr)
 
 	freed.free = true;
 
-	// Two runs reserved back to back are contiguous and identically mapped, so
-	// merging across that seam is sound; anything with a gap before it fails
-	// the adjacency test on its own.
 	const auto next = std::next(it);
 
 	if (next != blocks_.end() && next->second.free && addr + freed.size == next->first)

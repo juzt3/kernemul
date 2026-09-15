@@ -5,9 +5,7 @@
 
 namespace win {
 
-// A .pdata entry plus the function extent, which on AArch64 has to be derived:
-// runtime_function_arm64 records a length rather than an end address, and where
-// that length lives depends on whether the entry is packed.
+// runtime_function_arm64 records a length, not an end address; where it lives depends on packing.
 struct arm64_function_entry
 {
 	std::uint32_t begin_rva;

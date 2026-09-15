@@ -6,7 +6,6 @@
 #include "../../emu/calling_conv.hpp"
 #include "win_kernel.hpp"
 
-// Coming off a cpu.
 void win_thread::save(vcpu& cpu)
 {
 	thread::save(cpu);
@@ -17,9 +16,6 @@ void win_thread::save(vcpu& cpu)
 	if (!ethread_)
 		return;
 
-	// A thread that has not finished is going back on the queue. It is ready to
-	// run again unless it asked to wait, which is the one thing a thread here
-	// waits on: the scheduler will pass over it until its delay is up.
 	const auto state = is_finished() ? Terminated : (is_sleeping() ? Waiting : Ready);
 
 	set_thread_state(ethread_, state, false);
@@ -28,7 +24,6 @@ void win_thread::save(vcpu& cpu)
 		set_thread_wait_reason(ethread_, DelayExecution);
 }
 
-// And going on one.
 void win_thread::restore(vcpu& cpu) const
 {
 	thread::restore(cpu);
@@ -41,19 +36,14 @@ void win_thread::restore(vcpu& cpu) const
 	if (!pcpu)
 		return;
 
-	// The restore above put back whatever this thread last saw in the register
-	// the KPCR is reached through, and that was the block of whichever cpu it
-	// ran on before -- on x86-64 the register is the GS base, which a thread
-	// carries because a user thread keeps its TEB there. A kernel thread has no
-	// TEB to lose, so point it back at this cpu's block.
+	// Restore put back the KPCR register of whichever cpu it ran on before, so point it here.
 	if (is_system_thread())
 		emulator_->set_pcr(cpu, pcpu->address());
 
 	if (!ethread_)
 		return;
 
-	// Nothing else says which thread a cpu is running: the guest reads it out
-	// of that cpu's own KPRCB.
+	// Nothing else says which thread a cpu is running: the guest reads it out of that KPRCB.
 	pcpu->set_current_thread(ethread_.address());
 
 	set_thread_state(ethread_, Running, true);
@@ -61,10 +51,6 @@ void win_thread::restore(vcpu& cpu) const
 	count_thread_switch(ethread_);
 }
 
-// Parking the thread. A timed wait is asleep until its deadline, so a cpu with
-// nothing else to do sleeps that long too rather than looking at the thread
-// again and again while it waits. An untimed wait has nothing to sleep until:
-// it is released by the signal or not at all, and the signal wakes the cpus.
 void win_thread::begin_wait(wait_state w)
 {
 	if (w.timed)
@@ -72,17 +58,13 @@ void win_thread::begin_wait(wait_state w)
 		const auto remaining = std::max<std::int64_t>(
 			0, w.deadline - static_cast<std::int64_t>(win_system_time()));
 
-		// Rounded up: truncating here would arm the host sleep to run out
-		// before the guest deadline it stands in for.
+		// Rounded up: truncating would arm the host sleep to run out before the guest deadline.
 		sleep_for(std::chrono::ceil<std::chrono::milliseconds>(win_ticks(remaining)));
 	}
 
 	wait_ = std::move(w);
 }
 
-// Taking what a parked thread is waiting for. Whoever signalled one of its
-// objects calls this, from a cpu, because deciding takes guest reads and the
-// scheduler is in no position to make them.
 bool win_thread::try_satisfy(addr_space& space)
 {
 	if (!wait_ || wait_->satisfied)
@@ -90,8 +72,7 @@ bool win_thread::try_satisfy(addr_space& space)
 
 	const auto self = ethread_.address();
 
-	// WaitAll takes none of the objects until every one is available, which is
-	// what keeps two threads from each taking half of what they need.
+	// WaitAll takes none of the objects until every one is available.
 	std::size_t taken = wait_->objects.size();
 
 	if (wait_->all)
@@ -130,8 +111,7 @@ bool win_thread::try_satisfy(addr_space& space)
 	{
 		win::take(space, wait_->objects[taken], self);
 
-		// WaitAny reports which object released it, and STATUS_WAIT_0 is zero,
-		// so the index is the status.
+		// STATUS_WAIT_0 is zero, so the index of the object that released it is the status.
 		wait_->status = static_cast<NTSTATUS>(taken);
 	}
 
@@ -140,8 +120,6 @@ bool win_thread::try_satisfy(addr_space& space)
 	return true;
 }
 
-// A wait naming no object is an alert wait, and this is the only thing that
-// ends it. One arriving with nothing parked on it is kept, not dropped.
 void win_thread::alert()
 {
 	if (wait_ && !wait_->satisfied && wait_->objects.empty())
@@ -184,10 +162,6 @@ std::uint32_t win_thread::resume()
 	return previous;
 }
 
-// A parked thread runs again once its wait has been satisfied by whoever
-// signalled it, or once it has waited as long as it was told to. Both are
-// answered from what the wait already holds: nothing here touches guest memory,
-// because the scheduler asks this with no thread on the cpu.
 bool win_thread::is_ready(vcpu& cpu)
 {
 	// Ahead of the wait, so a thread suspended while parked stays off the cpu.
@@ -203,8 +177,7 @@ bool win_thread::is_ready(vcpu& cpu)
 	{
 		conv->set_ret(cpu, *this, status);
 
-		// A timed wait slept until its deadline. Leaving that behind would
-		// make a thread released early look asleep to every later look.
+		// Leaving the deadline behind would make a thread released early look asleep.
 		sleep_for(std::chrono::milliseconds(0));
 		wait_.reset();
 	};
@@ -225,12 +198,7 @@ bool win_thread::is_ready(vcpu& cpu)
 			return true;
 		}
 
-		// Still time to go, so put it back to sleep for what is left of it.
-		// The deadline is guest time and the sleep the scheduler paces itself
-		// by is host time, so the two do not run out at the same instant: a cpu
-		// that wakes even a tick early would otherwise find this thread neither
-		// ready nor sleeping, and go back to waiting with no time to wake at --
-		// which is nothing at all to wake it when it is the last thread left.
+		// The deadline is guest time and the sleep host time, so the two do not run out together.
 		sleep_for(std::chrono::ceil<std::chrono::milliseconds>(win_ticks(remaining)));
 	}
 

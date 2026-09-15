@@ -37,8 +37,7 @@ struct module_symbols
 {
 	std::vector<symbol_info> entries;
 
-	// Maps to the address rather than an index into entries, because sort()
-	// reorders entries and any stored index would silently go stale.
+	// Keyed by address, not index: sort() reorders entries and a stored index would go stale.
 	std::unordered_map<std::string, addr_t, string_view_hash, std::equal_to<>> name_index;
 
 	void insert(std::string name, addr_t addr, std::uint32_t size = 0);

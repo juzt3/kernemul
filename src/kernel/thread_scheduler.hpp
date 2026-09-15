@@ -41,9 +41,6 @@ public:
 
 	virtual ~thread() = default;
 
-	// The two halves of a context switch, and the only points a thread moves on
-	// or off a cpu. Registers are not all a guest can see of which thread is
-	// running, so an OS layer with more to say overrides these.
 	virtual void save(vcpu& cpu)
 	{
 		const auto a = cpu.arch();
@@ -107,25 +104,16 @@ public:
 		return T{};
 	}
 
-	// A thread waits by staying on the ready queue with a time on it, rather
-	// than by leaving the queue: nothing has to remember to put it back, and a
-	// cpu looking for work passes over it until that time comes round.
+	// A waiting thread stays on the ready queue with a time on it rather than leaving it.
 	void sleep_for(const std::chrono::milliseconds ms) { sleep_until_ = clock::now() + ms; }
 	[[nodiscard]] bool is_sleeping() const { return clock::now() < sleep_until_; }
 
-	// Whether the scheduler may run this thread now. Sleeping is the only
-	// reason the scheduler itself knows of; an OS layer with threads that park
-	// on something -- a dispatcher object, a timer -- decides here, and is
-	// handed a cpu so it can look at guest memory to do it.
 	[[nodiscard]] virtual bool is_ready(vcpu&) { return !is_sleeping(); }
 	[[nodiscard]] time_point sleep_until() const { return sleep_until_; }
 
 	void finish() { finished_ = true; }
 	[[nodiscard]] bool is_finished() const { return finished_; }
 
-	// Which side of the kernel the thread runs on. Nothing in the scheduler
-	// cares, but what a thread is doing reads differently depending on it, so
-	// an OS layer that has the distinction says so -- see win_thread.
 	[[nodiscard]] virtual bool is_user_mode() const { return false; }
 
 	[[nodiscard]] id_type id() const noexcept { return id_; }
@@ -141,8 +129,6 @@ private:
 	bool finished_{false};
 };
 
-// A thread's registers, whether or not it is the one on the cpu -- one off a
-// cpu holds its own context.
 struct reg_view
 {
 	vcpu& cpu;
@@ -207,19 +193,14 @@ public:
 		return t;
 	}
 
-	// Admit a thread built elsewhere: a user thread needs a TEB and a stack in
-	// its own process, so win_user_proc builds its own.
 	void enqueue(vcpu& cpu, std::shared_ptr<thread> t,
 		const std::span<const std::uint64_t> args = {})
 	{
 		const auto& conv = *cpu.emu()->call_conv();
 
-		// Where the start routine returns to, which is how a cpu sees it finish.
 		conv.set_ret_addr(cpu, *t, t->proc()->thread_exit_addr());
 
-		// Before the push below, not after: the moment the thread is on the
-		// queue another cpu can take it, and writing into the context of a
-		// thread that is already running corrupts it.
+		// Before the push below, not after: on the queue, the thread can be taken by another cpu.
 		for (std::size_t i = 0; i < args.size(); ++i)
 			conv.set_arg(cpu, *t, i, args[i]);
 
@@ -241,7 +222,6 @@ public:
 		cv_.notify_all();
 	}
 
-	// Bring every cpu's loop down, whether or not threads are left.
 	void stop()
 	{
 		{
@@ -252,18 +232,11 @@ public:
 		cv_.notify_all();
 	}
 
-	// Take the thread a cpu is running off it, without ending it. The cpu's
-	// loop banks the thread and goes back to schedule(), which puts it on the
-	// queue and picks whatever should run next -- possibly the same thread.
 	static void yield_current(vcpu& cpu)
 	{
 		cpu.stop();
 	}
 
-	// The same, for a thread that asked to wait: it goes back on the queue
-	// asleep, and no cpu picks it up again until its time is up. Waiting is the
-	// whole point of the call that asks for this, so the thread gives up its cpu
-	// now rather than running on to the end of its quantum.
 	static void sleep_current(vcpu& cpu, const std::chrono::milliseconds ms)
 	{
 		if (const auto t = cpu.thread())
@@ -272,9 +245,7 @@ public:
 		yield_current(cpu);
 	}
 
-	// A cpu's scheduling loop. It returns only once every thread everywhere has
-	// finished: a cpu with nothing to do waits instead, since a thread running
-	// on another cpu can create more work at any point.
+	// Returns only once every thread has finished; any cpu can create work at any point.
 	void run(vcpu& cpu)
 	{
 		std::shared_ptr<thread> curr;
@@ -288,9 +259,7 @@ public:
 
 			cpu.run();
 
-			// Anything that stops a cpu without ending its thread is the
-			// quantum running out: curr stays put, and the next schedule()
-			// banks it and puts it back on the queue.
+			// Anything that stops a cpu without ending its thread is the quantum running out.
 			if (!curr->is_finished())
 				continue;
 
@@ -303,8 +272,6 @@ public:
 		release(cpu);
 	}
 
-	// The next thread for this cpu, or nothing at all once the machine is done.
-	// Waits while other cpus still hold threads that could produce more.
 	std::shared_ptr<thread> schedule(vcpu& cpu, std::shared_ptr<thread> prev = nullptr)
 	{
 		std::unique_lock lock(mtx_);
@@ -327,10 +294,7 @@ public:
 				auto next = *it;
 				ready_queue_.erase(it);
 
-				// Off the queue and onto a cpu in one step, so no other cpu can
-				// see the thread as gone from both. The cpu has to know which
-				// thread it runs anyway: the exit stub's redirect has no other
-				// way to tell who returned.
+				// One step, so no other cpu sees the thread gone from both the queue and a cpu.
 				cpu.set_thread(next);
 				lock.unlock();
 
@@ -338,10 +302,7 @@ public:
 				return next;
 			}
 
-			// Every thread is either on another cpu or not ready. Waiting drops
-			// the lock, so whoever holds them can get back in to requeue or
-			// retire -- and whoever makes one of them ready notifies, which is
-			// what gets this cpu back up when there is no time to wake at.
+			// Waiting drops the lock so the holder can get back in to requeue or retire.
 			if (const auto wake = next_wake())
 				cv_.wait_until(lock, *wake);
 			else
@@ -350,9 +311,6 @@ public:
 	}
 
 private:
-	// The first thread on the queue that is ready to run. One that is not is
-	// passed over rather than taken, so being the only thread left is no reason
-	// to run it early: a cpu with nothing else to do waits instead.
 	// Called with the lock held.
 	std::deque<std::shared_ptr<thread>>::iterator first_runnable(vcpu& cpu)
 	{
@@ -360,11 +318,7 @@ private:
 			[&cpu](const auto& t) { return t->is_ready(cpu); });
 	}
 
-	// When the first of the queued sleepers is due, which is the soonest this
-	// cpu could have anything to do by itself. Nothing at all if none of them is
-	// sleeping: a queued thread that is not ready and has no time on it is
-	// parked on something another thread has to do, and that thread wakes the
-	// cpus when it does it. Called with the lock held.
+	// Nothing if no queued thread is sleeping: one parked on something is woken by whoever does it.
 	std::optional<thread::time_point> next_wake() const
 	{
 		std::optional<thread::time_point> earliest;
@@ -378,9 +332,7 @@ private:
 		return earliest;
 	}
 
-	// Put the thread's context on the cpu. Page tables are not part of that
-	// context and processes share none of them, so the cpu follows the thread
-	// into its own address space.
+	// Page tables are not part of the context, so the cpu follows the thread.
 	static void resume(vcpu& cpu, const thread& t)
 	{
 		if (const auto space = t.proc()->addr_space(); cpu.curr_addr_space() != space)
@@ -389,7 +341,6 @@ private:
 		t.restore(cpu);
 	}
 
-	// The cpu stops holding a thread, which is what lets the others finish.
 	void release(vcpu& cpu)
 	{
 		{
@@ -400,9 +351,7 @@ private:
 		cv_.notify_all();
 	}
 
-	// A thread is either queued or running on some cpu, so with none of either
-	// left there is nothing to wait for: only a running thread creates threads.
-	// Called with the lock held, which is what makes the two halves agree.
+	// Only a running thread creates threads, so none queued or running means nothing to wait for.
 	bool nothing_left(vcpu& cpu) const
 	{
 		if (!ready_queue_.empty())
