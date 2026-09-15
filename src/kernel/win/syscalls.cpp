@@ -12,8 +12,7 @@
 std::unique_ptr<win_syscall> make_win_syscall()
 {
 #if defined(KERNEMUL_ARCH_ARM64)
-	// No AArch64 usermode yet: the guest filesystem for it carries no ntdll.
-	return nullptr;
+	return std::make_unique<arm64_win_syscall>();
 #else
 	return std::make_unique<x86_win_syscall>();
 #endif

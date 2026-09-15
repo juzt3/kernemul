@@ -17,7 +17,18 @@
 	#include "emu/unicorn.hpp"
 
 	using guest_emu = unicorn_emu;
-	inline constexpr std::size_t vcpu_count = 4;
+
+	// Everything the guest is told about the machine agrees with this number,
+	// so it is not changed here alone. A Windows 11 ntdll takes different paths
+	// once it believes there is more than one processor -- the segment heap
+	// keeps a slot per processor -- and those do not survive here yet on
+	// AArch64: runs fail intermittently inside the heap. A limitation, not a
+	// preference.
+	#if defined(KERNEMUL_ARCH_ARM64)
+		inline constexpr std::size_t vcpu_count = 1;
+	#else
+		inline constexpr std::size_t vcpu_count = 4;
+	#endif
 #endif
 
 #if defined(KERNEMUL_ARCH_ARM64)
@@ -45,17 +56,17 @@
 #endif
 
 // A driver: mapped into the system process and entered on a system thread.
-[[maybe_unused]] static int run_driver(guest::win_emulator& win,
-	const std::shared_ptr<guest::calling_conv>& conv)
+static int run_driver(guest::win_emulator& win,
+	const std::shared_ptr<guest::calling_conv>& conv, const std::string& name)
 {
 	auto& kernel = win.kernel();
 	auto& proc = *kernel.sys_proc;
 
-	auto driver = krnl::map_img(proc, std::string(target::guest_fs_dir) + "test_driver.sys", true);
+	auto driver = krnl::map_img(proc, std::string(target::guest_fs_dir) + name, true);
 
 	if (!driver)
 	{
-		LOG_ERR("failed to map test driver");
+		LOG_ERR("failed to map {}", name);
 		return 1;
 	}
 
@@ -111,9 +122,13 @@ static int run_user(guest::win_emulator& win, const std::string_view exe_name)
 	return 0;
 }
 
-int main()
+// A .sys goes down the driver path, anything else runs as an application. The
+// name is looked up in the guest root for the architecture this was built for.
+int main(const int argc, const char* const* const argv)
 {
 	LOG_INFO("kernemul targeting {}", target::name);
+
+	const std::string image = argc > 1 ? argv[1] : "test_printf.exe";
 
 	auto mem = std::make_shared<guest::mmu>();
 	auto conv = std::make_shared<guest::calling_conv>();
@@ -121,5 +136,7 @@ int main()
 
 	guest::win_emulator win(e);
 
-	return run_user(win, "test_printf.exe");
+	return image.ends_with(".sys")
+		? run_driver(win, conv, image)
+		: run_user(win, image);
 }
