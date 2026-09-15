@@ -64,15 +64,20 @@ void modules::register_ntoskrnl_ctx_ops(win_kernel_state& state, proc_module& mo
 		});
 
 	state.redirect_ntzw(mod, "Continue",
-		[st](vcpu& cpu, emu_object<_CONTEXT> context, const bool test_alert) -> NTSTATUS
+		[st](vcpu& cpu, emu_object<_CONTEXT> context, const bool test_alert)
 		{
+			const auto fail = [&cpu](const NTSTATUS status)
+			{
+				cpu.emu()->call_conv()->ret(cpu, status);
+			};
+
 			if (!context)
-				return STATUS_INVALID_PARAMETER;
+				return fail(STATUS_INVALID_PARAMETER);
 
 			auto* emulator = st->emulator();
 
 			if (!emulator)
-				return STATUS_NOT_IMPLEMENTED;
+				return fail(STATUS_NOT_IMPLEMENTED);
 
 			if (test_alert)
 				THREAD_LOG_WARN("NtContinue: nothing delivers an APC, so there is no alert to "
@@ -82,8 +87,6 @@ void modules::register_ntoskrnl_ctx_ops(win_kernel_state& state, proc_module& mo
 
 			THREAD_LOG_INFO("NtContinue(0x{:X}): pc=0x{:X}, sp=0x{:X}",
 				context.address(), cpu.pc(), cpu.sp());
-
-			return STATUS_SUCCESS;
 		});
 
 	// ContextFlags asks on the way in and answers on the way out.
