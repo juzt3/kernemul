@@ -68,6 +68,11 @@ void hm::vcpu::try_stop()
 	}
 }
 
+bool hm::vcpu::stop_pending() const
+{
+	return stop_depth_->load() != 0;
+}
+
 bool hm::vcpu::take_stop(const std::uint32_t depth) const
 {
 	std::uint32_t requested = depth;

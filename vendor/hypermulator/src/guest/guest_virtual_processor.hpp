@@ -34,6 +34,8 @@ namespace hm
 
 		[[nodiscard]] std::uint32_t depth() const;
 
+		[[nodiscard]] bool stop_pending() const;
+
 		[[nodiscard]] std::optional<addr_t> virt_to_phys(addr_t virt_addr) const;
 
 		bool write_virt_mem(addr_t virt_addr, const void* buf, std::size_t size);

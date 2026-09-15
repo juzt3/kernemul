@@ -448,23 +448,19 @@ void hm::emu::set_block_code_hook_step(const std::shared_ptr<emu_hook>& hook)
 				{
 					shadow_guest_interrupts(step_cpu, false);
 
-					prot_block_code_hook_mem_range(hook->start_addr, hook->end_addr, false);
+					restore_block_code_hook_pages();
 
 					return false;
 				}
 
-				prot_block_code_hook_mem_range(hook->start_addr, hook->end_addr, false);
-				prot_block_code_hook_mem_range(sibling_hook->start_addr, sibling_hook->end_addr, true);
-
 				active_hook = sibling_hook;
 			}
+
+			enable_block_code_hook_page(*rip);
 
 			const auto virt_rip = step_context.cpu_state.rip;
 			const std::size_t virt_page_offset = virt_rip % page_size;
 			const std::size_t bytes_until_page_end = page_size - virt_page_offset;
-
-			addr_t adjacent_phys_page = 0;
-			bool enabled_adjacent = false;
 
 			if (bytes_until_page_end < max_insn_len)
 			{
@@ -473,14 +469,7 @@ void hm::emu::set_block_code_hook_step(const std::shared_ptr<emu_hook>& hook)
 
 				if (next_phys)
 				{
-					adjacent_phys_page = align_down(*next_phys, page_size);
-					const auto prot = partition_->query_phys_mem_prot(adjacent_phys_page);
-
-					if (prot && !(*prot & prot_exec))
-					{
-						partition_->prot_phys_mem(adjacent_phys_page, page_size, *prot | prot_exec);
-						enabled_adjacent = true;
-					}
+					enable_block_code_hook_page(*next_phys);
 				}
 			}
 
@@ -499,16 +488,6 @@ void hm::emu::set_block_code_hook_step(const std::shared_ptr<emu_hook>& hook)
 				if (step_cpu.read_mem(*rip, insn_bytes))
 				{
 					invoke_block_code_hook_step_cb(active_hook, *rip, insn_bytes);
-				}
-			}
-
-			if (enabled_adjacent)
-			{
-				const auto prot = partition_->query_phys_mem_prot(adjacent_phys_page);
-
-				if (prot)
-				{
-					partition_->prot_phys_mem(adjacent_phys_page, page_size, *prot & ~prot_exec);
 				}
 			}
 
@@ -555,33 +534,46 @@ void hm::emu::invoke_block_code_hook_step_cb(const std::shared_ptr<emu_hook>& ho
 	}
 }
 
-bool hm::emu::prot_block_code_hook_mem_range(const addr_t start_addr,
-                                                          const addr_t end_addr, const bool executable)
+bool hm::emu::enable_block_code_hook_page(const addr_t phys_addr)
 {
-	const addr_t start_page_addr = align_down(start_addr, page_size);
-	const addr_t end_page_addr = align_up(end_addr, page_size);
+	const addr_t page_addr = align_down(phys_addr, page_size);
 
-	// one page below, one page above
-	const addr_t end_added = end_page_addr + page_size;
+	const auto prot = partition_->query_phys_mem_prot(page_addr);
 
-	const addr_t start = page_size <= start_page_addr ? start_page_addr - page_size : 0;
-	const addr_t end = end_added < end_page_addr ? end_page_addr : end_added;
-
-	for (addr_t i = start; i < end; i += page_size)
+	if (!prot)
 	{
-		const auto prot = partition_->query_phys_mem_prot(i);
-
-		if (!prot || (!executable && (*prot & prot_exec) == 0))
-		{
-			continue;
-		}
-
-		const mem_prot new_prot = executable ? (*prot | prot_exec) : (*prot & ~prot_exec);
-
-		partition_->prot_phys_mem(i, page_size, new_prot);
+		return false;
 	}
 
+	// a page that was already executable is not ours to revert later
+	if (*prot & prot_exec)
+	{
+		return true;
+	}
+
+	if (!partition_->prot_phys_mem(page_addr, page_size, *prot | prot_exec))
+	{
+		return false;
+	}
+
+	block_hook_exec_pages_.push_back(page_addr);
+
 	return true;
+}
+
+void hm::emu::restore_block_code_hook_pages()
+{
+	for (const addr_t page_addr : block_hook_exec_pages_)
+	{
+		const auto prot = partition_->query_phys_mem_prot(page_addr);
+
+		if (prot && (*prot & prot_exec))
+		{
+			partition_->prot_phys_mem(page_addr, page_size, *prot & ~prot_exec);
+		}
+	}
+
+	block_hook_exec_pages_.clear();
 }
 
 bool hm::emu::mem_process_block_code_hook(vcpu& cpu, vmexit_context& context,
@@ -597,7 +589,7 @@ bool hm::emu::mem_process_block_code_hook(vcpu& cpu, vmexit_context& context,
 
 	if (info.type == mem_vmexit::access::execute && hook->in_aligned_range(*rip, max_insn_len))
 	{
-		prot_block_code_hook_mem_range(hook->start_addr, hook->end_addr, true);
+		enable_block_code_hook_page(*rip);
 
 		const auto virt_rip = context.cpu_state.rip;
 		const std::size_t page_offset = virt_rip % page_size;
@@ -610,13 +602,7 @@ bool hm::emu::mem_process_block_code_hook(vcpu& cpu, vmexit_context& context,
 
 			if (next_phys_page)
 			{
-				const auto next_phys_page_aligned = align_down(*next_phys_page, page_size);
-				const auto prot = partition_->query_phys_mem_prot(next_phys_page_aligned);
-
-				if (prot)
-				{
-					partition_->prot_phys_mem(next_phys_page_aligned, page_size, *prot | prot_exec);
-				}
+				enable_block_code_hook_page(*next_phys_page);
 			}
 		}
 

@@ -120,14 +120,14 @@ void hm::emu::reset_step_cbs()
 	single_step_cbs_.clear();
 	block_hook_was_control_flow_ = false;
 
+	restore_block_code_hook_pages();
+
 	for (std::size_t i = 0; i < hooks_.size(); i++)
 	{
 		const auto& hook = hooks_[i];
 
 		if (hook->type == hook_type::code || hook->type == hook_type::basic_block)
 		{
-			prot_block_code_hook_mem_range(hook->start_addr, hook->end_addr, false);
-
 			continue;
 		}
 

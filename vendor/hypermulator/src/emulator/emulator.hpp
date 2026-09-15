@@ -181,7 +181,8 @@ namespace hm
 		void handle_block_hook_overflow(const std::shared_ptr<emu_hook>& hook, addr_t rip);
 		void invoke_block_code_hook_step_cb(const std::shared_ptr<emu_hook>& hook, addr_t rip,
 		                                          std::span<const std::uint8_t> insn_bytes);
-		bool prot_block_code_hook_mem_range(addr_t start_addr, addr_t end_addr, bool executable);
+		bool enable_block_code_hook_page(addr_t phys_addr);
+		void restore_block_code_hook_pages();
 		bool mem_process_block_code_hook(vcpu& cpu, vmexit_context& context,
 		                                    const std::shared_ptr<emu_hook>& hook);
 
@@ -221,6 +222,9 @@ namespace hm
 		std::vector<vmexit_callback::routine_t> single_step_cbs_;
 
 		std::vector<std::shared_ptr<emu_hook>> hooks_ = { };
+
+		// pages the block code hooks made executable, to be reverted together
+		std::vector<addr_t> block_hook_exec_pages_;
 
 		bool block_hook_was_control_flow_ = false;
 		bool pending_single_step_cancelled_ = false;

@@ -201,21 +201,37 @@ bool hm::partition::prot_phys_mem(const addr_t phys_addr, const std::size_t size
 			return false;
 		}
 
+		mapped_mem& mapping = it->second;
+
+		if (mapping.prot == prot)
+		{
+			continue;
+		}
+
+		if (prot & prot_read)
+		{
+			if (FAILED(WHvMapGpaRange(
+				handle_, mapping.host_buf,
+				page_phys_addr, page_size,
+				static_cast<WHV_MAP_GPA_RANGE_FLAGS>(prot))))
+			{
+				return false;
+			}
+
+			mapping.prot = static_cast<mem_prot>(prot);
+
+			continue;
+		}
+
 		if (FAILED(WHvUnmapGpaRange(handle_, page_phys_addr, page_size)))
 		{
 			return false;
 		}
 
-		mapped_mem& mapping = it->second;
-
-		if (FAILED(WHvMapGpaRange(
+		WHvMapGpaRange(
 			handle_, mapping.host_buf,
 			page_phys_addr, page_size,
-			static_cast<WHV_MAP_GPA_RANGE_FLAGS>(prot))) &&
-			prot & prot_read)
-		{
-			return false;
-		}
+			static_cast<WHV_MAP_GPA_RANGE_FLAGS>(prot));
 
 		mapping.prot = static_cast<mem_prot>(prot);
 	}
