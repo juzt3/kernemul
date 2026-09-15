@@ -123,7 +123,7 @@ struct win_kernel_state : kernel_state
 		space.mmu_->map_virt(space, kuser_shared_data_kernel_va,
 			sizeof(_KUSER_SHARED_DATA), prot_rw | prot_supervisor);
 		kuser_shared_data = emu_object<_KUSER_SHARED_DATA>(space, kuser_shared_data_kernel_va);
-		kuser_shared_data.write(make_default_kuser_shared_data());
+		kuser_shared_data.write(make_default_kuser_shared_data(1));
 	}
 
 	// One of the kernel's own modules, mapped out of the guest filesystem with
@@ -179,6 +179,17 @@ struct win_kernel_state : kernel_state
 
 	void set_emulator(windows_emulator* e) { emulator_ = e; }
 	[[nodiscard]] windows_emulator* emulator() const noexcept { return emulator_; }
+
+	// KUSER_SHARED_DATA is built before any cpu exists, so its count starts as
+	// a placeholder.
+	void publish_processor_count(const std::size_t processors)
+	{
+		if (!kuser_shared_data)
+			return;
+
+		kuser_shared_data.field(&_KUSER_SHARED_DATA::ActiveProcessorCount)
+			.write(static_cast<std::uint32_t>(processors));
+	}
 
 	void build_syscall_table(const proc_module& ntoskrnl)
 	{
@@ -347,7 +358,8 @@ struct win_kernel_state : kernel_state
 		const auto id = objs.allocate_id();
 		auto& kspace = *emu_->default_addr_space();
 		const auto kusd_pa = *kspace.mmu_->virt_to_phys(kspace, kuser_shared_data_kernel_va);
-		auto proc = std::make_shared<win_user_proc>(id, emu_->mem()->create_addr_space(), objs, fs, kusd_pa, name);
+		auto proc = std::make_shared<win_user_proc>(id, emu_->mem()->create_addr_space(), objs, fs,
+			kusd_pa, name, emu_->cpus().size());
 		proc->set_emulator(emulator_);
 		processes[id] = proc;
 
@@ -426,6 +438,13 @@ public:
 
 		emu_->hook_insn(0, std::numeric_limits<addr_t>::max(), hook_insn_t::syscall,
 			[this](vcpu& cpu) { return kernel_.dispatch_syscall(cpu); });
+	}
+
+	// The first moment the guest can be told how many cpus there are.
+	void create_vcpus(const std::size_t count) override
+	{
+		os_emulator::create_vcpus(count);
+		kernel_.publish_processor_count(cpus().size());
 	}
 
 	win_kernel_state& kernel() { return kernel_; }
