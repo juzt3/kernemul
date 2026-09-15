@@ -45,6 +45,15 @@ bool win_exception::handle(vcpu& cpu, const cpu_exception ex)
 	if (ex == cpu_exception::page_fault && handle_page_fault(cpu))
 		return true;
 
+	// Some of what usermode may not execute is serviced rather than reported.
+	if (ex == cpu_exception::illegal_instruction)
+	{
+		auto* const emulator = kernel_.emulator();
+
+		if (emulator && emulator->emulate_privileged_insn(cpu))
+			return true;
+	}
+
 	const auto t = cpu.thread();
 	const auto faulting = t ? std::dynamic_pointer_cast<windows_process>(t->proc()) : nullptr;
 	auto& proc = faulting ? *faulting : *kernel_.sys_proc;

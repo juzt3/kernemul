@@ -24,6 +24,12 @@ std::shared_ptr<vcpu> arm64_win_emulator::add_vcpu()
 	const auto& pcpu = kernel().init_per_cpu(*cpu);
 	set_pcr(*cpu, pcpu.address());
 
+	// Where usermode looks for the processor number: RtlGetCurrentProcessorNumber
+	// is an mrs of TPIDRRO_EL0 and nothing else. Low byte the processor, next
+	// the group. Per cpu rather than per thread, like TPIDR_EL1.
+	constexpr std::uint64_t processor_group = 0;
+	cpu->reg(arm64::tpidrro_el0, (processor_group << 8) | cpu->id());
+
 	return cpu;
 }
 
