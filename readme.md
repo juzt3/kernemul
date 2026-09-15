@@ -30,11 +30,12 @@ state.redirect(mod, "KeSetEvent",
 
 There are 2 emulator backends: WHP (Windows hypervisor platform) and Unicorn. WHP uses virtualisation to execute instructions a lot faster but is only usable on Windows hosts. Unicorn is regular emulation but will work on different host operating systems too (e.g. Linux). The Unicorn implementation has host multithreading (emulates multiple vCPUs).
 
+# Getting started
 
-# Building
-
-# Usage
+```
+git clone --recurse-submodules https://github.com/noahware/kernemul.git
+```
 
 # License
 
-This project uses the Apache-2.0 license.
+This project uses the GPL-2.0 license.
