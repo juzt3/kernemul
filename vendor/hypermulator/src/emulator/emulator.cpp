@@ -99,19 +99,11 @@ bool hm::emu::run()
 
 	cpu.run();
 
-	// Only the outermost run tears the step state down. A nested run returning
-	// leaves the steps its caller was in the middle of in place.
 	if (cpu.depth() != 0)
 	{
 		return true;
 	}
 
-	// The run that just ended owned the stepping, and everything the stepping
-	// changed goes back with it: the flag driving it, the steps waiting on that
-	// flag, and the protections the hooks lifted to let the guest through. A run
-	// cut short -- the host cancelling it to take the processor back, say --
-	// would otherwise leave the hooked ranges executable and every hook over
-	// them dead for the rest of the partition's life.
 	reset_tf(cpu);
 	reset_step_cbs();
 

@@ -33,10 +33,6 @@ void hm::vcpu::run()
 			{
 				break;
 			}
-
-			// stale cancel - WHvCancelRunVirtualProcessor was issued before this
-			// run() started (e.g. from the stop that ended a deeper run), so the
-			// cancel was consumed here without a stop being meant for us
 			continue;
 		}
 
@@ -51,8 +47,6 @@ void hm::vcpu::run()
 		}
 	}
 
-	// Only the run that owns the exception state tears it down: a nested run
-	// returning leaves its caller's pending events alone.
 	if (depth_->fetch_sub(1) == 1)
 	{
 		reset_exception_state();
@@ -61,8 +55,6 @@ void hm::vcpu::run()
 
 void hm::vcpu::stop()
 {
-	// Aimed at whichever run is innermost now, so a hook that stops the
-	// processor ends the run it is running under and no other.
 	stop_depth_->store(depth_->load());
 
 	partition_->stop_vcpu(*this);

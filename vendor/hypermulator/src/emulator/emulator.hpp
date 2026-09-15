@@ -76,9 +76,6 @@ namespace hm
 
 		[[nodiscard]] bool run_at(addr_t start_addr, addr_t end_addr = 0);
 
-		// Run from the program counter the processor already has, for a caller
-		// that keeps the guest's state itself. Nesting is allowed: a hook may
-		// run guest code of its own, and the run it interrupted resumes after.
 		bool run();
 
 		void stop();
@@ -91,9 +88,6 @@ namespace hm
 		std::shared_ptr<emu_hook> hook_invalid_mem(mem_prot prot, const emu_hook::invalid_mem_hk_cb& cb, addr_t start_addr = default_start_addr, addr_t end_addr = default_end_addr);
 		std::shared_ptr<emu_hook> hook_insn(hook_insn_t insn, const emu_hook::insn_hk_cb& cb, addr_t start_addr = default_start_addr, addr_t end_addr = default_end_addr);
 
-		// Guest exceptions that nothing internal claimed. Installing one makes
-		// the partition exit on every vector it can hand over, rather than
-		// letting the guest IDT have them.
 		std::shared_ptr<emu_hook> hook_exception(const emu_hook::excp_hk_cb& cb);
 
 		bool remove_hook(const std::shared_ptr<emu_hook>& hook);
@@ -164,8 +158,6 @@ namespace hm
 		bool configure_single_step();
 		void reset_guest_exit_state();
 
-		// Drop the steps a finished run was in the middle of and put back the
-		// protections its hooks lifted.
 		void reset_step_cbs();
 
 		void single_step(vcpu& cpu, vmexit_context& context);

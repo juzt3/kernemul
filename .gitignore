@@ -14,6 +14,7 @@
 *.userprefs
 
 build-vcpkg-test/
+build-x64-whp/
 test/
 build/
 build-x64/

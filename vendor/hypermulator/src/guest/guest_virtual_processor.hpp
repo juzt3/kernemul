@@ -30,13 +30,8 @@ namespace hm
 		void run();
 		void stop();
 
-		// Stop the processor only if it is at its outermost run. A nested run
-		// ends at a trampoline its caller installed, and taking it away hands
-		// that caller a result that was never produced.
 		void try_stop();
 
-		// 0 is not running, 1 is the outermost run, more than that is a hook
-		// that started a run of its own.
 		[[nodiscard]] std::uint32_t depth() const;
 
 		[[nodiscard]] std::optional<addr_t> virt_to_phys(addr_t virt_addr) const;
@@ -119,9 +114,6 @@ namespace hm
 	protected:
 		[[nodiscard]] bool process_vmexit(vmexit_context& context);
 
-		// True if the pending stop was aimed at the run at this depth, which
-		// also consumes it: an outer run carries on once the run the stop was
-		// meant for has returned.
 		[[nodiscard]] bool take_stop(std::uint32_t depth) const;
 
 		void reset_exception_state();
@@ -129,8 +121,6 @@ namespace hm
 		std::shared_ptr<partition> partition_ = { };
 		std::uint32_t id_ = 0;
 
-		// Shared by every copy of the processor, since a processor is handed
-		// out by value and a stop has to reach the run it was aimed at.
 		std::shared_ptr<std::atomic<std::uint32_t>> depth_ = std::make_shared<std::atomic<std::uint32_t>>(0);
 		std::shared_ptr<std::atomic<std::uint32_t>> stop_depth_ = std::make_shared<std::atomic<std::uint32_t>>(0);
 	};

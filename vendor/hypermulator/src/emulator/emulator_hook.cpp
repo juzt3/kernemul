@@ -95,8 +95,6 @@ void hm::emu::single_step(vcpu& cpu, vmexit_context& context)
 	{
 		set_trap_flag(cpu, !single_step_cbs_.empty());
 
-		// No step callback was waiting on this trap, so the trap flag was the
-		// guest's own. An exception hook gets it before the guest IDT does.
 		if (!has_cbs && !dispatch_excp_hooks(exception_id::debug_trap))
 		{
 			inject_guest_exception(cpu, 1);
@@ -209,22 +207,16 @@ bool hm::emu::handle_exception(vcpu& cpu, vmexit_context& context)
 
 	if (info.id == exception_id::debug_trap)
 	{
-		// single_step consults the exception hooks itself, since only it can
-		// tell a trap of its own making from one the guest asked for.
 		single_step(cpu, context);
 
 		return true;
 	}
 
-	// An invalid-memory hook may still map the page in and retry the access.
 	if (info.id == exception_id::page_fault && handle_page_fault(cpu, context))
 	{
 		return true;
 	}
 
-	// Nothing internal claimed it. Unclaimed by an exception hook too, it stops
-	// the processor: delivering it blind through the guest IDT would fault
-	// again at the same address for ever.
 	return dispatch_excp_hooks(info.id);
 }
 
@@ -251,9 +243,6 @@ bool hm::emu::dispatch_excp_hooks(const exception_id id)
 
 std::shared_ptr<hm::emu_hook> hm::emu::hook_exception(const emu_hook::excp_hk_cb& cb)
 {
-	// Every vector the partition can hand over. Debug traps included: with a
-	// hook installed a guest-set trap flag is the hook's to interpret, not the
-	// guest IDT's.
 	if (!partition_->set_divide_error_exception_exiting(true) ||
 		!partition_->set_debug_exception_exiting(true) ||
 		!partition_->set_breakpoint_exception_exiting(true) ||
