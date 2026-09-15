@@ -26,8 +26,10 @@ public:
 	virtual void run() = 0;
 	virtual void stop() = 0;
 
-	// Stop the cpu only if it is somewhere it can be stopped from the outside.
-	// A backend that cannot tell just stops.
+	// Ask the cpu to stop, from a thread other than the one running it. Unlike
+	// stop() this is a request: a backend whose cpu can only be stopped from
+	// its own thread takes it up there instead, and one that has nothing to
+	// stop drops it. A backend that can be stopped from anywhere just stops.
 	virtual void try_stop() { stop(); }
 	virtual void flush_tlb() = 0;
 

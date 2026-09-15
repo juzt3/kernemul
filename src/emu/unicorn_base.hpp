@@ -105,17 +105,47 @@ public:
 		}
 	}
 
+	// Only ever called from this cpu's own host thread -- see try_stop.
 	void stop() override
 	{
 		uc_emu_stop(uc_);
 	}
 
+	// Asked for from another thread, so nothing here touches the engine: a
+	// uc_engine takes no locks of its own, and a uc_emu_stop racing the
+	// uc_emu_start that is executing leaves the cpu somewhere the guest never
+	// was -- pc past code that has not run, or short of code that has. The
+	// request is picked up by poll_stop below, on this cpu's own thread.
+	//
+	// Nothing is asked of a cpu that is not running its own outermost run: a
+	// request the cpu has no reason to act on would be acted on the moment it
+	// picked up its next thread, costing that thread a trip round the
+	// scheduler before it had run anything.
 	void try_stop() override
 	{
-		// Only the outermost run can be taken away. A nested one ends at a
-		// trampoline its caller installed, and stopping it anywhere else hands
-		// that caller a result that was never produced.
 		if (running_.load() == 1)
+			stop_requested_.store(true);
+	}
+
+	// At the top of every basic block, on this cpu's own thread: the one place
+	// a cpu can be taken off guest code without the engine being touched from
+	// the outside.
+	void poll_stop()
+	{
+		// An engine-wide operation is waiting for this cpu to leave guest
+		// code. Its run() resumes from the same pc once the operation is done,
+		// so a nested run survives it and is stopped too.
+		if (pending_pause_.load())
+		{
+			stop();
+			return;
+		}
+
+		// The quantum ran out. Only the outermost run can be taken away: a
+		// nested one ends at a trampoline its caller installed, and stopping
+		// it anywhere else hands that caller a result that was never produced.
+		// The request stays pending until then.
+		if (running_.load() == 1 && stop_requested_.exchange(false))
 			stop();
 	}
 
@@ -146,6 +176,7 @@ public:
 	std::atomic<int> running_{0};
 	std::atomic<int> in_hook_{0};
 	std::atomic<bool> pending_pause_{false};
+	std::atomic<bool> stop_requested_{false};
 	std::atomic<bool> redirect_{false};
 	addr_t redirect_pc_{0};
 };
@@ -218,21 +249,14 @@ public:
 		for (auto& cpu : cpus_)
 			static_cast<unicorn_vcpu_base*>(cpu.get())->pending_pause_ = true;
 
-		// Only cpus that are executing: uc_emu_stop on an idle engine latches a
-		// stop request that its next uc_emu_start consumes, so a cpu parked in
-		// the scheduler would come back from its first real run having run
-		// nothing.
-		for (auto& cpu : cpus_)
-		{
-			auto* uc = static_cast<unicorn_vcpu_base*>(cpu.get());
-
-			if (uc->running_.load() && !uc->in_hook_.load())
-				uc->stop();
-		}
-
+		// Nothing stops the other cpus from here: each one sees the flag at the
+		// top of its next basic block and stops itself, which is the only way
+		// an engine may be stopped -- see unicorn_vcpu_base::try_stop. A cpu
+		// parked in the scheduler is not executing and has nothing to notice.
+		//
 		// in_hook_ is re-read every time round: a cpu that was executing when
-		// it was stopped can still enter a hook before it gets there, and would
-		// then be parked on the way out with running_ never clearing.
+		// the flag went up can still enter a hook before it gets there, and
+		// would then be parked on the way out with running_ never clearing.
 		for (auto& cpu : cpus_)
 		{
 			auto* uc = static_cast<unicorn_vcpu_base*>(cpu.get());
@@ -328,7 +352,25 @@ protected:
 		// Use the CPU's own MMU, so the guest page tables are actually walked.
 		uc_ctl_tlb_mode(uc, UC_TLB_CPU);
 
-		return wrap_engine(uc, id);
+		auto cpu = wrap_engine(uc, id);
+
+		// Every cpu carries this one, whether or not anything else hooks
+		// anything: it is what turns a stop asked for from another thread into
+		// a stop this cpu performs on itself, at a block boundary. Unbounded,
+		// the way begin > end is written everywhere else here.
+		uc_hook stop_poll{};
+		if (uc_hook_add(uc, &stop_poll, UC_HOOK_BLOCK,
+				reinterpret_cast<void*>(&stop_poll_trampoline), cpu.get(), 1, 0)
+			!= UC_ERR_OK)
+			throw std::runtime_error("failed to hook the cpu's own stop point");
+
+		return cpu;
+	}
+
+	static void stop_poll_trampoline(uc_engine*, std::uint64_t, std::uint32_t,
+		void* user_data)
+	{
+		static_cast<unicorn_vcpu_base*>(user_data)->poll_stop();
 	}
 
 private:
