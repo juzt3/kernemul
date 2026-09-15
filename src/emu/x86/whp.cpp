@@ -9,7 +9,9 @@
 #include <algorithm>
 #include <cstring>
 #include <format>
+#include <limits>
 #include <optional>
+#include <ranges>
 #include <stdexcept>
 
 namespace
@@ -138,11 +140,29 @@ hm::hook_insn_t to_hm_insn(const hook_insn_t insn)
 	}
 }
 
+// IA32_EFER.SCE. Clear, and syscall is #UD rather than an entry through LSTAR.
+constexpr std::uint64_t efer_sce = 1;
+
+constexpr std::uint8_t syscall_insn[] = { 0x0F, 0x05 };
+
+// RFLAGS.TF. On this backend the trap flag belongs to hypermulator, which arms it to step
+// through a code hook's range; the guest never asked for it. It has to be kept out of every
+// rflags the host reads or writes, because what the host does with one is save it into a
+// thread being created or a CONTEXT being captured -- and a thread restored with a borrowed
+// trap flag single-steps its first instruction into a debug trap that no step callback owns.
+constexpr std::uint64_t rflags_tf = 1ull << 8;
+
+bool is_usermode(const std::uint16_t cs_selector)
+{
+	return (cs_selector & 3) == 3;
+}
+
 }
 
 struct x86_whp_emu::whp_hook : emu_hook
 {
 	hm::emu* backend = nullptr;
+	bool syscall = false;
 	std::vector<std::shared_ptr<hm::emu_hook>> native;
 
 	~whp_hook() override
@@ -154,10 +174,12 @@ struct x86_whp_emu::whp_hook : emu_hook
 
 x86_whp_vcpu::x86_whp_vcpu(x86_whp_emu* const emu, std::shared_ptr<const struct arch> arch,
 	hm::emu& backend, const std::size_t id)
-	:	vcpu(emu, std::move(arch), id), hm_(backend) { }
+	:	vcpu(emu, std::move(arch), id), whp_(*emu), hm_(backend) { }
 
 void x86_whp_vcpu::run()
 {
+	whp_.sync_syscall_enable(*this);
+
 	hm_.run();
 }
 
@@ -221,6 +243,9 @@ void x86_whp_vcpu::reg_read(const reg_t reg, void* const value, const std::size_
 	std::uint64_t raw{};
 	read(&raw, sizeof(raw));
 
+	if (reg == x86::rflags)
+		raw &= ~rflags_tf;
+
 	std::memcpy(value, &raw, std::min(size, sizeof(raw)));
 }
 
@@ -264,6 +289,18 @@ void x86_whp_vcpu::reg_write(const reg_t reg, const void* const value, const std
 
 	std::uint64_t raw{};
 	std::memcpy(&raw, value, std::min(size, sizeof(raw)));
+
+	// Whatever stepping is under way outlives this write: the value going in never carries a
+	// trap flag of its own, since reg_read took it out of the one it came from.
+	if (reg == x86::rflags)
+	{
+		std::uint64_t current{};
+
+		if (!hm_.reg_read(native, &current, sizeof(current)))
+			throw std::runtime_error("failed to read rflags back");
+
+		raw = (raw & ~rflags_tf) | (current & rflags_tf);
+	}
 
 	write(&raw, sizeof(raw));
 }
@@ -378,12 +415,87 @@ emu::hook_handle x86_whp_emu::hook_insn(const addr_t start_addr, const addr_t en
 	// Instruction exits carry the virtual rip, so this range is not translated.
 	const bool bounded = start_addr <= end_addr;
 
+	// There is no syscall exit to ask for -- neither whp nor vmx under it has one -- so the
+	// cpu is made to refuse the instruction instead: with EFER.SCE clear, syscall is #UD,
+	// and a #UD is an exit hypermulator already reports. That clearing is confined to ring
+	// 3, where no guest can read an msr to notice: a driver may rdmsr IA32_EFER, and an SCE
+	// that is clear under it would say plainly that it is not on a real cpu.
+	if (insn == hook_insn_t::syscall)
+	{
+		const auto start = bounded ? start_addr : 0;
+		const auto end = bounded ? end_addr : std::numeric_limits<addr_t>::max();
+
+		hook->syscall = true;
+		++syscall_hooks_;
+
+		// Registered ahead of the os layer's exception hook: a syscall's #UD looks exactly
+		// like an illegal instruction, and whichever hook is asked first decides which it was.
+		hook->native.push_back(hm_->hook_exception(
+			[this, &callback, start, end](hm::exception_id)
+			{ return try_dispatch_syscall(callback, start, end); },
+			hm::excp_invalid_opcode, true));
+
+		return add_hook(std::move(hook));
+	}
+
 	hook->native.push_back(hm_->hook_insn(to_hm_insn(insn),
 		[this, &callback] { return callback(*hook_cpu()); },
 		bounded ? start_addr : 0,
 		bounded ? end_addr + 1 : 0));
 
 	return add_hook(std::move(hook));
+}
+
+void x86_whp_emu::sync_syscall_enable(vcpu& cpu)
+{
+	const bool fault_on_syscall = syscall_hooks_ != 0
+		&& is_usermode(cpu.reg<x86::seg_reg>(x86::cs).selector);
+
+	const auto efer = cpu.reg(x86::efer);
+	const auto wanted = fault_on_syscall ? (efer & ~efer_sce) : (efer | efer_sce);
+
+	if (wanted != efer)
+		cpu.reg(x86::efer, wanted);
+}
+
+bool x86_whp_emu::try_dispatch_syscall(insn_hk_cb& cb, const addr_t start, const addr_t end)
+{
+	auto* const cpu = hook_cpu();
+
+	if (!cpu)
+		return false;
+
+	// Only ring 3 runs without SCE, so a #UD under a driver is the guest's own.
+	if (!is_usermode(cpu->reg<x86::seg_reg>(x86::cs).selector))
+		return false;
+
+	const auto pc = cpu->pc();
+
+	if (pc < start || pc > end)
+		return false;
+
+	std::uint8_t insn[sizeof(syscall_insn)]{};
+
+	try
+	{
+		cpu->read_virt_mem(pc, insn, sizeof(insn));
+	}
+	catch (const std::exception&)
+	{
+		// The pc of a #UD is mapped or there would have been a page fault instead, but a
+		// race with another cpu unmapping it would land here rather than take the machine down.
+		return false;
+	}
+
+	if (!std::equal(std::begin(insn), std::end(insn), std::begin(syscall_insn)))
+		return false;
+
+	// A fault leaves the pc on the instruction, which is where the aarch64 hook hands its
+	// callback the pc and what dispatch_syscall measures a handler's move against.
+	if (!cb(*cpu))
+		cpu->set_pc(pc + sizeof(syscall_insn));
+
+	return true;
 }
 
 emu::hook_handle x86_whp_emu::hook_code(const addr_t start_addr, const addr_t end_addr,
@@ -482,7 +594,17 @@ emu::hook_handle x86_whp_emu::hook_exception(exception_hk_cb cb)
 
 void x86_whp_emu::remove_hook(const hook_handle handle)
 {
-	std::erase_if(hooks_, [handle](const auto& hook) { return hook.get() == handle; });
+	const auto it = std::ranges::find_if(hooks_,
+		[handle](const auto& hook) { return hook.get() == handle; });
+
+	if (it == hooks_.end())
+		return;
+
+	// Nothing stands in for the instruction any more, so the next entry gives it back.
+	if (static_cast<whp_hook*>(it->get())->syscall && syscall_hooks_ > 0)
+		--syscall_hooks_;
+
+	hooks_.erase(it);
 }
 
 void x86_whp_emu::map_phys_mem(const addr_t addr, const std::size_t size)

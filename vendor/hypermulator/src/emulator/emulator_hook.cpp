@@ -242,14 +242,20 @@ bool hm::emu::dispatch_excp_hooks(const exception_id id)
 
 		const auto& cb = std::get<emu_hook::excp_hk_cb>(hook->cb);
 
-		handled |= cb(id);
+		// The first hook to claim it ends the search. Anything after it would be answering an
+		// exception that has already been dealt with, and for one standing in for an
+		// instruction that means the guest is told it executed something illegal.
+		if (cb(id))
+		{
+			return true;
+		}
 	}
 
-	return handled;
+	return false;
 }
 
 std::shared_ptr<hm::emu_hook> hm::emu::hook_exception(const emu_hook::excp_hk_cb& cb,
-                                                             const exception_mask mask)
+                                                             const exception_mask mask, const bool first)
 {
 	if (mask == excp_none || !partition_->set_exception_exit_mask(mask, true))
 	{
@@ -259,6 +265,11 @@ std::shared_ptr<hm::emu_hook> hm::emu::hook_exception(const emu_hook::excp_hk_cb
 	const hook_excp_t extra_data = {
 		.mask = mask
 	};
+
+	if (first)
+	{
+		return add_hook_front(cb, hook_type::exception, default_start_addr, default_end_addr, extra_data);
+	}
 
 	return add_hook(cb, hook_type::exception, default_start_addr, default_end_addr, extra_data);
 }
@@ -606,6 +617,8 @@ bool hm::emu::mem_process_block_code_hook(vcpu& cpu, vmexit_context& context,
 			}
 		}
 
+		const auto step_cbs_before = single_step_cbs_.size();
+
 		set_block_code_hook_step(hook);
 
 		if (hook->type == hook_type::basic_block)
@@ -620,6 +633,27 @@ bool hm::emu::mem_process_block_code_hook(vcpu& cpu, vmexit_context& context,
 		if (hook->in_aligned_range(*rip))
 		{
 			invoke_block_code_hook_step_cb(hook, *rip, info.insn_bytes);
+		}
+
+		// The step armed above is what gives the pages back once the guest leaves the range.
+		// A callback that stopped the cpu means no next instruction is coming, so that step
+		// never runs: without this the pages stay runnable and the hook, having made its own
+		// code executable, never fires again.
+		//
+		// Only this hook's own arming is taken back. Whether the cpu keeps stepping is the
+		// same question single_step answers -- whether any callback is still waiting on one --
+		// because an outer run suspended inside this one may be mid-step through a range of
+		// its own, and clearing the flag for it would strand that range executable.
+		if (cpu.stop_pending())
+		{
+			single_step_cbs_.resize(step_cbs_before);
+
+			const bool still_stepping = !single_step_cbs_.empty();
+
+			set_trap_flag(cpu, still_stepping);
+			shadow_guest_interrupts(cpu, still_stepping);
+
+			restore_block_code_hook_pages();
 		}
 
 		return true;

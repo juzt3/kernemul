@@ -7,7 +7,7 @@
 #include <memory>
 #include <vector>
 
-namespace hm { class emu; }
+namespace hm { class emu; struct emu_hook; }
 
 class x86_whp_emu;
 
@@ -26,6 +26,7 @@ public:
 	void reg_write(reg_t reg, const void* value, std::size_t size) override;
 
 private:
+	x86_whp_emu& whp_;
 	hm::emu& hm_;
 };
 
@@ -53,6 +54,13 @@ public:
 
 	[[nodiscard]] vcpu* hook_cpu() const;
 
+	// Whether the cpu is left to execute syscall or made to fault on it, decided by the
+	// ring it is about to run in. A vm entry is the one place that has to agree with the
+	// ring, and the ring only moves between entries: a thread switch restores cs with the
+	// cpu stopped, and nothing inside a run loop leaves ring 3 -- syscall no longer can,
+	// and apply_context only ever writes a usermode cs.
+	void sync_syscall_enable(vcpu& cpu);
+
 protected:
 	std::shared_ptr<vcpu> create_vcpu(std::size_t id) override;
 
@@ -69,8 +77,15 @@ private:
 
 	hook_handle add_hook(std::unique_ptr<whp_hook> hook);
 
+	// True when the #UD is a syscall this backend asked the cpu for, and it has been served.
+	bool try_dispatch_syscall(insn_hk_cb& cb, addr_t start, addr_t end);
+
 	std::unique_ptr<hm::emu> hm_;
 	std::vector<std::unique_ptr<emu_hook>> hooks_;
+
+	// How many syscall hooks are live. Nothing but their presence decides whether the cpu is
+	// allowed to execute syscall, so the count is all this needs to know about them.
+	int syscall_hooks_ = 0;
 };
 
 #endif

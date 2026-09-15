@@ -98,7 +98,10 @@ namespace hm
 		std::shared_ptr<emu_hook> hook_invalid_mem(mem_prot prot, const emu_hook::invalid_mem_hk_cb& cb, addr_t start_addr = default_start_addr, addr_t end_addr = default_end_addr);
 		std::shared_ptr<emu_hook> hook_insn(hook_insn_t insn, const emu_hook::insn_hk_cb& cb, addr_t start_addr = default_start_addr, addr_t end_addr = default_end_addr);
 
-		std::shared_ptr<emu_hook> hook_exception(const emu_hook::excp_hk_cb& cb, exception_mask mask = excp_all);
+		// first = this hook is offered the exception before any already registered. A hook
+		// that stands in for an instruction needs it: it has to recognise its own trap before
+		// a general handler reports it as the fault it otherwise looks like.
+		std::shared_ptr<emu_hook> hook_exception(const emu_hook::excp_hk_cb& cb, exception_mask mask = excp_all, bool first = false);
 
 		bool remove_hook(const std::shared_ptr<emu_hook>& hook);
 
@@ -203,6 +206,16 @@ namespace hm
 			const auto hook = std::make_shared<emu_hook>(std::forward<Args>(arguments)...);
 
 			hooks_.push_back(hook);
+
+			return hook;
+		}
+
+		template <class ...Args>
+		std::shared_ptr<emu_hook> add_hook_front(Args&&... arguments)
+		{
+			const auto hook = std::make_shared<emu_hook>(std::forward<Args>(arguments)...);
+
+			hooks_.insert(hooks_.begin(), hook);
 
 			return hook;
 		}
