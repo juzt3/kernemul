@@ -431,3 +431,6 @@ fs_arm64/
 
 # Symbol server cache (PDBs downloaded from msdl.microsoft.com)
 symbols/
+
+# Local toolchain paths for the cmake presets; never shared.
+CMakeUserPresets.json
