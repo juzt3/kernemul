@@ -144,8 +144,10 @@ public:
 	{
 		const auto teb_va = mem.alloc(teb64_alloc_size, prot_rw);
 		teb_ = emu_object<_TEB64>(mem.space(), teb_va);
-		teb_.write(make_default_teb(teb_va, stack_base, stack_size,
-			proc->id(), id, proc->peb().address()));
+		// The affinity mask has to cover the processors the PEB advertises, so it
+		// is taken from there rather than tracked a second time.
+		teb_.write(make_default_teb(teb_va, stack_base, stack_size, proc->id(), id,
+			proc->peb().address(), proc->peb().field(&_PEB64::NumberOfProcessors).read()));
 	}
 };
 

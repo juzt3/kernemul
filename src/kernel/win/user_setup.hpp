@@ -19,7 +19,11 @@ namespace win_target
 constexpr std::uint64_t kuser_shared_data_user_va   = 0x7FFE0000;
 constexpr std::uint64_t kuser_shared_data_kernel_va  = 0xFFFFF78000000000;
 
-inline _KUSER_SHARED_DATA make_default_kuser_shared_data()
+// The processor count reaches the guest through several unrelated places --
+// here, the PEB, SystemBasicInformation, the NUMA map, the group relationship --
+// and they have to agree: ntdll's segment heap sizes per-processor slots from
+// one and indexes them by the processor number it is running on.
+inline _KUSER_SHARED_DATA make_default_kuser_shared_data(const std::size_t processors)
 {
 	_KUSER_SHARED_DATA sd{};
 
@@ -31,7 +35,7 @@ inline _KUSER_SHARED_DATA make_default_kuser_shared_data()
 	sd.NativeProcessorArchitecture = win_target::processor_architecture;
 	sd.ImageNumberLow = win_target::image_machine;
 	sd.ImageNumberHigh = win_target::image_machine;
-	sd.ActiveProcessorCount = 1;
+	sd.ActiveProcessorCount = static_cast<std::uint32_t>(processors);
 	sd.ActiveGroupCount = 1;
 	sd.NumberOfPhysicalPages = 0x100000;
 	sd.LargePageMinimum = 0x200000;
@@ -46,11 +50,11 @@ inline _KUSER_SHARED_DATA make_default_kuser_shared_data()
 	return sd;
 }
 
-inline _PEB64 make_default_peb()
+inline _PEB64 make_default_peb(const std::size_t processors)
 {
 	_PEB64 peb{};
 
-	peb.NumberOfProcessors = 1;
+	peb.NumberOfProcessors = static_cast<std::uint32_t>(processors);
 
 	peb.HeapSegmentReserve = 0x100000;
 	peb.HeapSegmentCommit = 0x1000;
@@ -71,9 +75,15 @@ inline _PEB64 make_default_peb()
 
 inline _TEB64 make_default_teb(addr_t teb_addr, addr_t stack_base,
 	std::size_t stack_size, std::uint64_t process_id,
-	std::uint32_t thread_id, addr_t peb_address)
+	std::uint32_t thread_id, addr_t peb_address, std::size_t processors)
 {
 	_TEB64 teb{};
+
+	// The processors this thread may run on. RtlGetCurrentProcessorNumber tests
+	// the number it read out of the cpu against this mask and takes a slow path
+	// when the bit is clear -- left zero, no processor ever matches.
+	teb.PrimaryGroupAffinity.Mask = processors >= 64 ? ~0ull : (1ull << processors) - 1;
+	teb.PrimaryGroupAffinity.Group = 0;
 
 	teb.NtTib.StackBase = stack_base + stack_size;
 	teb.NtTib.StackLimit = stack_base;

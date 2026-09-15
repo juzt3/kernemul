@@ -88,7 +88,7 @@ class win_user_proc : public windows_process
 public:
 	win_user_proc(id_type id, std::shared_ptr<struct addr_space> space,
 		win_obj_manager& objs, const win_filesystem& fs,
-		addr_t shared_data_pa, std::string_view image_path)
+		addr_t shared_data_pa, std::string_view image_path, std::size_t processors)
 		:	windows_process(id, std::move(space), objs, fs), mem_(addr_space_)
 	{
 		auto& sp = *addr_space_;
@@ -101,7 +101,7 @@ public:
 
 		const auto peb_addr = mem_.alloc(peb64_alloc_size, prot_rw);
 		peb_ = emu_object<_PEB64>(sp, peb_addr);
-		peb_.write(make_default_peb());
+		peb_.write(make_default_peb(processors));
 
 		const auto ldr_addr = mem_.alloc(sizeof(_PEB_LDR_DATA), prot_rw);
 		ldr_ = ldr_module_list(mem_, ldr_addr);
