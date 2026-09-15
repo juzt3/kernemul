@@ -110,6 +110,21 @@ namespace hm
 		SET_EXCEPTION_EXITING(breakpoint, WHvX64ExceptionTypeBreakpointTrap)
 		SET_EXCEPTION_EXITING(general_protection, WHvX64ExceptionTypeGeneralProtectionFault)
 
+		bool set_exception_exit_mask(const exception_mask mask, const bool state) const
+		{
+			const auto bits = static_cast<std::uint64_t>(mask);
+
+			const std::uint64_t exception_bitmap = query_exception_exit_bitmap();
+			const std::uint64_t updated = state ? (exception_bitmap | bits) : (exception_bitmap & ~bits);
+
+			if (updated == exception_bitmap)
+			{
+				return true;
+			}
+
+			return set_exception_exit_bitmap(updated);
+		}
+
 		SET_EXTENDED_VMEXIT_EXITING(cpuid, X64CpuidExit)
 		SET_EXTENDED_VMEXIT_EXITING(rdtsc, X64RdtscExit)
 		SET_EXTENDED_VMEXIT_EXITING(msr_access, X64MsrExit)

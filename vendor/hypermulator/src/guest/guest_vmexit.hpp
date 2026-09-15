@@ -47,6 +47,31 @@ namespace hm
 		page_fault = 14
 	};
 
+	enum exception_mask : std::uint64_t
+	{
+		excp_none = 0,
+		excp_divide_error = 1ull << static_cast<std::uint8_t>(exception_id::divide_error),
+		excp_debug_trap = 1ull << static_cast<std::uint8_t>(exception_id::debug_trap),
+		excp_breakpoint = 1ull << static_cast<std::uint8_t>(exception_id::breakpoint),
+		excp_invalid_opcode = 1ull << static_cast<std::uint8_t>(exception_id::invalid_opcode),
+		excp_general_protection = 1ull << static_cast<std::uint8_t>(exception_id::general_protection),
+		excp_page_fault = 1ull << static_cast<std::uint8_t>(exception_id::page_fault),
+
+		excp_all = excp_divide_error | excp_debug_trap | excp_breakpoint |
+			excp_invalid_opcode | excp_general_protection | excp_page_fault
+	};
+
+	constexpr exception_mask operator|(exception_mask a, exception_mask b) { return static_cast<exception_mask>(static_cast<std::uint64_t>(a) | static_cast<std::uint64_t>(b)); }
+	constexpr exception_mask operator&(exception_mask a, exception_mask b) { return static_cast<exception_mask>(static_cast<std::uint64_t>(a) & static_cast<std::uint64_t>(b)); }
+	constexpr exception_mask operator~(exception_mask a) { return static_cast<exception_mask>(~static_cast<std::uint64_t>(a) & excp_all); }
+	constexpr exception_mask& operator|=(exception_mask& a, exception_mask b) { return a = a | b; }
+	constexpr exception_mask& operator&=(exception_mask& a, exception_mask b) { return a = a & b; }
+
+	constexpr exception_mask to_exception_mask(const exception_id id)
+	{
+		return static_cast<exception_mask>(1ull << static_cast<std::uint8_t>(id));
+	}
+
 	struct vmexit_cpu_state
 	{
 

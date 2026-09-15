@@ -31,6 +31,16 @@ namespace hm
 
 	};
 
+	struct hook_excp_t
+	{
+		exception_mask mask;
+
+		[[nodiscard]] bool covers(const exception_id id) const
+		{
+			return (mask & to_exception_mask(id)) != excp_none;
+		}
+	};
+
 	enum class hook_type : std::uint8_t
 	{
 		code,
@@ -50,7 +60,7 @@ namespace hm
 		using excp_hk_cb = std::function<bool(exception_id id)>; // returns true = handled, do not deliver to the guest
 
 		using hook_cb = std::variant<insn_hk_cb, code_hk_cb, mem_hk_cb, invalid_mem_hk_cb, excp_hk_cb>;
-		using hook_data = std::variant<hook_insn_t, hook_mem_t, hook_basic_block_t>;
+		using hook_data = std::variant<hook_insn_t, hook_mem_t, hook_basic_block_t, hook_excp_t>;
 
 		hook_cb cb;
 		hook_type type;
@@ -88,7 +98,7 @@ namespace hm
 		std::shared_ptr<emu_hook> hook_invalid_mem(mem_prot prot, const emu_hook::invalid_mem_hk_cb& cb, addr_t start_addr = default_start_addr, addr_t end_addr = default_end_addr);
 		std::shared_ptr<emu_hook> hook_insn(hook_insn_t insn, const emu_hook::insn_hk_cb& cb, addr_t start_addr = default_start_addr, addr_t end_addr = default_end_addr);
 
-		std::shared_ptr<emu_hook> hook_exception(const emu_hook::excp_hk_cb& cb);
+		std::shared_ptr<emu_hook> hook_exception(const emu_hook::excp_hk_cb& cb, exception_mask mask = excp_all);
 
 		bool remove_hook(const std::shared_ptr<emu_hook>& hook);
 

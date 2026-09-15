@@ -233,6 +233,13 @@ bool hm::emu::dispatch_excp_hooks(const exception_id id)
 			continue;
 		}
 
+		const auto& hook_excp = std::get<hook_excp_t>(hook->extra_data);
+
+		if (!hook_excp.covers(id))
+		{
+			continue;
+		}
+
 		const auto& cb = std::get<emu_hook::excp_hk_cb>(hook->cb);
 
 		handled |= cb(id);
@@ -241,19 +248,19 @@ bool hm::emu::dispatch_excp_hooks(const exception_id id)
 	return handled;
 }
 
-std::shared_ptr<hm::emu_hook> hm::emu::hook_exception(const emu_hook::excp_hk_cb& cb)
+std::shared_ptr<hm::emu_hook> hm::emu::hook_exception(const emu_hook::excp_hk_cb& cb,
+                                                             const exception_mask mask)
 {
-	if (!partition_->set_divide_error_exception_exiting(true) ||
-		!partition_->set_debug_exception_exiting(true) ||
-		!partition_->set_breakpoint_exception_exiting(true) ||
-		!partition_->set_invalid_opcode_exception_exiting(true) ||
-		!partition_->set_general_protection_exception_exiting(true) ||
-		!partition_->set_page_fault_exception_exiting(true))
+	if (mask == excp_none || !partition_->set_exception_exit_mask(mask, true))
 	{
 		return { };
 	}
 
-	return add_hook(cb, hook_type::exception, default_start_addr, default_end_addr);
+	const hook_excp_t extra_data = {
+		.mask = mask
+	};
+
+	return add_hook(cb, hook_type::exception, default_start_addr, default_end_addr, extra_data);
 }
 
 void hm::emu::resolve_mem_access_addr(vcpu& cpu, vmexit_context& context)
