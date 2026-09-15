@@ -32,8 +32,30 @@ There are 2 emulator backends: WHP (Windows hypervisor platform) and Unicorn. WH
 
 # Getting started
 
+First clone the repository.
+
 ```
 git clone --recurse-submodules https://github.com/noahware/kernemul.git
+```
+
+Then you need to choose what target you will choose:
+
+x64 targets via WHP/Hyper-V (x64 Windows hosts only):
+
+```
+cmake --preset x64-whp && cmake --build --preset x64-whp
+```
+
+x64 targets via Unicorn (any host):
+
+```
+cmake --preset x64 && cmake --build --preset x64
+```
+
+ARM64 targets via Unicorn (any host):
+
+```
+cmake --preset arm64 && cmake --build --preset arm64
 ```
 
 # License
