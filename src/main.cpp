@@ -18,17 +18,10 @@
 
 	using guest_emu = unicorn_emu;
 
-	// Everything the guest is told about the machine agrees with this number,
-	// so it is not changed here alone. A Windows 11 ntdll takes different paths
-	// once it believes there is more than one processor -- the segment heap
-	// keeps a slot per processor -- and those do not survive here yet on
-	// AArch64: runs fail intermittently inside the heap. A limitation, not a
-	// preference.
-	#if defined(KERNEMUL_ARCH_ARM64)
-		inline constexpr std::size_t vcpu_count = 1;
-	#else
-		inline constexpr std::size_t vcpu_count = 4;
-	#endif
+	// Everything the guest is told about the machine agrees with this number:
+	// the KUSER_SHARED_DATA count, the PEB, the affinity masks and the
+	// topology SystemInformation classes are all filled in from it.
+	inline constexpr std::size_t vcpu_count = 4;
 #endif
 
 #if defined(KERNEMUL_ARCH_ARM64)
