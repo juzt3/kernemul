@@ -62,22 +62,25 @@ FetchContent_Declare(unicorn
 )
 FetchContent_MakeAvailable(unicorn)
 
-# Zydis is only needed by the WHP backend, which decodes the instruction behind
-# a memory exit to work out which address it touched. Declared here rather than
-# in [fetch-content] so the tools and examples can be turned off before it is
-# made available.
-if(KERNEMUL_BACKEND STREQUAL "whp")
-	set(ZYDIS_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
-	set(ZYDIS_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-
-	message(STATUS "Fetching zydis...")
-	FetchContent_Declare(zydis
-		GIT_REPOSITORY "https://github.com/zyantific/zydis"
-		GIT_TAG v4.1.0
-	)
-	FetchContent_MakeAvailable(zydis)
-endif()
 """
+
+[vcpkg]
+# Everything but unicorn and raw_pdb comes from here. unicorn has to stay a
+# FetchContent dependency because it is built from a patched tree, and raw_pdb
+# has no vcpkg port. Pinned to a release tag so every machine resolves the same
+# port versions.
+#
+# This is what makes a clean Windows box work: none of these have a system copy
+# there, and OpenSSL in particular cannot be built without perl and nasm, which
+# the openssl port acquires itself (vcpkg_find_acquire_program) rather than
+# expecting them on PATH.
+#
+# zydis is only linked by the whp backend, but [vcpkg].packages is written into
+# a static vcpkg.json and cannot be made conditional, so it is installed for
+# every configuration. It is small. The find-package below is the part that is
+# conditional.
+version = "2026.07.29"
+packages = ["boost-beast", "openssl", "spdlog", "zydis"]
 
 [conditions]
 windows = "WIN32"
@@ -89,19 +92,34 @@ arch-x64 = "KERNEMUL_ARCH STREQUAL \"x64\""
 arch-arm64 = "KERNEMUL_ARCH STREQUAL \"arm64\""
 whp = "KERNEMUL_BACKEND STREQUAL \"whp\""
 
-[fetch-content.spdlog]
-git = "https://github.com/gabime/spdlog"
-tag = "v1.x"
-
-[fetch-content.raw_pdb]
-git = "https://github.com/MolecularMatters/raw_pdb"
-tag = "main"
-
-[fetch-content.Boost]
-url = "https://github.com/boostorg/boost/releases/download/boost-1.86.0/boost-1.86.0-cmake.tar.xz"
+# Only beast is asked for by name; vcpkg pulls in the ~30 header-only boost
+# modules it needs and nothing else, where the old boost-1.86.0-cmake tarball
+# configured the whole superproject (Log, Locale, Iostreams, Stacktrace...) to
+# get at one header-only library.
+[find-package.Boost]
+config = true
+components = ["beast"]
+required = true
 
 [find-package.OpenSSL]
 required = true
+
+[find-package.spdlog]
+config = true
+required = true
+
+# Installed unconditionally, linked only by the whp backend. The lowercase name
+# matches the zydis-config.cmake the port installs; the target it exports is
+# Zydis::Zydis.
+[find-package.zydis]
+condition = "whp"
+config = true
+required = true
+
+# No vcpkg port exists for raw_pdb, so it stays a source dependency.
+[fetch-content.raw_pdb]
+git = "https://github.com/MolecularMatters/raw_pdb"
+tag = "main"
 
 [target.kernemul]
 type = "executable"
@@ -125,5 +143,5 @@ arch-x64.compile-definitions = ["KERNEMUL_ARCH_X64=1"]
 arch-arm64.compile-definitions = ["KERNEMUL_ARCH_ARM64=1"]
 whp.sources = ["vendor/hypermulator/src/**.cpp", "vendor/hypermulator/src/**.hpp"]
 whp.include-directories = ["vendor/hypermulator/src"]
-whp.link-libraries = ["Zydis", "WinHvPlatform"]
+whp.link-libraries = ["Zydis::Zydis", "WinHvPlatform"]
 whp.compile-definitions = ["KERNEMUL_HAS_WHP=1"]
