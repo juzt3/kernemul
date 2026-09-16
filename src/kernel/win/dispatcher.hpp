@@ -34,13 +34,13 @@ template <typename T>
 [[nodiscard]] std::int32_t signal_state(const emu_object<T>& obj)
 {
 	return static_cast<std::int32_t>(
-		obj.template field(&T::Header).field(&_DISPATCHER_HEADER::SignalState).read());
+		obj.field(&T::Header).field(&_DISPATCHER_HEADER::SignalState).read());
 }
 
 template <typename T>
 void set_signal_state(const emu_object<T>& obj, const std::int32_t state)
 {
-	obj.template field(&T::Header).field(&_DISPATCHER_HEADER::SignalState).write(state);
+	obj.field(&T::Header).field(&_DISPATCHER_HEADER::SignalState).write(state);
 }
 
 // A wait list is circular and anchored in the object, so an empty one points at its own head.
@@ -48,7 +48,7 @@ template <typename T>
 void init_dispatcher(const emu_object<T>& obj, const dispatcher_type type,
 	const std::int32_t state)
 {
-	auto header = obj.template field(&T::Header);
+	auto header = obj.field(&T::Header);
 
 	header.field(&_DISPATCHER_HEADER::Type).write(type);
 	header.field(&_DISPATCHER_HEADER::Signalling).write(0);

@@ -15,6 +15,7 @@
 
 build-vcpkg-test/
 build-x64-whp/
+build-x64-whp-msvc/
 test/
 build/
 build-x64/

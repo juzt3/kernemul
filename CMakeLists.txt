@@ -345,6 +345,12 @@ add_executable(kernemul)
 target_sources(kernemul PRIVATE ${kernemul_SOURCES})
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kernemul_SOURCES})
 
+if(WIN32) # windows
+	target_compile_definitions(kernemul PRIVATE
+		NOMINMAX
+	)
+endif()
+
 if(KERNEMUL_ARCH STREQUAL "x64") # arch-x64
 	target_compile_definitions(kernemul PRIVATE
 		KERNEMUL_ARCH_X64=1

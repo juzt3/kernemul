@@ -1497,7 +1497,7 @@ struct _EXT_IOMMU_DEVICE;
 struct _DIRTY_PAGE_THRESHOLDS;
 struct _LOG_HANDLE_CONTEXT;
 struct _MI_BAD_MEMORY_EVENT_ENTRY;
-union __m64;
+union _pdb_m64;
 struct _ETW_REG_ENTRY;
 struct _MI_STACKTRACE_BUFFER;
 struct _ETW_PROVIDER_TRAITS;
@@ -1618,7 +1618,7 @@ struct _CM_RM;
 struct _EVENT_HEADER_EXTENDED_DATA_ITEM;
 struct _CM_KEY_HASH_TABLE_ENTRY;
 union _HEAP_LFH_SUBSEGMENT_UCHAR_FIELDS;
-union __m128;
+union _pdb_m128;
 struct _HEAP_DESCRIPTOR_KEY;
 struct _HEAP_PAGE_RANGE_DESCRIPTOR;
 struct _HBASE_BLOCK;
@@ -26332,7 +26332,7 @@ typedef struct _MI_BAD_MEMORY_EVENT_ENTRY
   /* 0x0018 */ struct _WORK_QUEUE_ITEM WorkItem;
 } MI_BAD_MEMORY_EVENT_ENTRY, *PMI_BAD_MEMORY_EVENT_ENTRY; /* size: 0x0038 */
 
-typedef union __m64
+typedef union _pdb_m64
 {
   union
   {
@@ -28078,7 +28078,7 @@ typedef union _HEAP_LFH_SUBSEGMENT_UCHAR_FIELDS
   }; /* size: 0x0001 */
 } HEAP_LFH_SUBSEGMENT_UCHAR_FIELDS, *PHEAP_LFH_SUBSEGMENT_UCHAR_FIELDS; /* size: 0x0001 */
 
-typedef union __m128
+typedef union _pdb_m128
 {
   union
   {
