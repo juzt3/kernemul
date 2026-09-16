@@ -2,6 +2,8 @@
 #include "../unicorn_base.hpp"
 #include "arch.hpp"
 
+#include <cstring>
+
 class arm64_unicorn_vcpu final : public unicorn_vcpu_base
 {
 public:

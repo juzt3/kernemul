@@ -2,6 +2,7 @@
 #include "../../util/file.hpp"
 #include "../../util/log.hpp"
 
+#include <cstring>
 #include <filesystem>
 #include <map>
 

@@ -3,6 +3,7 @@
 #include "../../util/log.hpp"
 
 #include <algorithm>
+#include <cstring>
 #include <set>
 
 void win_registry_key::set_value(const std::string_view name, const registry_type type,

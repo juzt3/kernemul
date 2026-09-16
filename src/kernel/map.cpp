@@ -4,6 +4,7 @@
 #include "../util/log.hpp"
 #include "../util/file.hpp"
 #include <charconv>
+#include <cstring>
 
 namespace {
 

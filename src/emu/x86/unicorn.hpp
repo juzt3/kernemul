@@ -2,6 +2,8 @@
 #include "../unicorn_base.hpp"
 #include "arch.hpp"
 
+#include <cstring>
+
 namespace ia32 {
 #include <ia32.hpp>
 }
