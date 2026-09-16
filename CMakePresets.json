@@ -4,7 +4,6 @@
 		{
 			"name": "base",
 			"hidden": true,
-			"generator": "Ninja",
 			"cacheVariables": {
 				"CMAKE_BUILD_TYPE": "Release"
 			}
@@ -50,19 +49,25 @@
 	],
 	"buildPresets": [
 		{
+			"name": "base",
+			"hidden": true,
+			"targets": [ "kernemul" ],
+			"configuration": "Release"
+		},
+		{
 			"name": "x64",
-			"configurePreset": "x64",
-			"targets": [ "kernemul" ]
+			"inherits": "base",
+			"configurePreset": "x64"
 		},
 		{
 			"name": "x64-whp",
-			"configurePreset": "x64-whp",
-			"targets": [ "kernemul" ]
+			"inherits": "base",
+			"configurePreset": "x64-whp"
 		},
 		{
 			"name": "arm64",
-			"configurePreset": "arm64",
-			"targets": [ "kernemul" ]
+			"inherits": "base",
+			"configurePreset": "arm64"
 		}
 	]
 }

@@ -363,6 +363,12 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU") # gnu
 	)
 endif()
 
+if(MSVC) # msvc
+	target_compile_options(kernemul PRIVATE
+		"/Zc:preprocessor"
+	)
+endif()
+
 target_include_directories(kernemul PRIVATE
 	src
 	"vendor/pe/src"
