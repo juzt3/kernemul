@@ -68,6 +68,14 @@ public:
 		cpu.reg(arm64::x18, kpcr_va);
 	}
 
+	// The exception level is what EL1-only instructions and page permissions are checked against,
+	// so a dispatch into driver code moves it the way the x86 side moves its selectors.
+	void set_kernel_mode(vcpu& cpu, const bool kernel) override
+	{
+		const auto pstate = cpu.reg<std::uint64_t>(arm64::pstate) & ~pstate_mode_mask;
+		cpu.reg(arm64::pstate, pstate | (kernel ? pstate_el1h : pstate_el0t));
+	}
+
 	void init_thread_teb(thread& t, vcpu& cpu, addr_t teb_addr) override
 	{
 		t.set_reg(cpu, arm64::tpidr_el0, teb_addr);
