@@ -43,6 +43,19 @@ std::shared_ptr<proc_module> process::find_module(const std::string_view name) c
 	return it != modules_.end() ? it->second : nullptr;
 }
 
+std::shared_ptr<proc_module> process::find_module_by_stem(const std::string_view stem) const
+{
+	const auto key = ascii_lower(stem);
+
+	std::shared_lock lock(modules_mtx_);
+
+	for (const auto& [name, mod] : modules_)
+		if (name.size() > key.size() && name[key.size()] == '.' && name.starts_with(key))
+			return mod;
+
+	return nullptr;
+}
+
 std::shared_ptr<proc_module> process::find_module_by_addr(const addr_t addr) const
 {
 	std::shared_lock lock(modules_mtx_);

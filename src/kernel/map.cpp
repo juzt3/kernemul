@@ -42,8 +42,14 @@ std::optional<addr_t> resolve_export(process& proc, const proc_module& mod,
 
 	const auto target_sym = forward.substr(dot + 1);
 
-	const auto target = find_or_load(proc, std::string(forward.substr(0, dot)) + ".dll",
-		mod.name, supervisor);
+	// A forwarder names its target without an extension, and the modules behind a kernel one
+	// are a mix of .exe, .sys and .dll -- so an already-loaded module is what names it.
+	const auto target_mod = forward.substr(0, dot);
+
+	auto target = proc.find_module_by_stem(target_mod);
+
+	if (!target)
+		target = find_or_load(proc, std::string(target_mod) + ".dll", mod.name, supervisor);
 
 	if (!target)
 	{

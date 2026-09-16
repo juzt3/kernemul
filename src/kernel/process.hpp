@@ -126,6 +126,9 @@ public:
 	[[nodiscard]] std::shared_ptr<proc_module> find_module(std::string_view name) const;
 	[[nodiscard]] std::shared_ptr<proc_module> find_module_by_addr(addr_t addr) const;
 
+	// A pe forwarder writes "ntoskrnl.KeFoo", never the extension, so it matches on the stem.
+	[[nodiscard]] std::shared_ptr<proc_module> find_module_by_stem(std::string_view stem) const;
+
 	virtual std::shared_ptr<proc_module> load_module(std::string_view, bool) { return nullptr; }
 
 	// api-ms-* and ext-ms-* name contracts, not files; the schema says which file keeps each.
