@@ -156,6 +156,61 @@ struct open_result
 	std::uint64_t information = 0;
 };
 
+// Opening a device is a request of its own rather than a lookup: the driver is sent IRP_MJ_CREATE
+// and may refuse, and the file object built for it is the per-open context every later request on
+// the handle carries.
+open_result open_device(vcpu& cpu, win_kernel_state& state, const addr_t device,
+	const std::string& path, emu_object<std::uint64_t> file_handle)
+{
+	auto* const emulator = state.emulator();
+	const auto file_object = emulator
+		? state.pool.allocate(sizeof(_FILE_OBJECT), pool_tag("File"), true)
+		: 0;
+
+	if (!file_object)
+		return { STATUS_INSUFFICIENT_RESOURCES, 0 };
+
+	_FILE_OBJECT body{};
+	body.Type = io_type_file;
+	body.Size = static_cast<short>(sizeof(_FILE_OBJECT));
+	body.DeviceObject = reinterpret_cast<_DEVICE_OBJECT*>(static_cast<std::uintptr_t>(device));
+
+	emu_object<_FILE_OBJECT>(*cpu.curr_addr_space(), file_object).write(body);
+
+	const auto result = emulator->dispatch_irp(cpu, {
+		.major = irp_mj_create,
+		.device_object = device,
+		.file_object = file_object,
+	});
+
+	auto host = std::make_shared<file_host>();
+	host->path = path;
+	host->device_object = device;
+	host->file_object = file_object;
+
+	const std::uint8_t placeholder[sizeof(addr_t)] = {};
+	const auto addr = result.status >= 0
+		? state.objs.create_object(0, placeholder, sizeof(placeholder), std::move(host),
+			prot_rw | prot_supervisor)
+		: 0;
+
+	if (!addr)
+	{
+		state.pool.free(file_object);
+		THREAD_LOG_WARN("open_device('{}') refused, status=0x{:X}", path,
+			static_cast<std::uint32_t>(result.status));
+		return { result.status < 0 ? result.status : STATUS_INSUFFICIENT_RESOURCES, 0 };
+	}
+
+	if (file_handle)
+		file_handle.write(state.sys_proc->handle_table().create_handle(addr, 0));
+
+	THREAD_LOG_INFO("open_device('{}') -> device=0x{:X}, file object at 0x{:X}",
+		path, device, file_object);
+
+	return { STATUS_SUCCESS, file_opened };
+}
+
 open_result write_file_information(addr_space& space, const file_host& host,
 	const std::uint32_t info_class, const addr_t buffer, const std::uint32_t length)
 {
@@ -422,7 +477,11 @@ void modules::register_ntoskrnl_io_ops(win_kernel_state& state, proc_module& mod
 			if (file_handle)
 				file_handle.write(0);
 
-			const auto result = open_file(*st, path, disposition, create_options, file_handle);
+			const auto device = st->find_device(path);
+
+			const auto result = device
+				? open_device(cpu, *st, device, path, file_handle)
+				: open_file(*st, path, disposition, create_options, file_handle);
 
 			write_status_block(io_status_block, result);
 
@@ -518,7 +577,12 @@ void modules::register_ntoskrnl_io_ops(win_kernel_state& state, proc_module& mod
 		if (file_handle)
 			file_handle.write(0);
 
-		const auto result = open_file(*st, path, create_disposition, create_options, file_handle);
+		// A device name is not in the filesystem, so it is resolved before it can be missed.
+		const auto device = st->find_device(path);
+
+		const auto result = device
+			? open_device(cpu, *st, device, path, file_handle)
+			: open_file(*st, path, create_disposition, create_options, file_handle);
 
 		write_status_block(io_status_block, result);
 
@@ -541,7 +605,11 @@ void modules::register_ntoskrnl_io_ops(win_kernel_state& state, proc_module& mod
 			if (file_handle)
 				file_handle.write(0);
 
-			const auto result = open_file(*st, path, file_open, open_options, file_handle);
+			const auto device = st->find_device(path);
+
+			const auto result = device
+				? open_device(cpu, *st, device, path, file_handle)
+				: open_file(*st, path, file_open, open_options, file_handle);
 
 			write_status_block(io_status_block, result);
 
@@ -881,7 +949,9 @@ void modules::register_ntoskrnl_io_ops(win_kernel_state& state, proc_module& mod
 			return query_attributes_file(cpu, object_attributes, file_information, true);
 		});
 
-	// Nothing builds an irp, so the call is reported as having worked with nothing returned.
+	// A control on a device handle becomes an irp the driver's dispatch routine is called with.
+	// The call is synchronous, so an event or an apc has nothing left to signal by the time it
+	// returns -- a driver that completes a request later is reported as pending instead.
 	auto control_file = [st](vcpu& cpu, const std::uint64_t file_handle, const addr_t event,
 		const addr_t apc_routine, const addr_t apc_context,
 		emu_object<_IO_STATUS_BLOCK> io_status_block, const std::uint32_t control_code,
@@ -898,15 +968,46 @@ void modules::register_ntoskrnl_io_ops(win_kernel_state& state, proc_module& mod
 			return STATUS_INVALID_HANDLE;
 		}
 
-		THREAD_LOG_WARN("{}('{}', code=0x{:X}, in=0x{:X}/{}, out=0x{:X}/{}, event=0x{:X}, "
-			"apc=0x{:X}/0x{:X}): nothing here builds an irp, so nothing wrote the output "
-			"buffer",
+		if (!host->is_device())
+		{
+			THREAD_LOG_WARN("{}('{}', code=0x{:X}): not a device, so no driver handles it",
+				who, host->path, control_code);
+			write_status_block(io_status_block, {STATUS_INVALID_DEVICE_REQUEST, 0});
+			return STATUS_INVALID_DEVICE_REQUEST;
+		}
+
+		auto* const emulator = st->emulator();
+
+		if (!emulator)
+		{
+			write_status_block(io_status_block, {STATUS_INVALID_DEVICE_REQUEST, 0});
+			return STATUS_INVALID_DEVICE_REQUEST;
+		}
+
+		const auto result = emulator->dispatch_irp(cpu, {
+			.major = irp_mj_device_control,
+			.device_object = host->device_object,
+			.file_object = host->file_object,
+			.control_code = control_code,
+			.input_buffer = input_buffer,
+			.input_length = input_length,
+			.output_buffer = output_buffer,
+			.output_length = output_length,
+		});
+
+		write_status_block(io_status_block, {result.status, result.information});
+
+		if (event || apc_routine)
+			THREAD_LOG_WARN("{}('{}'): handled synchronously, so the event at 0x{:X} and the apc "
+				"at 0x{:X}/0x{:X} are not signalled", who, host->path, event, apc_routine,
+				apc_context);
+
+		THREAD_LOG_INFO("{}('{}', code=0x{:X}, in=0x{:X}/{}, out=0x{:X}/{}) -> 0x{:X}, {} byte(s)",
 			who, host->path, control_code, input_buffer, input_length,
-			output_buffer, output_length, event, apc_routine, apc_context);
+			output_buffer, output_length, static_cast<std::uint32_t>(result.status),
+			result.information);
 
-		write_status_block(io_status_block, {STATUS_SUCCESS, 0});
-
-		return STATUS_SUCCESS;
+		return result.status;
 	};
 
 	state.redirect_ntzw(mod, "DeviceIoControlFile",
