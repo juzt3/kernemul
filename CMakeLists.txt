@@ -66,16 +66,25 @@ message(STATUS "kernemul backend: ${KERNEMUL_BACKEND}")
 # Unicorn is declared here rather than in [fetch-content] because it needs a
 # PATCH_COMMAND, which cmkr has no key for.
 #
-# Both patches are one hole: Unicorn calls the UC_HOOK_INTR callback in place of
+# The first two are one hole: Unicorn calls the UC_HOOK_INTR callback in place of
 # the target's do_interrupt, so whatever that function would have done to the
 # cpu state never happens. AArch64 never latches the faulting address and
 # syndrome into FAR_ELn / ESR_ELn, which is the only way arm64::arch::fault_addr
 # can learn which address faulted -- no Unicorn API exposes it. x86 leaves the
 # delivered exception pending, and the next fault combines with it into a double
-# fault. Pinned to a commit rather than master so the patches keep applying.
+# fault.
+#
+# The third is a hole of its own: Unicorn's 64-bit register path writes a segment
+# selector without going through cpu_x86_load_seg_cache, so writing a ring 0
+# selector never moved CPL, which is what the softmmu indexes its tlb by. Without
+# it nothing can enter kernel mode on a live cpu, and a driver dispatched to from
+# a syscall faults on the first instruction of its own handler.
+#
+# Pinned to a commit rather than master so the patches keep applying.
 set(unicorn_patches
 	"${CMAKE_CURRENT_SOURCE_DIR}/patches/unicorn-arm64-fault-regs.patch"
 	"${CMAKE_CURRENT_SOURCE_DIR}/patches/unicorn-x86-clear-old-exception.patch"
+	"${CMAKE_CURRENT_SOURCE_DIR}/patches/unicorn-x86-ss-cpl.patch"
 )
 
 include(FetchContent)
@@ -191,6 +200,7 @@ set(kernemul_SOURCES
 	"src/kernel/win/exception.hpp"
 	"src/kernel/win/filesystem.cpp"
 	"src/kernel/win/filesystem.hpp"
+	"src/kernel/win/irp.hpp"
 	"src/kernel/win/ldr.hpp"
 	"src/kernel/win/linked_list.hpp"
 	"src/kernel/win/mdl.hpp"
