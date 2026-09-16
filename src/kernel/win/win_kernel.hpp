@@ -70,6 +70,9 @@ struct win_kernel_state : kernel_state
 
 	late_global_addrs late_globals;
 
+	// ntoskrnl's own non paged pool lock, which is what KPCR.LockArray points one entry at.
+	addr_t non_paged_pool_lock = 0;
+
 	// The guest's lists live in guest memory; a push rewrites the head and the old tail.
 	std::mutex list_mtx_;
 
@@ -441,7 +444,8 @@ struct win_kernel_state : kernel_state
 	{
 		auto& space = kernel_space();
 
-		auto& pcpu = per_cpu_.emplace_back(space, static_cast<std::uint32_t>(cpu.id()));
+		auto& pcpu = per_cpu_.emplace_back(space, static_cast<std::uint32_t>(cpu.id()),
+			non_paged_pool_lock);
 
 		kuser_shared_data.field(&_KUSER_SHARED_DATA::ActiveProcessorCount)
 			.write(static_cast<std::uint32_t>(per_cpu_.size()));

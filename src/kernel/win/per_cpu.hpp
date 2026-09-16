@@ -4,6 +4,7 @@
 #include "../../util/log.hpp"
 #include "types.hpp"
 #include <format>
+#include <vector>
 
 
 // The version pair says how to read the rest, not which Windows this is.
@@ -40,11 +41,14 @@ inline constexpr std::size_t kpcr_irql_off =
 	offsetof(_KPCR, Irql);
 #endif
 
-// A queued spin lock is {Next, Lock}, and the guest indexes the array by a
-// _KSPIN_LOCK_QUEUE_NUMBER -- an enum that is in no header here and whose values move between
-// builds. So rather than guess which index means which lock, every entry is given its own
-// backing word: whichever one the guest picks, it finds a valid pointer to distinct storage.
-inline constexpr std::size_t lock_queue_count = 33;
+// One page of queued spin locks, which is what the guest finds through KPCR.LockArray. Only the
+// non paged pool entry names a real lock; the rest stay zero, exactly as they were before.
+inline constexpr std::size_t lock_array_size = 0x1000;
+inline constexpr std::size_t lock_queue_count = lock_array_size / sizeof(_KSPIN_LOCK_QUEUE);
+
+// LockQueueNonPagedPoolLock. The enum it comes from is in no header here, so the index is the
+// one that was measured rather than one derived: entry 6, whose Lock sits at 0x68.
+inline constexpr std::size_t non_paged_pool_lock_off = 0x68;
 
 inline _KPCR make_default_kpcr(const addr_t kpcr_va, const std::uint32_t number)
 {
@@ -88,16 +92,15 @@ class win_per_cpu
 public:
 	win_per_cpu() = default;
 
-	win_per_cpu(addr_space& space, const std::uint32_t number)
+	win_per_cpu(addr_space& space, const std::uint32_t number,
+		const addr_t non_paged_pool_lock = 0)
 		:	number_(number)
 	{
 		const auto va = space.alloc(sizeof(_KPCR), prot_rw | prot_supervisor);
 		kpcr_ = emu_object<_KPCR>(space, va, std::format("KPCR[{}]", number), true);
 		kpcr_.write(make_default_kpcr(va, number));
 
-		// DIAGNOSTIC: temporarily disabled
-		// init_lock_array(space);
-		(void)space;
+		init_lock_array(space, non_paged_pool_lock);
 	}
 
 	void set_current_thread(const addr_t kthread) const
@@ -123,48 +126,40 @@ public:
 
 private:
 	// One array per cpu, because a queued lock is acquired through the acquiring cpu's own PCR.
-	void init_lock_array(addr_space& space)
+	void init_lock_array(addr_space& space, const addr_t non_paged_pool_lock)
 	{
-		constexpr auto queues_size = lock_queue_count * sizeof(_KSPIN_LOCK_QUEUE);
-		constexpr auto locks_size = lock_queue_count * sizeof(std::uint64_t);
-
-		const auto queues = space.alloc(queues_size + locks_size, prot_rw | prot_supervisor);
+		const auto queues = space.alloc(lock_array_size, prot_rw | prot_supervisor);
 
 		if (!queues)
 		{
-			LOG_ERR("no room for cpu {}'s lock array; KPCR.LockArray stays null",
-				kpcr_.field(&_KPCR::Prcb).field(&_KPRCB::Number).read());
+			LOG_ERR("no room for cpu {}'s lock array, so KPCR.LockArray stays null", number_);
 			return;
 		}
 
-		// The backing words live past the queues in the same allocation: one page either way,
-		// and nothing else has to know where they are.
-		const auto locks = queues + queues_size;
+		// Zeroed first: a queue entry the guest never asked about should read as empty, not as
+		// whatever the allocator last left there.
+		const std::vector<std::uint8_t> blank(lock_array_size, 0);
+		space.write_mem(queues, blank.data(), blank.size());
 
-		for (std::size_t i = 0; i < lock_queue_count; ++i)
-		{
-			_KSPIN_LOCK_QUEUE entry{};
-			entry.Lock = reinterpret_cast<unsigned __int64*>(
-				static_cast<std::uintptr_t>(locks + i * sizeof(std::uint64_t)));
-
-			space.write_mem(queues + i * sizeof(_KSPIN_LOCK_QUEUE), entry);
-			space.write_mem<std::uint64_t>(locks + i * sizeof(std::uint64_t), 0);
-		}
+		// The lock this one entry names lives in ntoskrnl's own data, which is where a driver
+		// that asks what module it belongs to expects to be told.
+		if (non_paged_pool_lock)
+			space.write_mem<addr_t>(queues + non_paged_pool_lock_off, non_paged_pool_lock);
+		else
+			LOG_WARN("no NonPagedPoolLock, so cpu {}'s lock array names no lock", number_);
 
 		kpcr_.field(&_KPCR::LockArray).write(
 			reinterpret_cast<_KSPIN_LOCK_QUEUE*>(static_cast<std::uintptr_t>(queues)));
 
-		// Kept past the constructor so the hooks outlive it: a queued lock the guest reaches
-		// through the PCR is one of the few places it touches state nothing here ever runs.
+		// Kept past the constructor so the hook outlives it.
 		lock_queues_ = emu_object_arr<_KSPIN_LOCK_QUEUE>(space, queues, lock_queue_count,
-			std::format("KPCR.LockArray[{}]", number_), true);
+			std::format("KPCR[{}].LockArray", number_), true);
 
-		lock_words_ = emu_object_arr<std::uint64_t>(space, locks, lock_queue_count,
-			std::format("KPCR.LockArray.Lock[{}]", number_), true);
+		LOG_INFO("cpu {} lock array at 0x{:X}, NonPagedPoolLock 0x{:X} at +0x{:X}",
+			number_, queues, non_paged_pool_lock, non_paged_pool_lock_off);
 	}
 
 	std::uint32_t number_ = 0;
 	emu_object<_KPCR> kpcr_;
 	emu_object_arr<_KSPIN_LOCK_QUEUE> lock_queues_;
-	emu_object_arr<std::uint64_t> lock_words_;
 };

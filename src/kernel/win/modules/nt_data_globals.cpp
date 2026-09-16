@@ -172,6 +172,10 @@ void modules::init_ntoskrnl_globals(win_kernel_state& state, proc_module& mod)
 	// These three cannot be written yet: KiProcessorBlock is indexed by cpu number and holds
 	// KPRCB pointers, and the other two want the final count -- none of which exists until
 	// create_vcpus runs. Their addresses are cached now because the module is not kept.
+	// Not written, only located: KPCR.LockArray points an entry at it, and that is built per
+	// cpu, after this runs.
+	state.non_paged_pool_lock = mod.find_symbol("NonPagedPoolLock").value_or(0);
+
 	state.late_globals.ki_processor_block = mod.find_symbol("KiProcessorBlock").value_or(0);
 	state.late_globals.ke_number_processors = mod.find_symbol("KeNumberProcessors").value_or(0);
 	state.late_globals.ke_active_processors = mod.find_symbol("KeActiveProcessors").value_or(0);

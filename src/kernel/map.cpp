@@ -117,9 +117,11 @@ std::shared_ptr<proc_module> krnl::map_img(process& proc, const std::string_view
 
 		space->prot_mem(addr + sec.virtual_address, sec.virtual_size, sec_flags);
 
-		// Code is where the guest is meant to be; everything else it touches says something
-		// about what it is looking for.
-		if (sec.characteristics.mem_execute || !sec.virtual_size)
+		// Redirect modules only, which skip_imports marks: nothing in one is ever executed, so
+		// every access to their data came from outside and says what the guest was looking for.
+		// The driver under test is left out -- its own data is where it unpacks itself, and a
+		// byte-at-a-time pass over that buries everything else.
+		if (!skip_imports || sec.characteristics.mem_execute || !sec.virtual_size)
 			continue;
 
 		const auto sec_begin = sec.virtual_address;

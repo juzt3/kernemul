@@ -631,7 +631,13 @@ void modules::register_ntoskrnl_misc_ops(win_kernel_state& state, proc_module& m
 			if (!proc)
 				proc = st->sys_proc;
 
-			const auto m = proc->find_module_by_addr(pc_value);
+			auto m = proc->find_module_by_addr(pc_value);
+
+			// A kernel address belongs to a module of the system process even when the caller
+			// is a user thread, whose own list holds only its user modules.
+			if (!m && proc != st->sys_proc)
+				m = st->sys_proc->find_module_by_addr(pc_value);
+
 			const addr_t base = m ? m->addr : 0;
 
 			// Written on every path and not tested for null, because the real one does neither.
