@@ -1,9 +1,16 @@
 #include "target.hpp"
+#include "kernel/map.hpp"
 #include "kernel/win/win_kernel.hpp"
 #include "emu/calling_conv.hpp"
 #include "util/log.hpp"
+#include "util/string.hpp"
 
-// whp's hook and step state is per partition, so a second cpu would unprotect the first's pages.
+#include <filesystem>
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
+
 #if defined(KERNEMUL_HAS_WHP)
 	#include "emu/x86/whp.hpp"
 
@@ -14,7 +21,6 @@
 
 	using guest_emu = unicorn_emu;
 
-	// KUSER_SHARED_DATA, the PEB, affinity masks and topology classes are all filled in from this.
 	inline constexpr std::size_t vcpu_count = 4;
 #endif
 
@@ -42,68 +48,100 @@
 	}
 #endif
 
-static int run_driver(guest::win_emulator& win,
-	const std::shared_ptr<guest::calling_conv>& conv, const std::string& name)
+namespace
+{
+
+struct guest_image
+{
+	std::string name;
+	bool driver = false;
+
+	std::shared_ptr<thread> entry;
+};
+
+void print_usage()
+{
+	LOG_INFO("usage: kernemul [image...]");
+	LOG_INFO("examples:");
+	LOG_INFO("  kernemul test_driver.sys");
+	LOG_INFO("  kernemul test_printf.exe test_seh.exe");
+	LOG_INFO("  kernemul test_driver.sys test_user.exe");
+}
+
+std::shared_ptr<thread> setup_driver(guest::win_emulator& win,
+	const std::shared_ptr<guest::calling_conv>& conv, vcpu& cpu, const std::string& name)
 {
 	auto& kernel = win.kernel();
 	auto& proc = *kernel.sys_proc;
 
-	auto driver = krnl::map_img(proc, std::string(target::guest_fs_dir) + name, true);
+	const auto driver = krnl::map_img(proc, std::string(target::guest_fs_dir) + name, true);
 
 	if (!driver)
 	{
 		LOG_ERR("failed to map {}", name);
-		return 1;
+		return {};
 	}
 
-	auto args = kernel.create_driver(*driver, u"test_driver");
+	const auto service = widen_string(std::filesystem::path(name).stem().string());
 
-	win.create_vcpus(vcpu_count);
+	const auto args = kernel.create_driver(*driver, service);
 
-	auto cpu = win.cpus().front();
+	const auto entry = win.create_kernel_thread(cpu, driver->entry_point);
 
-	set_log_cpu(cpu.get());
+	if (!entry)
+	{
+		LOG_ERR("failed to create a thread for {}", name);
+		return {};
+	}
 
-	const auto entry = win.create_kernel_thread(*cpu, driver->entry_point);
+	conv->set_arg(cpu, *entry, 0, args.driver_object.address());
+	conv->set_arg(cpu, *entry, 1, args.registry_path.address());
 
-	conv->set_arg(*cpu, *entry, 0, args.driver_object.address());
-	conv->set_arg(*cpu, *entry, 1, args.registry_path.address());
-
-	win.run_all();
-
-	LOG_INFO("driver returned, status=0x{:X}", conv->read_ret(*cpu, *entry));
-
-	return 0;
+	return entry;
 }
 
-// Cpus come first here: building the process queues a thread, which needs a cpu to build against.
-static int run_user(guest::win_emulator& win, const std::string_view exe_name)
+bool setup_user_process(guest::win_emulator& win, vcpu& cpu, const std::string& name)
 {
-	win.create_vcpus(vcpu_count);
-
-	auto cpu = win.cpus().front();
-	set_log_cpu(cpu.get());
-
-	const auto app = win.create_user_process(*cpu, exe_name);
+	const auto app = win.create_user_process(cpu, name);
 
 	if (!app.thread)
 	{
-		LOG_ERR("failed to create a process for {}", exe_name);
-		return 1;
+		LOG_ERR("failed to create a process for {}", name);
+		return false;
 	}
 
-	win.run_all();
+	return true;
+}
 
-	LOG_INFO("{} finished", exe_name);
-
-	return 0;
 }
 
 int main(const int argc, const char* const* const argv)
 {
 	LOG_INFO("kernemul targeting {}", target::name);
 
-	const std::string image = argc > 1 ? argv[1] : "test_printf.exe";
+	std::vector<std::string> names(argv + 1, argv + argc);
+
+	if (names.empty())
+	{
+		print_usage();
+		return 1;
+	}
+
+	std::vector<guest_image> images;
+	images.reserve(names.size());
+
+	for (auto& name : names)
+	{
+		if (!std::filesystem::exists(std::string(target::guest_fs_dir) + name))
+		{
+			LOG_ERR("{} is not in {}", name, target::guest_fs_dir);
+			return 1;
+		}
+
+		const bool driver = name.ends_with(".sys");
+
+		images.push_back({ std::move(name), driver, {} });
+	}
 
 	auto mem = std::make_shared<guest::mmu>();
 	auto conv = std::make_shared<guest::calling_conv>();
@@ -111,7 +149,36 @@ int main(const int argc, const char* const* const argv)
 
 	guest::win_emulator win(e);
 
-	return image.ends_with(".sys")
-		? run_driver(win, conv, image)
-		: run_user(win, image);
+	win.create_vcpus(vcpu_count);
+
+	const auto cpu = win.cpus().front();
+
+	set_log_cpu(cpu.get());
+
+	for (auto& image : images)
+	{
+		if (image.driver)
+		{
+			image.entry = setup_driver(win, conv, *cpu, image.name);
+
+			if (!image.entry)
+				return 1;
+		}
+		else if (!setup_user_process(win, *cpu, image.name))
+		{
+			return 1;
+		}
+	}
+
+	win.run_all();
+
+	for (const auto& image : images)
+	{
+		if (image.entry)
+			LOG_INFO("{} returned, status=0x{:X}", image.name, conv->read_ret(*cpu, *image.entry));
+		else
+			LOG_INFO("{} finished", image.name);
+	}
+
+	return 0;
 }
