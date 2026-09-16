@@ -84,6 +84,7 @@ windows = "WIN32"
 # Both of these are gcc's own spelling: clang rejects -Wno-changes-meaning as an
 # unknown warning option, and msvc takes neither.
 gnu = "CMAKE_CXX_COMPILER_ID STREQUAL \"GNU\""
+msvc = "MSVC"
 arch-x64 = "KERNEMUL_ARCH STREQUAL \"x64\""
 arch-arm64 = "KERNEMUL_ARCH STREQUAL \"arm64\""
 whp = "KERNEMUL_BACKEND STREQUAL \"whp\""
@@ -118,6 +119,8 @@ windows.link-libraries = ["ws2_32"]
 # the pragma unaided and mingw already defaults to this, so gcc is the only one
 # that has to be told.
 gnu.compile-options = ["-Wno-changes-meaning", "-mms-bitfields"]
+# The logging macros use __VA_OPT__, which only msvc's conformant preprocessor has.
+msvc.compile-options = ["/Zc:preprocessor"]
 arch-x64.compile-definitions = ["KERNEMUL_ARCH_X64=1"]
 arch-arm64.compile-definitions = ["KERNEMUL_ARCH_ARM64=1"]
 whp.sources = ["vendor/hypermulator/src/**.cpp", "vendor/hypermulator/src/**.hpp"]
