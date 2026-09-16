@@ -43,6 +43,9 @@ public:
 
 	[[nodiscard]] addr_t lookup_named_object(std::string_view name) const;
 
+	// The name goes, the object stays: whoever still holds a handle to it keeps working.
+	void unregister_named_object(std::string_view name);
+
 	template <typename T>
 	[[nodiscard]] std::shared_ptr<T> get_object(addr_t body_addr) const
 	{

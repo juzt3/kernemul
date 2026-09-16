@@ -1,0 +1,26 @@
+diff --git a/qemu/target/i386/unicorn.c b/qemu/target/i386/unicorn.c
+index 1e79b948..a09c6e3b 100644
+--- a/qemu/target/i386/unicorn.c
++++ b/qemu/target/i386/unicorn.c
+@@ -1704,6 +1704,21 @@ uc_err reg_write(void *_env, int mode, unsigned int regid, const void *value,
+         case UC_X86_REG_SS:
+             CHECK_REG_TYPE(uint16_t);
+             env->segs[R_SS].selector = *(uint16_t *)value;
++            // Unicorn: in 64-bit mode this wrote the selector and nothing else,
++            // so the privilege level never moved. CPL lives in hflags, the
++            // softmmu picks its tlb index from it (cpu_mmu_index reads
++            // HF_CPL_MASK), and the only thing that maintains it is
++            // cpu_x86_load_seg_cache -- which this path does not go through. A
++            // write of a ring 0 selector therefore left the cpu in whatever ring
++            // it was already in, and a supervisor page fetched after it still
++            // faulted. This mirrors what that function does for R_SS: the
++            // descriptor's dpl follows the selector's rpl, and CPL follows the
++            // dpl. The 32-bit path needs none of it because it calls
++            // cpu_x86_load_seg, which reaches cpu_x86_load_seg_cache itself.
++            env->segs[R_SS].flags = (env->segs[R_SS].flags & ~DESC_DPL_MASK) |
++                                    ((*(uint16_t *)value & 3) << DESC_DPL_SHIFT);
++            env->hflags =
++                (env->hflags & ~HF_CPL_MASK) | (*(uint16_t *)value & 3);
+             break;
+         case UC_X86_REG_ES:
+             CHECK_REG_TYPE(uint16_t);

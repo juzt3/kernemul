@@ -48,6 +48,14 @@ addr_t win_obj_manager::lookup_named_object(const std::string_view name) const
 	return it != named_.end() ? it->second : 0;
 }
 
+void win_obj_manager::unregister_named_object(const std::string_view name)
+{
+	std::scoped_lock lock(mtx_);
+
+	if (const auto it = named_.find(name); it != named_.end())
+		named_.erase(it);
+}
+
 bool win_obj_manager::has_object(addr_t body_addr) const
 {
 	std::scoped_lock lock(mtx_);

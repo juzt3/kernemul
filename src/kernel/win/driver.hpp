@@ -8,6 +8,8 @@
 // The io type, not the object manager's type index -- a driver object has both, unrelated.
 inline constexpr short io_type_driver = 4;
 inline constexpr short io_type_device = 3;
+inline constexpr short io_type_irp    = 6;
+inline constexpr short io_type_file   = 5;
 
 enum device_flags : std::uint32_t
 {

@@ -17,7 +17,38 @@ struct file_host final : win_object
 
 	// Written to the emulator's own stdout rather than anything in the guest filesystem.
 	bool console = false;
+
+	// A handle opened on a device names one instead of a file: the driver is reached through the
+	// device object, and the file object is the per-open context it is handed on every request.
+	addr_t device_object = 0;
+	addr_t file_object = 0;
+
+	[[nodiscard]] bool is_device() const noexcept { return device_object != 0; }
 };
+
+// The driver behind a device object, kept host side so a driver overrunning its own extension
+// cannot rewrite the link back to itself.
+struct device_host final : win_object
+{
+	addr_t driver_object = 0;
+
+	// As IoCreateDevice was given it, for logging and for unregistering the name on delete.
+	std::string name;
+};
+
+struct symbolic_link_host final : win_object
+{
+	std::string target;
+};
+
+// Object manager names are compared the way the guest writes them, which is neither consistently
+// cased nor consistently prefixed: \??\X, \DosDevices\X and \GLOBAL??\X all reach the same link.
+// win_filesystem::normalize already folds exactly that, so the device namespace is keyed through
+// it -- registering and looking up both go through here, so the two cannot drift.
+inline std::string object_namespace_key(const std::string_view name)
+{
+	return win_filesystem::normalize(name);
+}
 
 struct section_host final : win_object
 {
