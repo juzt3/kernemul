@@ -9,7 +9,10 @@
 #include <chrono>
 #include <string>
 #include <string_view>
+#include <algorithm>
 #include <cstddef>
+#include <cstring>
+#include <vector>
 
 namespace
 {
@@ -19,12 +22,112 @@ enum system_information_class : std::uint32_t
 	system_basic_information        = 0,
 	system_time_of_day_information  = 3,
 	system_numa_processor_map       = 55,
+	system_module_information       = 0x0B,
+	system_module_information_ex    = 0x4D,
 
 	system_logical_processor_and_group_information = 107,
 
 	// Nothing is emulated here, so this is the basic information verbatim.
 	system_emulation_basic_information = 62,
 };
+
+// Neither shape is in ntoskrnl's pdb -- they are what ntdll and drivers agree the query
+// returns -- so the sizes are asserted rather than trusted.
+#pragma pack(push, 8)
+struct rtl_process_module_information_t
+{
+	std::uint64_t section;
+	std::uint64_t mapped_base;
+	std::uint64_t image_base;
+	std::uint32_t image_size;
+	std::uint32_t flags;
+	std::uint16_t load_order_index;
+	std::uint16_t init_order_index;
+	std::uint16_t load_count;
+	std::uint16_t offset_to_file_name;
+	std::uint8_t  full_path_name[256];
+};
+
+struct rtl_process_modules_t
+{
+	std::uint32_t number_of_modules;
+	std::uint32_t padding;
+	rtl_process_module_information_t modules[1];
+};
+
+struct rtl_process_module_information_ex_t
+{
+	std::uint16_t next_offset;
+	std::uint8_t  padding[6];
+	rtl_process_module_information_t base_info;
+	std::uint32_t image_checksum;
+	std::uint32_t time_date_stamp;
+	std::uint64_t default_base;
+};
+#pragma pack(pop)
+
+static_assert(sizeof(rtl_process_module_information_t) == 0x128);
+static_assert(sizeof(rtl_process_module_information_ex_t) == 0x140);
+static_assert(offsetof(rtl_process_modules_t, modules) == 8);
+
+constexpr std::uint32_t module_entry_size = sizeof(rtl_process_module_information_t);
+constexpr std::uint32_t module_ex_entry_size = sizeof(rtl_process_module_information_ex_t);
+constexpr std::uint32_t module_list_header_size =
+	static_cast<std::uint32_t>(offsetof(rtl_process_modules_t, modules));
+
+// What the loaded module list holds, flattened once so both classes describe the same modules
+// in the same order as the list the guest can walk itself.
+struct loaded_module_t
+{
+	std::uint64_t base;
+	std::uint32_t size;
+	std::string path;
+};
+
+std::vector<loaded_module_t> collect_modules(win_kernel_state& state)
+{
+	std::vector<loaded_module_t> out;
+
+	if (!state.loaded_module_list.address())
+		return out;
+
+	state.loaded_module_list.for_each([&](emu_object<_KLDR_DATA_TABLE_ENTRY> entry)
+	{
+		const auto e = entry.read();
+
+		auto path = narrow_wstring(win::read_unicode_string(
+			entry.field(&_KLDR_DATA_TABLE_ENTRY::FullDllName)));
+
+		if (path.empty())
+			path = narrow_wstring(win::read_unicode_string(
+				entry.field(&_KLDR_DATA_TABLE_ENTRY::BaseDllName)));
+
+		out.push_back({ guest_va(e.DllBase), e.SizeOfImage, std::move(path) });
+
+		return true;
+	});
+
+	return out;
+}
+
+void fill_module_entry(rtl_process_module_information_t& entry, const loaded_module_t& mod,
+	const std::uint32_t index)
+{
+	entry.image_base = mod.base;
+	entry.image_size = mod.size;
+	entry.load_order_index = static_cast<std::uint16_t>(index);
+	entry.load_count = 1;
+
+	const auto kept = std::min(mod.path.size(), sizeof(entry.full_path_name) - 1);
+	std::memcpy(entry.full_path_name, mod.path.data(), kept);
+	entry.full_path_name[kept] = 0;
+
+	const auto slash = std::string_view(mod.path).substr(0, kept).find_last_of("\\/");
+
+	entry.offset_to_file_name = slash == std::string_view::npos
+		? 0
+		: static_cast<std::uint16_t>(slash + 1);
+}
 
 #pragma pack(push, 4)
 struct system_basic_information_t
@@ -262,6 +365,82 @@ void modules::register_ntoskrnl_sysinfo_ops(win_kernel_state& state, proc_module
 
 			THREAD_LOG_INFO("NtQuerySystemInformation(SystemNumaProcessorMap): "
 				"1 node, processor mask 0x{:X}", info.node[0].mask);
+
+			return STATUS_SUCCESS;
+		}
+
+		case system_module_information:
+		{
+			const auto mods = collect_modules(*st);
+			const auto count = static_cast<std::uint32_t>(mods.size());
+			const auto required = module_list_header_size + count * module_entry_size;
+
+			if (return_length)
+				return_length.write(required);
+
+			if (length < module_list_header_size)
+				return STATUS_INFO_LENGTH_MISMATCH;
+
+			// As many as fit, and the count says how many that was -- the caller sizes its
+			// second call from the required length written above.
+			const auto fits = std::min<std::uint32_t>(
+				(length - module_list_header_size) / module_entry_size, count);
+
+			std::vector<std::uint8_t> out(module_list_header_size
+				+ fits * module_entry_size, 0);
+
+			auto* const header = reinterpret_cast<rtl_process_modules_t*>(out.data());
+			header->number_of_modules = fits;
+
+			for (std::uint32_t i = 0; i < fits; ++i)
+				fill_module_entry(header->modules[i], mods[i], i);
+
+			space.write_mem(system_information, out.data(), out.size());
+
+			THREAD_LOG_INFO("NtQuerySystemInformation(SystemModuleInformation): {} of {} "
+				"module(s), required 0x{:X}, buffer 0x{:X}", fits, count, required, length);
+
+			return fits == count ? STATUS_SUCCESS : STATUS_INFO_LENGTH_MISMATCH;
+		}
+
+		case system_module_information_ex:
+		{
+			const auto mods = collect_modules(*st);
+			const auto count = static_cast<std::uint32_t>(mods.size());
+			// Two bytes past the last entry, left zero: every entry carries a step, and a walk
+			// that follows the last one lands on that zero and stops there.
+			const auto required = count * module_ex_entry_size + sizeof(std::uint16_t);
+
+			if (return_length)
+				return_length.write(required);
+
+			// A chain rather than a counted array, so a short buffer has no partial form.
+			if (length < required)
+			{
+				THREAD_LOG_INFO("NtQuerySystemInformation(SystemModuleInformationEx): "
+					"buffer 0x{:X} < required 0x{:X} for {} module(s)",
+					length, required, count);
+
+				return STATUS_INFO_LENGTH_MISMATCH;
+			}
+
+			std::vector<std::uint8_t> out(required, 0);
+
+			for (std::uint32_t i = 0; i < count; ++i)
+			{
+				auto* const entry = reinterpret_cast<rtl_process_module_information_ex_t*>(
+					out.data() + i * module_ex_entry_size);
+
+				entry->next_offset = static_cast<std::uint16_t>(module_ex_entry_size);
+
+				fill_module_entry(entry->base_info, mods[i], i);
+			}
+
+			if (required)
+				space.write_mem(system_information, out.data(), out.size());
+
+			THREAD_LOG_INFO("NtQuerySystemInformation(SystemModuleInformationEx): {} module(s), "
+				"0x{:X} bytes", count, required);
 
 			return STATUS_SUCCESS;
 		}
