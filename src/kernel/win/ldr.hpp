@@ -9,7 +9,7 @@ public:
 	ldr_module_list() = default;
 
 	ldr_module_list(win_user_mem& mem, addr_t ldr_addr)
-		:	ldr_(mem.space(), ldr_addr)
+		:	ldr_(mem.space(), ldr_addr, "PEB_LDR_DATA", true)
 	{
 		_PEB_LDR_DATA data{};
 		data.Length = sizeof(_PEB_LDR_DATA);

@@ -1,9 +1,12 @@
 #include "map.hpp"
 #include "../emu/addr_space.hpp"
+#include "../emu/object.hpp"
 #include "process.hpp"
 #include "../util/log.hpp"
 #include "../util/file.hpp"
+#include <algorithm>
 #include <charconv>
+#include <format>
 #include <cstring>
 
 namespace {
@@ -96,6 +99,13 @@ std::shared_ptr<proc_module> krnl::map_img(process& proc, const std::string_view
 
 	space->write_mem(addr, img->as(), size);
 
+	// The export directory is walked constantly by anything resolving a routine by name, so
+	// watching it would bury every other access under that traffic. It is the one part of a
+	// data section a guest is expected to read.
+	const auto& exp_dir = img->nt_hdrs()->optional_hdr.data_dirs.exports;
+	const auto exp_begin = exp_dir.used() ? exp_dir.virtual_address : 0u;
+	const auto exp_end = exp_dir.used() ? exp_dir.virtual_address + exp_dir.size : 0u;
+
 	for (const auto sec : img->sections())
 	{
 		auto sec_flags = flags;
@@ -106,6 +116,34 @@ std::shared_ptr<proc_module> krnl::map_img(process& proc, const std::string_view
 			sec_flags |= prot_exec;
 
 		space->prot_mem(addr + sec.virtual_address, sec.virtual_size, sec_flags);
+
+		// Code is where the guest is meant to be; everything else it touches says something
+		// about what it is looking for.
+		if (sec.characteristics.mem_execute || !sec.virtual_size)
+			continue;
+
+		const auto sec_begin = sec.virtual_address;
+		const auto sec_end = sec.virtual_address + sec.virtual_size;
+		const auto sec_view = sec.name();
+		const std::string sec_name(sec_view.data(), sec_view.size());
+
+		// Subtracting the export directory can leave a piece either side of it.
+		const auto watch = [&](const std::uint32_t begin, const std::uint32_t end)
+		{
+			if (begin < end)
+				monitor_range(*space, addr + begin, end - begin,
+					std::format("{}{}", name, sec_name));
+		};
+
+		if (exp_end <= sec_begin || exp_begin >= sec_end)
+		{
+			watch(sec_begin, sec_end);
+		}
+		else
+		{
+			watch(sec_begin, std::max(sec_begin, exp_begin));
+			watch(std::min(sec_end, exp_end), sec_end);
+		}
 	}
 
 	const addr_t delta = addr - img->base_addr();

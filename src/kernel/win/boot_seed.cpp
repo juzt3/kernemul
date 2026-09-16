@@ -103,3 +103,5 @@ void win::seed_filesystem(win_kernel_state& state)
 	for (int i = 0; i < 5; ++i)
 		static_cast<void>(fs.create("physicaldrive" + std::to_string(i)));
 
+	LOG_INFO("filesystem: seeded boot directories and devices");
+}

@@ -108,7 +108,8 @@ inline emu_object<_RTL_USER_PROCESS_PARAMETERS> init_process_parameters(
 	mem.write_mem(addr, &params, sizeof(params));
 	mem.write_mem(addr + strings_at, strings.data(), strings.size() * sizeof(char16_t));
 
-	return emu_object<_RTL_USER_PROCESS_PARAMETERS>(mem.space(), addr);
+	return emu_object<_RTL_USER_PROCESS_PARAMETERS>(mem.space(), addr,
+		"RTL_USER_PROCESS_PARAMETERS", true);
 }
 
 struct api_set_result

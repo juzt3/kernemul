@@ -93,7 +93,8 @@ struct win_kernel_state : kernel_state
 			// which used to leave PsLoadedModuleList holding ntoskrnl alone.
 			if (const auto ps_list = ntoskrnl->find_export("PsLoadedModuleList"))
 			{
-				loaded_module_list = loaded_module_list_t(space, *ps_list);
+				loaded_module_list = loaded_module_list_t(space, *ps_list,
+					"PsLoadedModuleList", true);
 				loaded_module_list.init();
 				sys_proc->module_add_cb(*ntoskrnl);
 			}
@@ -108,7 +109,8 @@ struct win_kernel_state : kernel_state
 
 			if (const auto ps_active = ntoskrnl->find_symbol("PsActiveProcessHead"))
 			{
-				active_process_list = active_process_list_t(space, *ps_active);
+				active_process_list = active_process_list_t(space, *ps_active,
+					"PsActiveProcessHead", true);
 				active_process_list.init();
 			}
 
@@ -133,7 +135,8 @@ struct win_kernel_state : kernel_state
 
 		space.mmu_->map_virt(space, kuser_shared_data_kernel_va,
 			sizeof(_KUSER_SHARED_DATA), prot_rw | prot_supervisor);
-		kuser_shared_data = emu_object<_KUSER_SHARED_DATA>(space, kuser_shared_data_kernel_va);
+		kuser_shared_data = emu_object<_KUSER_SHARED_DATA>(space, kuser_shared_data_kernel_va,
+			"KUSER_SHARED_DATA", true);
 		kuser_shared_data.write(make_default_kuser_shared_data(1));
 		kuser_shared_data.field(&_KUSER_SHARED_DATA::NtBuildNumber).write(nt_build_number);
 	}
@@ -332,12 +335,14 @@ struct win_kernel_state : kernel_state
 		const auto body = objs.create_object(0, &drv, sizeof(drv),
 			{}, prot_rw | prot_supervisor);
 
-		emu_object<_DRIVER_OBJECT> obj(space, body, std::string(mod.name));
+		emu_object<_DRIVER_OBJECT> obj(space, body,
+			std::format("DRIVER_OBJECT[{}]", mod.name), true);
 
 		const std::u16string reg_path_str =
 			std::u16string(driver_services_key) + std::u16string(service_name);
 
 		auto reg_path = win::allocate_unicode_string(space, reg_path_str, "RegistryPath");
+		reg_path.monitor();
 
 		// DriverEntry is handed this path, so the key behind it has to exist -- otherwise the
 		// first thing a driver does with its own argument is fail to open it.
@@ -519,8 +524,10 @@ private:
 		std::scoped_lock lock(list_mtx_);
 		auto obj = active_process_list.push_back(ep);
 
-		kprocess_thread_list(space, obj.address()).init();
-		eprocess_thread_list(space, obj.address()).init();
+		kprocess_thread_list(space, obj.address(),
+			std::format("KPROCESS.ThreadListHead[pid={}]", id), true).init();
+		eprocess_thread_list(space, obj.address(),
+			std::format("EPROCESS.ThreadListHead[pid={}]", id), true).init();
 
 		return obj;
 	}

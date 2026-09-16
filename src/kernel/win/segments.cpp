@@ -1,5 +1,6 @@
 #include "segments.hpp"
 #include "../../emu/mmu.hpp"
+#include "../../emu/object.hpp"
 #include "../process.hpp"
 
 namespace ia32 {
@@ -90,6 +91,9 @@ static addr_t init_idt(vcpu& cpu, const proc_module& ntoskrnl)
 
 	cpu.reg(x86::idtr, x86::seg_reg{ 0, idt_va, static_cast<std::uint32_t>(idt_size - 1), 0 });
 
+	// Nothing dispatches through it, so every access is the guest reading the table back.
+	monitor_range(*space, idt_va, idt_size, "IDT");
+
 	return idt_va;
 }
 
@@ -126,6 +130,9 @@ cpu_tables init_vcpu(vcpu& cpu, const proc_module& ntoskrnl)
 	space->write_mem<ia32::segment_descriptor_32>(gdt_va + 0x50, {});
 
 	cpu.reg(x86::gdtr, x86::seg_reg{ 0, gdt_va, static_cast<std::uint32_t>(gdt_size - 1), 0 });
+
+	monitor_range(*space, gdt_va, gdt_size, "GDT");
+	monitor_range(*space, tss_va, tss_limit + 1, "TSS");
 
 	ia32::segment_access_rights tr_access{};
 	tr_access.type = SEGMENT_DESCRIPTOR_TYPE_TSS_BUSY;

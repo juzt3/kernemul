@@ -1,4 +1,5 @@
 #pragma once
+#include <format>
 #include "../thread_scheduler.hpp"
 #include "ethread.hpp"
 #include "process.hpp"
@@ -116,7 +117,7 @@ public:
 		:	win_thread(id, proc, start_addr, stack_base, stack_size, cpu)
 	{
 		const auto teb_va = mem.alloc(teb64_alloc_size, prot_rw);
-		teb_ = emu_object<_TEB64>(mem.space(), teb_va);
+		teb_ = emu_object<_TEB64>(mem.space(), teb_va, std::format("TEB[tid={}]", id), true);
 		// The affinity mask must cover the processors the PEB advertises, so it comes from there.
 		teb_.write(make_default_teb(teb_va, stack_base, stack_size, proc->id(), id,
 			proc->peb().address(), proc->peb().field(&_PEB64::NumberOfProcessors).read()));

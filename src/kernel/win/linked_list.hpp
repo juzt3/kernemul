@@ -2,7 +2,9 @@
 #include "../../emu/object.hpp"
 #include <cstddef>
 #include <cstring>
+#include <format>
 #include <functional>
+#include <string>
 
 struct list_entry
 {
@@ -16,8 +18,10 @@ class win_linked_list
 public:
 	win_linked_list() noexcept = default;
 
-	win_linked_list(addr_space& space_, const addr_t head_addr) noexcept
-		:	head_(space_, head_addr) { }
+	win_linked_list(addr_space& space_, const addr_t head_addr, std::string name = {},
+		const bool monitored = false) noexcept
+		:	head_(space_, head_addr, name.empty() ? std::string{} : name + ".Head", monitored),
+			name_(std::move(name)), monitor_(monitored) { }
 
 	void init()
 	{
@@ -52,7 +56,8 @@ public:
 		links.flink = head_addr;
 		links.blink = tail_links;
 
-		emu_object<T> obj(*space_, entry_addr);
+		emu_object<T> obj(*space_, entry_addr,
+			name_.empty() ? std::string{} : std::format("{}[0x{:X}]", name_, entry_addr));
 		obj.write(contents);
 
 		if (tail_links == head_addr)
@@ -134,5 +139,6 @@ private:
 	}
 
 	emu_object<list_entry> head_;
+	std::string name_;
 	bool monitor_ = false;
 };

@@ -86,7 +86,7 @@ public:
 		image_name_ = ascii_lower(image_path.substr(wide_dir.size()));
 
 		const auto peb_addr = mem_.alloc(peb64_alloc_size, prot_rw);
-		peb_ = emu_object<_PEB64>(sp, peb_addr);
+		peb_ = emu_object<_PEB64>(sp, peb_addr, std::format("PEB[pid={}]", id), true);
 		peb_.write(make_default_peb(processors));
 
 		const auto ldr_addr = mem_.alloc(sizeof(_PEB_LDR_DATA), prot_rw);

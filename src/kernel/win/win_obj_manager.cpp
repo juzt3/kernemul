@@ -15,7 +15,8 @@ addr_t win_obj_manager::create_object(const std::uint8_t type_index,
 	hdr.PointerCount = 1;
 	hdr.TypeIndex = type_index;
 
-	emu_object<_OBJECT_HEADER> hdr_obj(space_, base);
+	emu_object<_OBJECT_HEADER> hdr_obj(space_, base,
+		std::format("OBJECT_HEADER[0x{:X}]", body_addr), true);
 	hdr_obj.write(hdr);
 
 	if (body_data && body_size > 0)

@@ -3,6 +3,7 @@
 #include "defs.hpp"
 #include "types.hpp"
 #include "status.hpp"
+#include <string>
 
 
 inline constexpr std::size_t kprocess_thread_list_off =
@@ -10,14 +11,20 @@ inline constexpr std::size_t kprocess_thread_list_off =
 inline constexpr std::size_t eprocess_thread_list_off =
 	offsetof(_EPROCESS, ThreadListHead);
 
-inline kprocess_thread_list_t kprocess_thread_list(addr_space& space, const addr_t eprocess)
+// `monitored` only on the call that creates the list -- every later view of the same head would
+// otherwise install a second hook over bytes already watched.
+inline kprocess_thread_list_t kprocess_thread_list(addr_space& space, const addr_t eprocess,
+	std::string name = {}, const bool monitored = false)
 {
-	return kprocess_thread_list_t(space, eprocess + kprocess_thread_list_off);
+	return kprocess_thread_list_t(space, eprocess + kprocess_thread_list_off,
+		std::move(name), monitored);
 }
 
-inline eprocess_thread_list_t eprocess_thread_list(addr_space& space, const addr_t eprocess)
+inline eprocess_thread_list_t eprocess_thread_list(addr_space& space, const addr_t eprocess,
+	std::string name = {}, const bool monitored = false)
 {
-	return eprocess_thread_list_t(space, eprocess + eprocess_thread_list_off);
+	return eprocess_thread_list_t(space, eprocess + eprocess_thread_list_off,
+		std::move(name), monitored);
 }
 
 // A system thread runs at the bottom of the real-time range, a user thread at normal priority.

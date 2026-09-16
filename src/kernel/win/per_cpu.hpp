@@ -3,6 +3,7 @@
 #include "../../target.hpp"
 #include "../../util/log.hpp"
 #include "types.hpp"
+#include <format>
 
 
 // The version pair says how to read the rest, not which Windows this is.
@@ -88,12 +89,15 @@ public:
 	win_per_cpu() = default;
 
 	win_per_cpu(addr_space& space, const std::uint32_t number)
+		:	number_(number)
 	{
 		const auto va = space.alloc(sizeof(_KPCR), prot_rw | prot_supervisor);
-		kpcr_ = emu_object<_KPCR>(space, va);
+		kpcr_ = emu_object<_KPCR>(space, va, std::format("KPCR[{}]", number), true);
 		kpcr_.write(make_default_kpcr(va, number));
 
-		init_lock_array(space);
+		// DIAGNOSTIC: temporarily disabled
+		// init_lock_array(space);
+		(void)space;
 	}
 
 	void set_current_thread(const addr_t kthread) const
@@ -119,7 +123,7 @@ public:
 
 private:
 	// One array per cpu, because a queued lock is acquired through the acquiring cpu's own PCR.
-	void init_lock_array(addr_space& space) const
+	void init_lock_array(addr_space& space)
 	{
 		constexpr auto queues_size = lock_queue_count * sizeof(_KSPIN_LOCK_QUEUE);
 		constexpr auto locks_size = lock_queue_count * sizeof(std::uint64_t);
@@ -149,7 +153,18 @@ private:
 
 		kpcr_.field(&_KPCR::LockArray).write(
 			reinterpret_cast<_KSPIN_LOCK_QUEUE*>(static_cast<std::uintptr_t>(queues)));
+
+		// Kept past the constructor so the hooks outlive it: a queued lock the guest reaches
+		// through the PCR is one of the few places it touches state nothing here ever runs.
+		lock_queues_ = emu_object_arr<_KSPIN_LOCK_QUEUE>(space, queues, lock_queue_count,
+			std::format("KPCR.LockArray[{}]", number_), true);
+
+		lock_words_ = emu_object_arr<std::uint64_t>(space, locks, lock_queue_count,
+			std::format("KPCR.LockArray.Lock[{}]", number_), true);
 	}
 
+	std::uint32_t number_ = 0;
 	emu_object<_KPCR> kpcr_;
+	emu_object_arr<_KSPIN_LOCK_QUEUE> lock_queues_;
+	emu_object_arr<std::uint64_t> lock_words_;
 };
