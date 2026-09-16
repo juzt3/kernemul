@@ -10,6 +10,8 @@
 #include "ethread.hpp"
 #include "thread.hpp"
 #include "driver.hpp"
+#include "irp.hpp"
+#include "mdl.hpp"
 #include "per_cpu.hpp"
 #include "objects.hpp"
 #include "modules/fltmgr.hpp"
@@ -288,6 +290,70 @@ struct win_kernel_state : kernel_state
 		return { std::move(obj), std::move(reg_path) };
 	}
 
+	// A named device goes in the object manager's namespace rather than one of its own: the same
+	// names an app reaches through NtOpenSymbolicLinkObject are the ones a driver creates here,
+	// and only one of the two can be the namespace if they are to agree.
+	void register_device(const std::string_view name, const addr_t device)
+	{
+		if (!name.empty() && device)
+			objs.register_named_object(object_namespace_key(name), device);
+	}
+
+	// A link is an object in its own right, so NtQuerySymbolicLinkObject can read back what a
+	// driver pointed it at rather than only what an app created itself.
+	void register_device_link(const std::string_view link, const std::string_view target)
+	{
+		if (link.empty() || target.empty())
+			return;
+
+		auto host = std::make_shared<symbolic_link_host>();
+		host->target = std::string(target);
+
+		const std::uint8_t placeholder[sizeof(addr_t)] = {};
+		const auto addr = objs.create_object(0, placeholder, sizeof(placeholder),
+			std::move(host), prot_rw | prot_supervisor);
+
+		if (addr)
+			objs.register_named_object(object_namespace_key(link), addr);
+		else
+			LOG_ERR("out of memory for the symbolic link '{}'", link);
+	}
+
+	void unregister_device_name(const std::string_view name)
+	{
+		if (!name.empty())
+			objs.unregister_named_object(object_namespace_key(name));
+	}
+
+	// A name in the device namespace, which is a device object or a link standing for one. Links
+	// are followed rather than resolved once, so a link to a link still lands on the device; the
+	// depth is bounded because nothing stops two links pointing at each other.
+	[[nodiscard]] addr_t find_device(const std::string_view path)
+	{
+		auto name = object_namespace_key(path);
+
+		for (int depth = 0; depth < 8; ++depth)
+		{
+			const auto addr = objs.lookup_named_object(name);
+
+			// Anything else sharing the namespace is an event or a section, which a file open
+			// has no business resolving to.
+			if (!addr || objs.get_object<device_host>(addr))
+				return addr;
+
+			const auto link = objs.get_object<symbolic_link_host>(addr);
+
+			if (!link)
+				return 0;
+
+			name = object_namespace_key(link->target);
+		}
+
+		LOG_WARN("device link '{}' resolves in a circle", path);
+
+		return 0;
+	}
+
 	// Called in the order cpus are added: that order makes a block's index the cpu's own id.
 	win_per_cpu& init_per_cpu(vcpu& cpu)
 	{
@@ -488,6 +554,156 @@ public:
 
 	// False if this one cannot yet, and the fault is then dispatched here instead.
 	virtual bool setup_exception_frame(vcpu&, addr_t, const win::exception_info&) { return false; }
+
+	// The two selectors a dispatch runs between. Unicorn does not fault a supervisor page fetched
+	// at CPL 3, but whp runs the guest on the real cpu and does, so the mode is raised either way.
+	virtual void set_kernel_mode(vcpu&, bool) {}
+
+	// Builds a request the way the io manager does, hands it to the driver's dispatch routine and
+	// reads the result back out of it. It runs on the calling thread's own cpu: driver code and
+	// device objects live in the kernel half, which every address space aliases, so there is
+	// nothing to switch to reach them.
+	irp_result dispatch_irp(vcpu& cpu, const irp_request& req)
+	{
+		auto& space = *cpu.curr_addr_space();
+
+		const auto device = kernel_.objs.get_object<device_host>(req.device_object);
+
+		if (!device)
+		{
+			LOG_ERR("irp: 0x{:X} is not a device object", req.device_object);
+			return { STATUS_INVALID_PARAMETER, 0 };
+		}
+
+		const auto routine = space.read_mem<addr_t>(device->driver_object
+			+ offsetof(_DRIVER_OBJECT, MajorFunction) + req.major * sizeof(addr_t));
+
+		if (!routine)
+		{
+			LOG_WARN("irp: driver 0x{:X} has no handler for major 0x{:X}",
+				device->driver_object, req.major);
+			return { STATUS_INVALID_DEVICE_REQUEST, 0 };
+		}
+
+		const bool is_control = req.major == irp_mj_device_control;
+		const auto method = is_control ? control_code_method(req.control_code) : method_buffered;
+
+		// Only a buffered control copies. A direct one hands the driver an mdl over the caller's
+		// own output pages, and neither hands over the addresses themselves.
+		const bool copies_out = is_control && method == method_buffered;
+		const bool copies_in = is_control && method != method_neither;
+		const bool needs_mdl = is_control
+			&& (method == method_in_direct || method == method_out_direct);
+
+		const pool_block buffer(kernel_.pool,
+			copies_in ? std::max(req.input_length, copies_out ? req.output_length : 0u) : 0,
+			irp_pool_tag);
+
+		const pool_block mdl(kernel_.pool,
+			needs_mdl && req.output_buffer ? mdl_size(req.output_buffer, req.output_length) : 0,
+			pool_tag("Mdl "));
+
+		const pool_block request(kernel_.pool,
+			sizeof(_IRP) + irp_stack_count * sizeof(_IO_STACK_LOCATION), irp_pool_tag);
+
+		if (!request.addr() || (copies_in && req.input_length && !buffer.addr()))
+		{
+			LOG_ERR("irp: out of pool for a {} byte request", req.input_length);
+			return { STATUS_INSUFFICIENT_RESOURCES, 0 };
+		}
+
+		if (copies_in)
+			copy_guest(space, buffer.addr(), req.input_buffer, req.input_length);
+
+		// Nothing here pages, so the mdl is born mapped: MmGetSystemAddressForMdl is a macro that
+		// returns MappedSystemVa when that flag is set, rather than asking for a mapping the
+		// emulator would have to invent.
+		if (mdl.addr())
+		{
+			mdl_t m{};
+			m.size = static_cast<std::int16_t>(mdl_size(req.output_buffer, req.output_length));
+			m.mdl_flags = mdl_mapped_to_system_va | mdl_pages_locked;
+			m.start_va = mdl_page_base(req.output_buffer);
+			m.byte_offset = static_cast<std::uint32_t>(mdl_page_offset(req.output_buffer));
+			m.byte_count = req.output_length;
+			m.mapped_system_va = req.output_buffer;
+
+			emu_object<mdl_t>(space, mdl.addr()).write(m);
+		}
+
+		const auto irp = request.addr();
+		const auto stack_addr = irp + sizeof(_IRP);
+		const auto ptr = [](const addr_t a) { return static_cast<std::uintptr_t>(a); };
+
+		_IRP body{};
+		body.Type = io_type_irp;
+		body.Size = static_cast<unsigned short>(sizeof(_IRP) + sizeof(_IO_STACK_LOCATION));
+		body.StackCount = static_cast<char>(irp_stack_count);
+		body.CurrentLocation = static_cast<char>(irp_stack_count);
+		body.RequestorMode = static_cast<char>(UserMode);
+		body.Flags = copies_in
+			? irp_buffered_io | irp_deallocate_buffer
+				| (req.input_length ? irp_input_operation : 0u)
+			: 0u;
+		body.MdlAddress = reinterpret_cast<_MDL*>(ptr(mdl.addr()));
+		body.AssociatedIrp.SystemBuffer = reinterpret_cast<void*>(ptr(buffer.addr()));
+		body.UserBuffer = reinterpret_cast<void*>(ptr(copies_out ? 0 : req.output_buffer));
+		body.Tail.Overlay.CurrentStackLocation =
+			reinterpret_cast<_IO_STACK_LOCATION*>(ptr(stack_addr));
+
+		_IO_STACK_LOCATION stack{};
+		stack.MajorFunction = req.major;
+		stack.DeviceObject = reinterpret_cast<_DEVICE_OBJECT*>(ptr(req.device_object));
+		stack.FileObject = reinterpret_cast<_FILE_OBJECT*>(ptr(req.file_object));
+
+		if (is_control)
+		{
+			auto& params = stack.Parameters.DeviceIoControl;
+			params.IoControlCode = req.control_code;
+			params.InputBufferLength = req.input_length;
+			params.OutputBufferLength = req.output_length;
+			params.Type3InputBuffer = reinterpret_cast<void*>(
+				ptr(method == method_neither ? req.input_buffer : 0));
+		}
+
+		emu_object<_IRP>(space, irp).write(body);
+		emu_object<_IO_STACK_LOCATION>(space, stack_addr).write(stack);
+
+		// Driver code lives in supervisor pages, so the dispatch runs in kernel mode and the
+		// caller's thread goes back to user mode after it.
+		set_kernel_mode(cpu, true);
+		kernel_.calls.call(cpu, routine, { { req.device_object, irp } });
+		set_kernel_mode(cpu, false);
+
+		const emu_object<_IRP> done(space, irp);
+		const auto io_status = done.field(&_IRP::IoStatus).read();
+
+		irp_result result{ static_cast<NTSTATUS>(io_status.Status),
+			static_cast<std::uint64_t>(io_status.Information) };
+
+		// IoCompleteRequest pops every stack location, so a request it has been through is the
+		// one whose current location has gone past the last.
+		const bool completed =
+			done.field(&_IRP::CurrentLocation).read() > done.field(&_IRP::StackCount).read();
+
+		// A dispatch routine that returned without completing has kept the request, and nothing
+		// here runs the driver's later completion -- so the caller is told, rather than handed a
+		// status block the driver never filled in.
+		if (!completed)
+		{
+			LOG_WARN("irp 0x{:X}: driver 0x{:X} returned 0x{:X} without completing the request",
+				irp, device->driver_object, result.status);
+
+			return { result.status == STATUS_SUCCESS ? STATUS_PENDING : result.status, 0 };
+		}
+
+		// Buffered output goes back the way it came, and only as far as the driver said it wrote.
+		if (copies_out)
+			copy_guest(space, req.output_buffer, buffer.addr(),
+				std::min<std::uint64_t>(result.information, req.output_length));
+
+		return result;
+	}
 
 	struct user_process_args
 	{
