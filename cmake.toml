@@ -95,11 +95,11 @@ packages = ["boost-beast", "openssl", "spdlog", "zydis"]
 windows = "WIN32"
 # Both of these are gcc's own spelling: clang rejects -Wno-changes-meaning as an
 # unknown warning option, and msvc takes neither.
-gnu = "CMAKE_CXX_COMPILER_ID STREQUAL \\"GNU\\""
+gnu = "CMAKE_CXX_COMPILER_ID STREQUAL \\\"GNU\\\""
 msvc = "MSVC"
-arch-x64 = "KERNEMUL_ARCH STREQUAL \\"x64\\""
-arch-arm64 = "KERNEMUL_ARCH STREQUAL \\"arm64\\""
-whp = "KERNEMUL_BACKEND STREQUAL \\"whp\\""
+arch-x64 = "KERNEMUL_ARCH STREQUAL \\\"x64\\\""
+arch-arm64 = "KERNEMUL_ARCH STREQUAL \\\"arm64\\\""
+whp = "KERNEMUL_BACKEND STREQUAL \\\"whp\\\""
 
 # Only beast is asked for by name; vcpkg pulls in the ~30 header-only boost
 # modules it needs and nothing else, where the old boost-1.86.0-cmake tarball
