@@ -45,11 +45,6 @@ struct callback_registration_host final : win_object
 	addr_t callback_object_addr = 0;
 };
 
-struct device_host final : win_object
-{
-	addr_t driver_object = 0;
-};
-
 // A WDK enum; the kernel does not store one, so it is not in the PDB.
 enum token_information_class : std::uint32_t
 {
@@ -241,6 +236,7 @@ void modules::register_ntoskrnl_misc_ops(win_kernel_state& state, proc_module& m
 
 			auto host = std::make_shared<device_host>();
 			host->driver_object = driver_object.address();
+			host->name = narrow_wstring(name);
 
 			const std::vector<std::uint8_t> body(body_size, 0);
 			const auto addr = st->objs.create_object(0, body.data(), body.size(),
@@ -273,6 +269,10 @@ void modules::register_ntoskrnl_misc_ops(win_kernel_state& state, proc_module& m
 			emu_object<_DEVICE_OBJECT>(space, addr).write(device);
 			head.write(guest_ptr<_DEVICE_OBJECT>(addr));
 			device_object_out.write(addr);
+
+			// An unnamed device is reachable only through a pointer the driver hands out; a
+			// named one is what NtCreateFile resolves, so only that one joins the namespace.
+			st->register_device(narrow_wstring(name), addr);
 
 			THREAD_LOG_INFO("IoCreateDevice(driver=0x{:X}, extension_size=0x{:X}, name='{}', type=0x{:X}, characteristics=0x{:X}, exclusive={}) -> 0x{:X}",
 				driver_object.address(), device_extension_size, narrow_wstring(name),
@@ -323,28 +323,57 @@ void modules::register_ntoskrnl_misc_ops(win_kernel_state& state, proc_module& m
 					.field(&_DEVICE_OBJECT::NextDevice);
 			}
 
+			st->unregister_device_name(host->name);
 			st->objs.dereference_object(device_object.address());
 
 			THREAD_LOG_INFO("IoDeleteDevice(0x{:X})", device_object.address());
 		});
 
 	state.redirect(mod, "IoCreateSymbolicLink",
-		[](vcpu&, emu_object<_UNICODE_STRING> symbolic_link_name,
+		[st](vcpu&, emu_object<_UNICODE_STRING> symbolic_link_name,
 			emu_object<_UNICODE_STRING> device_name) -> NTSTATUS
 		{
-			THREAD_LOG_INFO("IoCreateSymbolicLink('{}' -> '{}')",
-				narrow_wstring(win::read_unicode_string(symbolic_link_name)),
-				narrow_wstring(win::read_unicode_string(device_name)));
+			const auto link = narrow_wstring(win::read_unicode_string(symbolic_link_name));
+			const auto target = narrow_wstring(win::read_unicode_string(device_name));
+
+			st->register_device_link(link, target);
+
+			THREAD_LOG_INFO("IoCreateSymbolicLink('{}' -> '{}')", link, target);
 
 			return STATUS_SUCCESS;
 		});
 
-	// Nothing dispatches an IRP, so there is no stack location to run a completion routine from.
-	state.redirect(mod, "IofCompleteRequest",
-		[](vcpu&, const addr_t irp, const std::int8_t priority_boost)
+	state.redirect(mod, "IoDeleteSymbolicLink",
+		[st](vcpu&, emu_object<_UNICODE_STRING> symbolic_link_name) -> NTSTATUS
 		{
-			THREAD_LOG_WARN("IofCompleteRequest(irp=0x{:X}, priority_boost={}): nothing dispatches IRPs, so no completion routine runs",
-				irp, priority_boost);
+			const auto link = narrow_wstring(win::read_unicode_string(symbolic_link_name));
+
+			st->unregister_device_name(link);
+
+			THREAD_LOG_INFO("IoDeleteSymbolicLink('{}')", link);
+
+			return STATUS_SUCCESS;
+		});
+
+	// Completing a request pops every stack location off it, which is what leaves CurrentLocation
+	// past StackCount -- and that is how the io manager tells a completed request from one the
+	// driver kept. A completion routine would run here; nothing sets one on a request issued here.
+	state.redirect(mod, "IofCompleteRequest",
+		[](vcpu& cpu, const addr_t irp, const std::int8_t priority_boost)
+		{
+			const emu_object<_IRP> request(*cpu.curr_addr_space(), irp);
+
+			if (!request)
+				return;
+
+			const auto stack_count = request.field(&_IRP::StackCount).read();
+			request.field(&_IRP::CurrentLocation).write(stack_count + 1);
+
+			const auto io_status = request.field(&_IRP::IoStatus).read();
+
+			THREAD_LOG_INFO("IofCompleteRequest(irp=0x{:X}, priority_boost={}) -> status=0x{:X}, "
+				"information={}", irp, priority_boost,
+				static_cast<std::uint32_t>(io_status.Status), io_status.Information);
 		});
 
 	state.redirect(mod, "IoRegisterShutdownNotification",
