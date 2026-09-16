@@ -82,6 +82,14 @@ public:
 		cpu.reg(x86::cr8, static_cast<std::uint64_t>(irql));
 	}
 
+	void set_kernel_mode(vcpu& cpu, const bool kernel) override
+	{
+		if (kernel)
+			x86_win_seg::swap_to_kernel_segments(cpu);
+		else
+			x86_win_seg::swap_to_usermode_segments(cpu);
+	}
+
 	void init_thread_teb(thread& t, vcpu& cpu, addr_t teb_addr) override
 	{
 		t.set_reg_val(cpu, x86::cs, x86_win_seg::make_usermode_cs());
