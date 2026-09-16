@@ -140,11 +140,31 @@ void modules::register_ntoskrnl_misc_ops(win_kernel_state& state, proc_module& m
 				: 0);
 			const auto name = win::read_unicode_string(object_name);
 
-			if (name.empty() || !create)
+			const auto narrow_name = narrow_wstring(name);
+
+			// Only an unnamed open has nothing to look up and nothing to make.
+			if (narrow_name.empty() && !create)
 			{
-				THREAD_LOG_WARN("ExCreateCallback('{}', create={}): nothing else creates callback objects here",
-					narrow_wstring(name), create);
+				THREAD_LOG_WARN("ExCreateCallback(create=false): no name to open");
 				return STATUS_UNSUCCESSFUL;
+			}
+
+			const auto key = narrow_name.empty()
+				? std::string{}
+				: object_namespace_key(narrow_name);
+
+			if (!key.empty())
+			{
+				if (const auto existing = st->objs.lookup_named_object(key);
+					existing && st->objs.get_object<callback_host>(existing))
+				{
+					callback_object_out.write(existing);
+
+					THREAD_LOG_INFO("ExCreateCallback('{}', create={}) -> 0x{:X} (existing)",
+						narrow_name, create, existing);
+
+					return STATUS_SUCCESS;
+				}
 			}
 
 			auto host = std::make_shared<callback_host>();
@@ -168,10 +188,14 @@ void modules::register_ntoskrnl_misc_ops(win_kernel_state& state, proc_module& m
 			space.write_mem<std::uint8_t>(addr + callback_object_allow_multiple,
 				allow_multiple_callbacks ? 1 : 0);
 
+			// Named, so the next open of the same name is the same object rather than a second one.
+			if (!key.empty())
+				st->objs.register_named_object(key, addr);
+
 			callback_object_out.write(addr);
 
 			THREAD_LOG_INFO("ExCreateCallback('{}', create={}, allow_multiple={}) -> 0x{:X}",
-				narrow_wstring(name), create, allow_multiple_callbacks, addr);
+				narrow_name, create, allow_multiple_callbacks, addr);
 
 			return STATUS_SUCCESS;
 		});
@@ -866,7 +890,7 @@ void modules::register_ntoskrnl_misc_ops(win_kernel_state& state, proc_module& m
 				return 0;
 			}
 
-			THREAD_LOG_WARN("DbgPrompt: no debugger is attached and nothing handled the breakpoint -> 0 bytes");
+			THREAD_LOG_WARN("DbgPrompt: nothing handled the breakpoint -> 0 bytes");
 
 			return 0;
 		});

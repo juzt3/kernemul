@@ -1,4 +1,5 @@
 #include "segments.hpp"
+#include <array>
 #include "../../emu/mmu.hpp"
 #include "../../emu/object.hpp"
 #include "../process.hpp"
@@ -62,7 +63,29 @@ static x86::seg_reg make_data_sr(std::uint16_t selector, std::uint32_t dpl, std:
 	return { selector, base, 0xFFFFFFFF, ar.flags };
 }
 
-// Nothing dispatches through the table; it exists for guest code that reads the IDT back.
+// The gate a vector carries is the handler ntoskrnl really installs there. Nothing here
+// dispatches through the table, but guest code reads it back and follows what it finds.
+struct ki_vector
+{
+	std::uint8_t vector;
+	std::string_view name;
+};
+
+constexpr ki_vector ki_vectors[] = {
+	{  0, "KiDivideErrorFault" },        {  1, "KiDebugTrapOrFault" },
+	{  2, "KiNmiInterrupt" },            {  3, "KiBreakpointTrap" },
+	{  4, "KiOverflowTrap" },            {  5, "KiBoundFault" },
+	{  6, "KiInvalidOpcodeFault" },      {  7, "KiNpxNotAvailableFault" },
+	{  8, "KiDoubleFaultAbort" },        {  9, "KiNpxSegmentOverrunAbort" },
+	{ 10, "KiInvalidTssFault" },         { 11, "KiSegmentNotPresentFault" },
+	{ 12, "KiStackFault" },              { 13, "KiGeneralProtectionFault" },
+	{ 14, "KiPageFault" },               { 16, "KiFloatingErrorFault" },
+	{ 17, "KiAlignmentFault" },          { 18, "KiMcheckAbort" },
+	{ 19, "KiXmmException" },            { 20, "KiVirtualizationException" },
+	{ 21, "KiControlProtectionFault" },  { 29, "KiRaiseSecurityCheckFailure" },
+	{ 44, "KiRaiseAssertion" },          { 45, "KiDebugServiceTrap" },
+};
+
 static addr_t init_idt(vcpu& cpu, const proc_module& ntoskrnl)
 {
 	auto* space = cpu.curr_addr_space().get();
@@ -71,12 +94,28 @@ static addr_t init_idt(vcpu& cpu, const proc_module& ntoskrnl)
 	constexpr std::size_t idt_size = idt_entries * sizeof(ia32::segment_descriptor_interrupt_gate_64);
 	const addr_t idt_va = space->alloc(idt_size, prot_rw | prot_supervisor);
 
-	constexpr std::size_t handler_stride = 16;
-	const auto base = ntoskrnl.find_symbol("KiPageFault").value_or(ntoskrnl.addr);
+	std::array<addr_t, idt_entries> handlers{};
+	std::size_t resolved = 0;
+
+	for (const auto& [vector, name] : ki_vectors)
+	{
+		if (const auto addr = ntoskrnl.find_symbol(name))
+		{
+			handlers[vector] = *addr;
+			++resolved;
+		}
+	}
+
+	// whp loads this table on the real cpu, so a vector the guest raises is actually taken. The
+	// ones with no handler here get a stub that returns rather than an address nothing implements.
+	constexpr std::uint8_t iretq[] = { 0x48, 0xCF };
+
+	const addr_t stub = space->alloc(sizeof(iretq), prot_rx | prot_supervisor);
+	space->write_mem(stub, iretq, sizeof(iretq));
 
 	for (std::size_t i = 0; i < idt_entries; ++i)
 	{
-		const auto handler = base + i * handler_stride;
+		const auto handler = handlers[i] ? handlers[i] : stub;
 
 		ia32::segment_descriptor_interrupt_gate_64 gate{};
 		gate.offset_low    = static_cast<std::uint16_t>(handler);
@@ -91,8 +130,10 @@ static addr_t init_idt(vcpu& cpu, const proc_module& ntoskrnl)
 
 	cpu.reg(x86::idtr, x86::seg_reg{ 0, idt_va, static_cast<std::uint32_t>(idt_size - 1), 0 });
 
-	// Nothing dispatches through it, so every access is the guest reading the table back.
 	monitor_range(*space, idt_va, idt_size, "IDT");
+
+	LOG_INFO("IDT at 0x{:X}: {} of {} vectors have their own handler, the rest return at 0x{:X}",
+		idt_va, resolved, std::size(ki_vectors), stub);
 
 	return idt_va;
 }
