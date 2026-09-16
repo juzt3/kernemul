@@ -17,11 +17,6 @@ constexpr std::size_t namespace_object_body_size = 0x10;
 
 struct directory_host final : win_object {};
 
-struct symbolic_link_host final : win_object
-{
-	std::string target;
-};
-
 // WDK types the kernel does not store, so not in the PDB; both are the same on each architecture.
 #pragma pack(push, 8)
 struct ob_callback_registration_t
@@ -90,9 +85,29 @@ void modules::register_ntoskrnl_object_ops(win_kernel_state& state, proc_module&
 	state.redirect(mod, "ObfDereferenceObject", deref);
 	state.redirect(mod, "ObfDereferenceObjectWithTag", deref);
 
-	auto close_fn = [sys_proc](vcpu&, std::uint64_t handle) -> NTSTATUS
+	auto close_fn = [st = &state, sys_proc](vcpu& cpu, std::uint64_t handle) -> NTSTATUS
 	{
 		THREAD_LOG_INFO("NtClose(handle=0x{:X})", handle);
+
+		// The last handle on a device is what tells its driver the open is over, so the two
+		// requests real cleanup sends go out before the handle stops naming anything.
+		if (const auto host = sys_proc->handle_table().get_object<file_host>(handle);
+			host && host->is_device())
+		{
+			if (auto* const emulator = st->emulator())
+			{
+				for (const auto major : { irp_mj_cleanup, irp_mj_close })
+				{
+					emulator->dispatch_irp(cpu, {
+						.major = major,
+						.device_object = host->device_object,
+						.file_object = host->file_object,
+					});
+				}
+			}
+
+			st->pool.free(host->file_object);
+		}
 
 		if (!sys_proc->handle_table().close_handle(handle))
 		{
