@@ -130,9 +130,9 @@ struct system_time_of_day_information_t
 };
 #pragma pack(pop)
 
-// The granularity every Windows has had, and the clock tick KeQueryTimeIncrement reports.
+// The granularity every Windows has had. The clock tick is in defs.hpp, shared with the
+// KeTimeIncrement global so the two cannot disagree.
 constexpr std::uint32_t allocation_granularity = 0x10000;
-constexpr std::uint32_t clock_increment_100ns = 156250;
 
 constexpr std::uint32_t langid_en_us = 0x0409;
 

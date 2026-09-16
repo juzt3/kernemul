@@ -87,6 +87,15 @@ struct context_flags
 	}
 };
 
+// NT's default clock granularity. A driver divides by it, so it has to be non-zero and
+// plausible -- and ntoskrnl's KeTimeIncrement global has to agree with what
+// KeQueryTimeIncrement returns, or the kernel contradicts itself depending on which the
+// guest asks.
+inline constexpr std::uint32_t clock_increment_100ns = 156250;
+
+// What KUSER_SHARED_DATA.TickCountMultiplier and ExpTickCountMultiplier both carry.
+inline constexpr std::uint32_t default_tick_count_multiplier = 0x0FA00000;
+
 // Windows counts 100ns ticks from 1601-01-01, the host clock seconds from 1970-01-01.
 inline constexpr std::int64_t win_epoch_delta_100ns = 116444736000000000;
 

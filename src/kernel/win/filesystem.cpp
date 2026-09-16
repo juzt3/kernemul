@@ -77,11 +77,44 @@ bool win_filesystem::exists(const std::string_view path) const
 	return files_.contains(normalize(path));
 }
 
+// Every ancestor of a created directory counts as one too, so a single create_directory of a
+// deep path makes the whole chain openable.
+void win_filesystem::create_directory(const std::string_view path)
+{
+	auto norm = normalize(path);
+
+	while (!norm.empty())
+	{
+		dirs_.insert(norm);
+
+		const auto slash = norm.find_last_of('/');
+
+		if (slash == std::string::npos)
+			break;
+
+		norm.resize(slash);
+	}
+}
+
+bool win_filesystem::link(const std::string_view from, const std::string_view to)
+{
+	const auto it = files_.find(normalize(from));
+
+	if (it == files_.end())
+		return false;
+
+	files_[normalize(to)] = it->second;
+	return true;
+}
+
 bool win_filesystem::dir_exists(const std::string_view path) const
 {
 	const auto norm = normalize(path);
 
 	if (norm.empty())
+		return true;
+
+	if (dirs_.contains(norm))
 		return true;
 
 	const auto prefix = norm + "/";
@@ -127,6 +160,25 @@ std::vector<win_filesystem::dir_entry> win_filesystem::list_dir(const std::strin
 			e.name = std::move(name);
 			e.is_directory = true;
 		}
+	}
+
+	// A directory nothing has files under still has to show up in its parent's listing.
+	for (const auto& dir : dirs_)
+	{
+		if (!dir.starts_with(prefix))
+			continue;
+
+		const auto rest = dir.substr(prefix.size());
+
+		if (rest.empty())
+			continue;
+
+		const auto slash = rest.find('/');
+		auto name = slash == std::string::npos ? rest : rest.substr(0, slash);
+
+		auto& e = entries[name];
+		e.name = std::move(name);
+		e.is_directory = true;
 	}
 
 	std::vector<dir_entry> result;

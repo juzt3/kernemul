@@ -196,10 +196,20 @@ void win_kernel_proc::module_add_cb(proc_module& mod)
 	if (!kernel_.loaded_module_list.address())
 		return;
 
+	auto& space = *addr_space_;
+
 	_KLDR_DATA_TABLE_ENTRY entry{};
 	entry.DllBase = reinterpret_cast<void*>(mod.addr);
 	entry.EntryPoint = reinterpret_cast<void*>(mod.entry_point);
 	entry.SizeOfImage = mod.size;
+
+	// A nameless entry is most of the way to useless: code that walks this list is looking for
+	// a module by name, so without one it can only ever match on an address it already had.
+	const auto wide_name = widen_string(mod.name);
+
+	entry.BaseDllName = win::init_unicode_string(space, wide_name);
+	entry.FullDllName = win::init_unicode_string(space,
+		std::u16string(system32_dir) + wide_name);
 
 	std::scoped_lock lock(kernel_.list_mtx_);
 	const auto obj = kernel_.loaded_module_list.push_back(entry);

@@ -58,6 +58,76 @@ void modules::register_ntoskrnl_dbg_ops(win_kernel_state& state, proc_module& mo
 	state.redirect(mod, "KdSystemDebugControl", system_debug_control);
 	state.redirect_ntzw(mod, "SystemDebugControl", system_debug_control);
 
+	// The two v-prefixed forms take a va_list pointer rather than the varargs a caller spread
+	// across registers, so they read their arguments through va_list_args, not varargs.
+	state.redirect(mod, "vDbgPrintEx",
+		[](vcpu& cpu, const std::uint32_t component_id, const std::uint32_t level,
+			std::string format, const addr_t arg_list) -> std::uint32_t
+		{
+			auto& space = *cpu.curr_addr_space();
+			const auto msg = guest::vsprintf(space, format, guest::va_list_args(space, arg_list));
+
+			THREAD_LOG_INFO("vDbgPrintEx (component={}, level={}) : {}",
+				component_id, level, msg);
+
+			return 0;
+		});
+
+	state.redirect(mod, "vDbgPrintExWithPrefix",
+		[](vcpu& cpu, std::string prefix, const std::uint32_t component_id,
+			const std::uint32_t level, std::string format, const addr_t arg_list) -> std::uint32_t
+		{
+			auto& space = *cpu.curr_addr_space();
+			const auto msg = guest::vsprintf(space, format, guest::va_list_args(space, arg_list));
+
+			THREAD_LOG_INFO("vDbgPrintExWithPrefix (component={}, level={}) : {}{}",
+				component_id, level, prefix, msg);
+
+			return 0;
+		});
+
+	// Returning is the correct emulation of a breakpoint on a machine with no kernel debugger:
+	// the KD stub eats the trap and execution carries on. Breaking for real, or ending the
+	// thread, would both be wrong -- and ending the thread is what an unbound export does.
+	state.redirect(mod, "DbgBreakPoint", [](vcpu&)
+	{
+		THREAD_LOG_WARN("DbgBreakPoint(): no debugger is attached to take it, so it is ignored");
+	});
+
+	state.redirect(mod, "DbgBreakPointWithStatus", [](vcpu&, const std::uint32_t status)
+	{
+		THREAD_LOG_WARN("DbgBreakPointWithStatus(0x{:X}): no debugger is attached to take it, "
+			"so it is ignored", status);
+	});
+
+	// The sanctioned way to re-read the flag. It has to move the global as well as return the
+	// answer, or a driver that zeroed the global itself to probe is left believing its own poke.
+	const auto not_present = mod.find_symbol("KdDebuggerNotPresent").value_or(0);
+
+	state.redirect(mod, "KdRefreshDebuggerNotPresent", [not_present](vcpu& cpu) -> bool
+	{
+		if (not_present)
+			cpu.curr_addr_space()->write_mem<std::uint8_t>(not_present, 1);
+
+		THREAD_LOG_INFO("KdRefreshDebuggerNotPresent() -> 1");
+
+		return true;
+	});
+
+	// Not STATUS_SUCCESS. A driver told the debugger was enabled, that then reads
+	// KdDebuggerEnabled and finds 0, has caught the kernel contradicting itself.
+	state.redirect(mod, "KdEnableDebugger", [](vcpu&) -> NTSTATUS
+	{
+		THREAD_LOG_WARN("KdEnableDebugger(): there is no debugger here to enable");
+		return STATUS_DEBUGGER_INACTIVE;
+	});
+
+	state.redirect(mod, "KdDisableDebugger", [](vcpu&) -> NTSTATUS
+	{
+		THREAD_LOG_WARN("KdDisableDebugger(): there is no debugger here to disable");
+		return STATUS_DEBUGGER_INACTIVE;
+	});
+
 	state.redirect(mod, "DbgSetDebugPrintCallback",
 		[](vcpu&, const addr_t debug_print_callback, const bool enable) -> NTSTATUS
 		{

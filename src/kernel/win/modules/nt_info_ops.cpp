@@ -15,17 +15,6 @@ namespace
 // win_ticks counts in ten million a second, so a counter delta and a time delta need no scaling.
 constexpr std::int64_t perf_frequency = 10'000'000;
 
-// NT's default; a driver divides by it, so it has to be non-zero and plausible.
-constexpr std::uint32_t clock_increment_100ns = 156250;
-
-// A KAFFINITY names one group's worth of processors, and a group holds 64.
-std::uint64_t affinity_mask(const std::size_t count)
-{
-	return count >= processor_group_size
-		? ~std::uint64_t{0}
-		: (std::uint64_t{1} << count) - 1;
-}
-
 }
 
 void modules::register_ntoskrnl_info_ops(win_kernel_state& state, proc_module& mod)

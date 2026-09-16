@@ -54,6 +54,11 @@ inline _DRIVER_OBJECT make_default_driver_object(const driver_object_params& p)
 	return drv;
 }
 
+// What a service key's Type and Start say about a driver loaded the way this one is.
+inline constexpr std::uint32_t service_kernel_driver = 1;
+inline constexpr std::uint32_t service_demand_start  = 3;
+inline constexpr std::uint32_t service_error_normal  = 1;
+
 // A service name is the last component of its registry key, so the two are built from one name.
 inline constexpr std::u16string_view driver_name_prefix = u"\\Driver\\";
 inline constexpr std::u16string_view driver_services_key =

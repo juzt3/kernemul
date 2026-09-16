@@ -5,6 +5,7 @@
 #include "exception.hpp"
 #include "defs.hpp"
 #include "modules/ntoskrnl.hpp"
+#include "boot_seed.hpp"
 #include "registry.hpp"
 #include "filesystem.hpp"
 #include "ethread.hpp"
@@ -54,6 +55,21 @@ struct win_kernel_state : kernel_state
 
 	std::int64_t boot_time = static_cast<std::int64_t>(win_system_time());
 
+	// Read out of the mapped ntoskrnl rather than hardcoded: guest_fs_dir is a build time switch
+	// across image sets that are already different builds, so the image is the only authority.
+	std::uint32_t nt_build_number = default_build_number;
+
+	// ntoskrnl globals whose value is not knowable until every cpu exists. Resolved in the
+	// constructor because the module is not kept anywhere after that; written later.
+	struct late_global_addrs
+	{
+		addr_t ki_processor_block = 0;
+		addr_t ke_number_processors = 0;
+		addr_t ke_active_processors = 0;
+	};
+
+	late_global_addrs late_globals;
+
 	// The guest's lists live in guest memory; a push rewrites the head and the old tail.
 	std::mutex list_mtx_;
 
@@ -72,6 +88,16 @@ struct win_kernel_state : kernel_state
 
 		if (ntoskrnl)
 		{
+			// Before any other module maps, not after. module_add_cb returns early while this
+			// list has no address, so a module mapped ahead of it is simply never recorded --
+			// which used to leave PsLoadedModuleList holding ntoskrnl alone.
+			if (const auto ps_list = ntoskrnl->find_export("PsLoadedModuleList"))
+			{
+				loaded_module_list = loaded_module_list_t(space, *ps_list);
+				loaded_module_list.init();
+				sys_proc->module_add_cb(*ntoskrnl);
+			}
+
 			map_redirect_module("fltmgr.sys", modules::register_fltmgr);
 			map_redirect_module("cng.sys", modules::register_cng);
 			map_redirect_module("ci.dll", modules::register_ci);
@@ -79,13 +105,6 @@ struct win_kernel_state : kernel_state
 			map_redirect_module("tbs.sys", modules::register_tbs);
 			map_redirect_module("tdi.sys", modules::register_tdi);
 			map_redirect_module("win32k.sys", modules::register_win32k);
-
-			if (const auto ps_list = ntoskrnl->find_export("PsLoadedModuleList"))
-			{
-				loaded_module_list = loaded_module_list_t(space, *ps_list);
-				loaded_module_list.init();
-				sys_proc->module_add_cb(*ntoskrnl);
-			}
 
 			if (const auto ps_active = ntoskrnl->find_symbol("PsActiveProcessHead"))
 			{
@@ -103,12 +122,20 @@ struct win_kernel_state : kernel_state
 			}
 
 			build_syscall_table(*ntoskrnl);
+
+			// Last in the block: it reads NtBuildNumber, which both the KUSER_SHARED_DATA write
+			// below and the registry's CurrentBuildNumber then have to agree with.
+			modules::init_ntoskrnl_globals(*this, *ntoskrnl);
 		}
+
+		win::seed_registry(*this);
+		win::seed_filesystem(*this);
 
 		space.mmu_->map_virt(space, kuser_shared_data_kernel_va,
 			sizeof(_KUSER_SHARED_DATA), prot_rw | prot_supervisor);
 		kuser_shared_data = emu_object<_KUSER_SHARED_DATA>(space, kuser_shared_data_kernel_va);
 		kuser_shared_data.write(make_default_kuser_shared_data(1));
+		kuser_shared_data.field(&_KUSER_SHARED_DATA::NtBuildNumber).write(nt_build_number);
 	}
 
 	// Nothing in a mapped module is ever executed, so the imports are not resolved either.
@@ -152,17 +179,43 @@ struct win_kernel_state : kernel_state
 			LOG_ERR("neither {} nor {} is in {}", nt, zw, mod.name);
 	}
 
+	// Named for the half it covers rather than for its type: 'addr_space' is also a type this
+	// class takes by reference, and a member function of that name would shadow it.
+	[[nodiscard]] addr_space& kernel_space() const { return *emu_->default_addr_space(); }
+
 	void set_emulator(windows_emulator* e) { emulator_ = e; }
 	[[nodiscard]] windows_emulator* emulator() const noexcept { return emulator_; }
 
 	// KUSER_SHARED_DATA is built before any cpu exists, so its count starts as a placeholder.
+	// So do ntoskrnl's two copies of the same fact, which is why they are finished here too.
 	void publish_processor_count(const std::size_t processors)
 	{
-		if (!kuser_shared_data)
-			return;
+		if (kuser_shared_data)
+			kuser_shared_data.field(&_KUSER_SHARED_DATA::ActiveProcessorCount)
+				.write(static_cast<std::uint32_t>(processors));
 
-		kuser_shared_data.field(&_KUSER_SHARED_DATA::ActiveProcessorCount)
-			.write(static_cast<std::uint32_t>(processors));
+		auto& space = kernel_space();
+
+		// One byte, deliberately. Whether this global is a CCHAR or a ULONG has moved between
+		// wdk versions, and the image zero initialises it either way -- so writing just the low
+		// byte is correct under both readings, and the count is never above 255.
+		if (late_globals.ke_number_processors)
+		{
+			space.write_mem<std::uint8_t>(late_globals.ke_number_processors,
+				static_cast<std::uint8_t>(std::min<std::size_t>(processors, 255)));
+
+			LOG_INFO("KeNumberProcessors at 0x{:X} = {}",
+				late_globals.ke_number_processors, processors);
+		}
+
+		if (late_globals.ke_active_processors)
+		{
+			space.write_mem<std::uint64_t>(late_globals.ke_active_processors,
+				affinity_mask(processors));
+
+			LOG_INFO("KeActiveProcessors at 0x{:X} = 0x{:X}",
+				late_globals.ke_active_processors, affinity_mask(processors));
+		}
 	}
 
 	void build_syscall_table(const proc_module& ntoskrnl)
@@ -281,8 +334,28 @@ struct win_kernel_state : kernel_state
 
 		emu_object<_DRIVER_OBJECT> obj(space, body, std::string(mod.name));
 
-		auto reg_path = win::allocate_unicode_string(space,
-			std::u16string(driver_services_key) + std::u16string(service_name), "RegistryPath");
+		const std::u16string reg_path_str =
+			std::u16string(driver_services_key) + std::u16string(service_name);
+
+		auto reg_path = win::allocate_unicode_string(space, reg_path_str, "RegistryPath");
+
+		// DriverEntry is handed this path, so the key behind it has to exist -- otherwise the
+		// first thing a driver does with its own argument is fail to open it.
+		{
+			const auto key = reg.create_key(win_registry::normalize_path(reg_path_str));
+			const auto image = std::string(system32_dir_narrow) + std::string(mod.name);
+
+			key->set_string("ImagePath", image);
+			key->set_string("DisplayName", std::string(mod.name));
+			key->set_dword("Type", service_kernel_driver);
+			key->set_dword("Start", service_demand_start);
+			key->set_dword("ErrorControl", service_error_normal);
+
+			// Where a minifilter looks for its altitude. Empty of instances is fine; absent is
+			// not, because FltRegisterFilter treats a missing key as a setup failure.
+			static_cast<void>(reg.create_key(
+				win_registry::normalize_path(reg_path_str) + "/instances"));
+		}
 
 		LOG_INFO("driver object for {} at 0x{:X} (section=0x{:X}, registry path at 0x{:X})",
 			mod.name, obj.address(), ldr_entry(mod.addr), reg_path.address());
@@ -354,14 +427,30 @@ struct win_kernel_state : kernel_state
 		return 0;
 	}
 
+	// The pdb records no size for a data symbol, so the array bound is not discoverable. One
+	// processor group is the cap, and nothing here creates anywhere near that many cpus.
+	static constexpr std::size_t ki_processor_block_max = processor_group_size;
+
 	// Called in the order cpus are added: that order makes a block's index the cpu's own id.
 	win_per_cpu& init_per_cpu(vcpu& cpu)
 	{
-		auto& pcpu = per_cpu_.emplace_back(*emu_->default_addr_space(),
-			static_cast<std::uint32_t>(cpu.id()));
+		auto& space = kernel_space();
+
+		auto& pcpu = per_cpu_.emplace_back(space, static_cast<std::uint32_t>(cpu.id()));
 
 		kuser_shared_data.field(&_KUSER_SHARED_DATA::ActiveProcessorCount)
 			.write(static_cast<std::uint32_t>(per_cpu_.size()));
+
+		// The array the guest walks to reach a cpu other than the one it is on.
+		if (late_globals.ki_processor_block && cpu.id() < ki_processor_block_max)
+		{
+			const auto slot = late_globals.ki_processor_block + cpu.id() * sizeof(addr_t);
+
+			space.write_mem<addr_t>(slot, pcpu.prcb());
+
+			LOG_INFO("KiProcessorBlock[{}] at 0x{:X} = 0x{:X} (read back 0x{:X})",
+				cpu.id(), slot, pcpu.prcb(), space.read_mem<addr_t>(slot));
+		}
 
 		return pcpu;
 	}

@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <set>
 #include <span>
 #include <string>
 #include <string_view>
@@ -41,6 +42,13 @@ public:
 	[[nodiscard]] bool exists(std::string_view path) const;
 	[[nodiscard]] bool dir_exists(std::string_view path) const;
 
+	// A directory holding no files is otherwise unrepresentable: a directory is normally
+	// inferred from the files under it, and an empty one has none to infer it from.
+	void create_directory(std::string_view path);
+
+	// The same file under a second name, sharing its bytes rather than copying them.
+	bool link(std::string_view from, std::string_view to);
+
 	[[nodiscard]] std::vector<dir_entry> list_dir(std::string_view path) const;
 
 	bool load_file(const std::filesystem::path& host_path, std::string_view virtual_path);
@@ -50,4 +58,8 @@ public:
 
 private:
 	std::unordered_map<std::string, std::shared_ptr<win_file>> files_;
+
+	// Only the ones nothing else implies. A directory with files under it is still inferred,
+	// so this does not have to be kept in step with every create().
+	std::set<std::string> dirs_;
 };
