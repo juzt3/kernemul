@@ -24,6 +24,7 @@ if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
 	set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS cmake.toml)
 endif()
 
+# vcpkg settings
 project(kernemul
 	LANGUAGES
 		CXX
@@ -89,39 +90,46 @@ FetchContent_Declare(unicorn
 )
 FetchContent_MakeAvailable(unicorn)
 
-# Zydis is only needed by the WHP backend, which decodes the instruction behind
-# a memory exit to work out which address it touched. Declared here rather than
-# in [fetch-content] so the tools and examples can be turned off before it is
-# made available.
-if(KERNEMUL_BACKEND STREQUAL "whp")
-	set(ZYDIS_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
-	set(ZYDIS_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-
-	message(STATUS "Fetching zydis...")
-	FetchContent_Declare(zydis
-		GIT_REPOSITORY "https://github.com/zyantific/zydis"
-		GIT_TAG v4.1.0
+if(CMKR_ROOT_PROJECT AND NOT CMKR_DISABLE_VCPKG)
+	include(FetchContent)
+	# Fix warnings about DOWNLOAD_EXTRACT_TIMESTAMP
+	if(POLICY CMP0135)
+		cmake_policy(SET CMP0135 NEW)
+	endif()
+	message(STATUS "Fetching vcpkg (2026.07.29)...")
+	FetchContent_Declare(vcpkg
+		URL
+			"https://github.com/microsoft/vcpkg/archive/refs/tags/2026.07.29.tar.gz"
+		SUBBUILD_DIR
+			"CMakeFiles/vcpkg-subbuild"
+		SOURCE_DIR
+			vcpkg
+		BINARY_DIR
+			"CMakeFiles/vcpkg-build"
 	)
-	FetchContent_MakeAvailable(zydis)
+	FetchContent_MakeAvailable(vcpkg)
+
+	if(CMAKE_HOST_SYSTEM_NAME STREQUAL Darwin AND CMAKE_OSX_ARCHITECTURES STREQUAL "")
+		set(CMAKE_OSX_ARCHITECTURES ${CMAKE_HOST_SYSTEM_PROCESSOR} CACHE STRING "" FORCE)
+	endif()
+	include("${vcpkg_SOURCE_DIR}/scripts/buildsystems/vcpkg.cmake")
 endif()
 
 # Packages
+find_package(Boost REQUIRED CONFIG
+	COMPONENTS
+		beast
+)
+
 find_package(OpenSSL REQUIRED)
 
-include(FetchContent)
+find_package(spdlog REQUIRED CONFIG)
 
-# Fix warnings about DOWNLOAD_EXTRACT_TIMESTAMP
-if(POLICY CMP0135)
-	cmake_policy(SET CMP0135 NEW)
+if(KERNEMUL_BACKEND STREQUAL "whp") # whp
+	find_package(zydis REQUIRED CONFIG)
+
 endif()
-message(STATUS "Fetching spdlog (v1.x)...")
-FetchContent_Declare(spdlog
-	GIT_REPOSITORY
-		"https://github.com/gabime/spdlog"
-	GIT_TAG
-		v1.x
-)
-FetchContent_MakeAvailable(spdlog)
+include(FetchContent)
 
 message(STATUS "Fetching raw_pdb (main)...")
 FetchContent_Declare(raw_pdb
@@ -131,13 +139,6 @@ FetchContent_Declare(raw_pdb
 		main
 )
 FetchContent_MakeAvailable(raw_pdb)
-
-message(STATUS "Fetching Boost...")
-FetchContent_Declare(Boost
-	URL
-		"https://github.com/boostorg/boost/releases/download/boost-1.86.0/boost-1.86.0-cmake.tar.xz"
-)
-FetchContent_MakeAvailable(Boost)
 
 # Target: kernemul
 set(kernemul_SOURCES
@@ -398,7 +399,7 @@ endif()
 
 if(KERNEMUL_BACKEND STREQUAL "whp") # whp
 	target_link_libraries(kernemul PRIVATE
-		Zydis
+		Zydis::Zydis
 		WinHvPlatform
 	)
 endif()
