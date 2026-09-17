@@ -162,23 +162,24 @@ private:
 		return (static_cast<std::uint64_t>(cpu.id()) << 32) | id;
 	}
 
-	// A driver asks the same handful thousands of times, so only the first of each is logged.
-	bool first_sight(const char kind, const std::uint32_t id)
+	// Leaves only: a driver asks for the same handful thousands of times. Every msr access is
+	// logged, because which register is touched how often is the interesting part there.
+	bool first_leaf(const std::uint32_t leaf)
 	{
 		std::scoped_lock lock(mtx_);
-		return seen_.insert((static_cast<std::uint64_t>(kind) << 32) | id).second;
+		return seen_leaves_.insert(leaf).second;
 	}
 
 	std::mutex mtx_;
 	std::unordered_map<std::uint64_t, std::uint64_t> msrs_;
-	std::unordered_set<std::uint64_t> seen_;
+	std::unordered_set<std::uint32_t> seen_leaves_;
 };
 
 bool cpu_identity::on_cpuid(vcpu& cpu)
 {
 	const auto leaf = reg32(cpu, x86::rax);
 
-	if (first_sight('c', leaf))
+	if (first_leaf(leaf))
 		LOG_INFO("cpu {}: cpuid leaf 0x{:X}, subleaf 0x{:X}",
 			cpu.id(), leaf, reg32(cpu, x86::rcx));
 
@@ -278,16 +279,20 @@ bool cpu_identity::on_rdmsr(vcpu& cpu)
 	const auto id = reg32(cpu, x86::rcx);
 	const auto value = read(cpu, id);
 
-	if (first_sight('r', id))
+	if (value)
 	{
-		if (value)
-			LOG_INFO("cpu {}: rdmsr 0x{:X} -> 0x{:X}", cpu.id(), id, *value);
-		else
-			LOG_INFO("cpu {}: rdmsr 0x{:X} -> the cpu's own answer", cpu.id(), id);
+		LOG_INFO("cpu {}: rdmsr 0x{:X} -> 0x{:X}", cpu.id(), id, *value);
 	}
+	else
+	{
+		// Declining hands it to the cpu, which faults on everything it does not model itself.
+		// A guest probing for a hypervisor's registers is looking for exactly this, so it is
+		// worth seeing every time rather than once.
+		LOG_WARN("cpu {}: rdmsr 0x{:X}: not in this cpu's msr space, so the cpu answers -- "
+			"#GP unless it models the register", cpu.id(), id);
 
-	if (!value)
 		return false;
+	}
 
 	cpu.reg(x86::rax, *value & 0xFFFFFFFF);
 	cpu.reg(x86::rdx, *value >> 32);
@@ -360,10 +365,15 @@ bool cpu_identity::on_wrmsr(vcpu& cpu)
 	const auto value = (static_cast<std::uint64_t>(reg32(cpu, x86::rdx)) << 32)
 		| reg32(cpu, x86::rax);
 
-	if (first_sight('w', id))
-		LOG_INFO("cpu {}: wrmsr 0x{:X} <- 0x{:X}", cpu.id(), id, value);
+	const auto taken = write(cpu, id, value);
 
-	return write(cpu, id, value);
+	if (taken)
+		LOG_INFO("cpu {}: wrmsr 0x{:X} <- 0x{:X}", cpu.id(), id, value);
+	else
+		LOG_WARN("cpu {}: wrmsr 0x{:X} <- 0x{:X}: declined, so the cpu answers -- #GP unless "
+			"it models the register", cpu.id(), id, value);
+
+	return taken;
 }
 
 }
