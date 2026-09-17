@@ -830,7 +830,7 @@ void modules::register_ntoskrnl_misc_ops(win_kernel_state& state, proc_module& m
 			{
 				space.read_mem(context, buf + dump_context_off, sizeof(_CONTEXT));
 				put64(dump_context_pc_off,
-					space.read_mem<std::uint64_t>(context + offsetof(_CONTEXT, Rip)));
+					space.read_mem<std::uint64_t>(context + win_target::context_pc_offset));
 			}
 
 			put32(3840, static_cast<std::uint32_t>(win::status_breakpoint));

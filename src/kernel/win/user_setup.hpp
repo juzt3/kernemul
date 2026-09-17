@@ -5,6 +5,7 @@
 #include "defs.hpp"
 #include "../../target.hpp"
 #include <algorithm>
+#include <cstddef>
 #include <string>
 
 namespace win_target
@@ -15,6 +16,10 @@ namespace win_target
 
 	// ARM64 has no recursive self map to name, so nothing here reports one.
 	inline constexpr addr_t pte_base = 0;
+
+	// _CONTEXT calls the program counter something different on each arch, and a crash dump
+	// repeats it outside the captured context, where the reader looks for it at a fixed offset.
+	inline constexpr std::size_t context_pc_offset = offsetof(_CONTEXT, Pc);
 #else
 	inline constexpr std::uint16_t image_machine          = 0x8664; // AMD64
 	inline constexpr std::uint16_t processor_architecture = 9;      // AMD64
@@ -22,6 +27,8 @@ namespace win_target
 	// MmPteBase: the pml4 slot that points at the pml4, as a virtual address. The slot itself
 	// is x86::self_map_pml4_index, which is what the mmu actually writes.
 	inline constexpr addr_t pte_base = 0xFFFFF08000000000;
+
+	inline constexpr std::size_t context_pc_offset = offsetof(_CONTEXT, Rip);
 #endif
 }
 
