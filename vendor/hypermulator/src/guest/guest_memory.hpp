@@ -33,5 +33,10 @@ namespace hm
 	{
 		void* host_buf;
 		mem_prot prot;
+
+		// A range is mapped with one host allocation and one WHvMapGpaRange, then recorded a page
+		// at a time so a hook can still re-protect a single page. Only the page the allocation
+		// starts at owns it, so unmapping frees it once rather than once per page.
+		bool owns_host_buf = false;
 	};
 }

@@ -111,31 +111,35 @@ bool hm::partition::map_phys_mem(const addr_t phys_addr, const std::size_t size,
 
 	for (std::size_t i = 0; i < size; i += page_size)
 	{
-		const addr_t page_phys_addr = phys_addr + i;
-
-		if (phys_page_mappings_.contains(page_phys_addr))
+		if (phys_page_mappings_.contains(phys_addr + i))
 		{
 			return false;
 		}
+	}
 
-		void* const page_buffer = aligned_mem_alloc(page_size);
+	void* const buffer = aligned_mem_alloc(size);
 
-		if (!page_buffer)
-		{
-			return false;
-		}
+	if (!buffer)
+	{
+		return false;
+	}
 
-		if (FAILED(WHvMapGpaRange(
-			handle_, page_buffer,
-			page_phys_addr, page_size,
-			static_cast<WHV_MAP_GPA_RANGE_FLAGS>(prot))))
-		{
-			return false;
-		}
+	if (FAILED(WHvMapGpaRange(
+		handle_, buffer,
+		phys_addr, size,
+		static_cast<WHV_MAP_GPA_RANGE_FLAGS>(prot))))
+	{
+		mem_free(buffer);
 
-		phys_page_mappings_[page_phys_addr] = mapped_mem {
-			.host_buf = page_buffer,
-			.prot = static_cast<mem_prot>(prot)
+		return false;
+	}
+
+	for (std::size_t i = 0; i < size; i += page_size)
+	{
+		phys_page_mappings_[phys_addr + i] = mapped_mem {
+			.host_buf = static_cast<std::uint8_t*>(buffer) + i,
+			.prot = static_cast<mem_prot>(prot),
+			.owns_host_buf = (i == 0)
 		};
 	}
 
@@ -167,7 +171,11 @@ bool hm::partition::unmap_phys_mem(const addr_t phys_addr, const std::size_t siz
 
 		const mapped_mem& mapping = it->second;
 
-		mem_free(mapping.host_buf);
+		// Freed by the page the range's allocation starts at, and by no other.
+		if (mapping.owns_host_buf)
+		{
+			mem_free(mapping.host_buf);
+		}
 
 		phys_page_mappings_.erase(it);
 	}
