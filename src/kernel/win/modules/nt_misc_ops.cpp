@@ -9,6 +9,7 @@
 #include "../../../emu/guest_call.hpp"
 #include "../../../util/log.hpp"
 #include "../../../util/string.hpp"
+#include <algorithm>
 #include <cstring>
 #include <vector>
 
@@ -45,6 +46,8 @@ struct callback_host final : win_object
 struct callback_registration_host final : win_object
 {
 	addr_t callback_object_addr = 0;
+	addr_t function = 0;
+	addr_t context = 0;
 };
 
 // A triage dump: signature, the machine that made it, and where the consumer looks for each
@@ -233,6 +236,8 @@ void modules::register_ntoskrnl_misc_ops(win_kernel_state& state, proc_module& m
 
 			auto host = std::make_shared<callback_registration_host>();
 			host->callback_object_addr = callback_object_addr;
+			host->function = callback_function;
+			host->context = callback_context;
 
 			const std::uint8_t body[sizeof(addr_t)] = {};
 			const auto addr = st->objs.create_object(0, body, sizeof(body),
@@ -250,6 +255,48 @@ void modules::register_ntoskrnl_misc_ops(win_kernel_state& state, proc_module& m
 				callback_object_addr, callback_function, callback_context, addr);
 
 			return addr;
+		});
+
+	state.redirect(mod, "ExUnregisterCallback",
+		[st](vcpu&, const addr_t callback_registration)
+		{
+			const auto host = st->objs.get_object<callback_registration_host>(callback_registration);
+
+			if (!host || !host->callback_object_addr)
+			{
+				THREAD_LOG_WARN("ExUnregisterCallback: 0x{:X} is not a live callback registration",
+					callback_registration);
+				return;
+			}
+
+			const auto object_addr = host->callback_object_addr;
+			const auto object = st->objs.get_object<callback_host>(object_addr);
+
+			if (!object)
+			{
+				THREAD_LOG_WARN("ExUnregisterCallback: 0x{:X} outlived its callback object 0x{:X}",
+					callback_registration, object_addr);
+				return;
+			}
+
+			auto& registrations = object->registrations;
+
+			const auto it = std::ranges::find_if(registrations,
+				[&host](const callback_host::registration& entry)
+				{
+					return entry.function == host->function && entry.context == host->context;
+				});
+
+			if (it != registrations.end())
+				registrations.erase(it);
+
+			// Nothing here frees an object body, so a spent registration is marked rather than
+			// destroyed -- otherwise unregistering twice would unregister someone else.
+			host->callback_object_addr = 0;
+
+			THREAD_LOG_INFO("ExUnregisterCallback(0x{:X}): function 0x{:X} off object 0x{:X}, "
+				"{} left", callback_registration, host->function, object_addr,
+				registrations.size());
 		});
 
 	state.redirect(mod, "IoCreateDevice",
@@ -423,6 +470,18 @@ void modules::register_ntoskrnl_misc_ops(win_kernel_state& state, proc_module& m
 			THREAD_LOG_INFO("IoRegisterShutdownNotification(0x{:X})", device_object.address());
 
 			return STATUS_SUCCESS;
+		});
+
+	state.redirect(mod, "IoUnregisterShutdownNotification",
+		[](vcpu&, emu_object<_DEVICE_OBJECT> device_object)
+		{
+			if (!device_object)
+				return;
+
+			auto flags = device_object.field(&_DEVICE_OBJECT::Flags);
+			flags.write(flags.read() & ~do_shutdown_registered);
+
+			THREAD_LOG_INFO("IoUnregisterShutdownNotification(0x{:X})", device_object.address());
 		});
 
 	state.redirect(mod, "IoRegisterPlugPlayNotification",
