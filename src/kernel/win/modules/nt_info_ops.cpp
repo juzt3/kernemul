@@ -216,16 +216,23 @@ void modules::register_ntoskrnl_info_ops(win_kernel_state& state, proc_module& m
 			return addr.value_or(0);
 		});
 
-	// The documented seeded generator is gone from this build: it draws from ExGenRandom instead.
+	// The caller's seed is the whole state: the same seed gives the same sequence, which is what
+	// a caller that saves one to reproduce a run is relying on. Drawing from the host instead
+	// would make every run of the same guest differ for a reason the guest never chose.
 	state.redirect(mod, "RtlRandomEx",
 		[](vcpu&, emu_object<std::uint32_t> seed) -> std::uint32_t
 		{
-			static std::mt19937 engine{std::random_device{}()};
+			if (!seed)
+				return 0;
 
-			const auto value = engine() & 0x7FFFFFFF;
+			constexpr std::uint32_t multiplier = 0x7FFFFFED;
+			constexpr std::uint32_t increment = 0x7FFFFFC3;
+			constexpr std::uint32_t modulus = 0x7FFFFFFF;
 
-			if (seed)
-				seed.write(value);
+			const auto value = static_cast<std::uint32_t>(
+				(static_cast<std::uint64_t>(seed.read()) * multiplier + increment) % modulus);
+
+			seed.write(value);
 
 			THREAD_LOG_INFO("RtlRandomEx(seed=0x{:X}) -> {}", seed.address(), value);
 
