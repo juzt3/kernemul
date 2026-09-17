@@ -13,8 +13,24 @@ void modules::register_ntoskrnl_thread_ops(win_kernel_state& state, proc_module&
 	// Nothing of this stub is executed; threads are given it as their return address.
 	state.redirect(mod, kernel_thread_startup, [](vcpu& cpu)
 	{
-		if (const auto t = cpu.thread())
+		const auto t = cpu.thread();
+
+		if (t)
+		{
+			// A system thread that returns rather than calling PsTerminateSystemThread exits
+			// with whatever it returned -- and for a driver's entry thread that is DriverEntry's
+			// status, which is otherwise never seen.
+			const auto status = static_cast<NTSTATUS>(
+				cpu.emu()->call_conv()->read_ret(cpu));
+
+			if (const auto wt = std::dynamic_pointer_cast<win_thread>(t))
+				wt->set_exit_status(status);
+
+			THREAD_LOG_INFO("thread {} returned, status=0x{:X}", t->id(),
+				static_cast<std::uint32_t>(status));
+
 			t->finish();
+		}
 
 		cpu.stop();
 	});
