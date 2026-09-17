@@ -79,32 +79,25 @@ public:
 		return emu_->cpus();
 	}
 
-	static constexpr auto default_thread_runtime = std::chrono::milliseconds(300);
-
-	// A thread that never returns would own its cpu forever, so the waiting thread keeps time.
-	void run_all(const std::chrono::milliseconds runtime = default_thread_runtime)
+	// Cooperative: a thread gives its cpu up where it asks to -- a sleep, a yield, or its own end
+	// -- and nothing takes it away in between. Stopping a cpu on a timer instead lands on whatever
+	// instruction the clock fell on, which is enough to make the same run come out differently.
+	//
+	// todo: a thread that spins without ever calling out keeps its cpu for good. Preempting it
+	// wants a switch the guest cannot tell from its own, not a stop part way through one.
+	void run_all()
 	{
-		std::atomic<std::size_t> live{cpus().size()};
 		std::vector<std::thread> hosts;
 		hosts.reserve(cpus().size());
 
 		for (const auto& cpu : cpus())
 		{
-			hosts.emplace_back([this, cpu, &live]
+			hosts.emplace_back([this, cpu]
 			{
 				set_log_cpu(cpu.get());
 
 				scheduler_.run(*cpu);
-				--live;
 			});
-		}
-
-		while (live.load())
-		{
-			std::this_thread::sleep_for(runtime);
-
-			for (const auto& cpu : cpus())
-				cpu->try_stop();
 		}
 
 		for (auto& host : hosts)
