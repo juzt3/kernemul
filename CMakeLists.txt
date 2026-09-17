@@ -171,6 +171,8 @@ set(kernemul_SOURCES
 	"src/emu/defs.hpp"
 	"src/emu/emu.hpp"
 	"src/emu/guest_call.hpp"
+	"src/emu/guest_emu.cpp"
+	"src/emu/guest_emu.hpp"
 	"src/emu/mmu.cpp"
 	"src/emu/mmu.hpp"
 	"src/emu/object.hpp"
