@@ -4,10 +4,12 @@
 #include "../pool.hpp"
 #include "../status.hpp"
 #include "../string.hpp"
+#include "../thread.hpp"
 #include "../types.hpp"
 #include "../../../emu/guest_call.hpp"
 #include "../../../util/log.hpp"
 #include "../../../util/string.hpp"
+#include <cstring>
 #include <vector>
 
 namespace
@@ -44,6 +46,15 @@ struct callback_registration_host final : win_object
 {
 	addr_t callback_object_addr = 0;
 };
+
+// A triage dump: signature, the machine that made it, and where the consumer looks for each
+// part. Recovered from what reads one back, so the offsets are named only where they are used.
+constexpr std::uint32_t dump_signature = 0x45474150;   // 'PAGE'
+constexpr std::uint32_t dump_valid_dump = 0x34365544;  // 'DU64'
+constexpr std::uint32_t dump_end_signature = 0x444D5054;
+constexpr std::uint32_t dump_buffer_size = 0x40000;
+constexpr std::size_t dump_context_off = 840;
+constexpr std::size_t dump_context_pc_off = 3856;
 
 // A WDK enum; the kernel does not store one, so it is not in the PDB.
 enum token_information_class : std::uint32_t
@@ -692,17 +703,104 @@ void modules::register_ntoskrnl_misc_ops(win_kernel_state& state, proc_module& m
 		});
 
 	// A triage dump is undocumented, and a length claiming the buffer was filled is worse.
+	// A triage dump header, which the caller reads back rather than writes anywhere. Every
+	// offset below is recovered from what a consumer expects to find, not from a published
+	// layout, which is why they are numbers and not a struct.
 	state.redirect(mod, "KeCapturePersistentThreadState",
-		[](vcpu&, const addr_t context, const addr_t thread, const std::uint32_t bugcheck_code,
-			const std::uint64_t p1, const std::uint64_t p2, const std::uint64_t p3,
-			const std::uint64_t p4, const addr_t buffer) -> std::uint32_t
+		[st, m = &mod](vcpu& cpu, const addr_t context, const addr_t thread,
+			const std::uint32_t bugcheck_code, const std::uint64_t p1, const std::uint64_t p2,
+			const std::uint64_t p3, const std::uint64_t p4, const addr_t buffer) -> std::uint32_t
 		{
-			THREAD_LOG_WARN("KeCapturePersistentThreadState(context=0x{:X}, thread=0x{:X}, "
-				"bugcheck=0x{:X}, params=[0x{:X}, 0x{:X}, 0x{:X}, 0x{:X}], buffer=0x{:X}): "
-				"nothing here writes a triage dump -> 0 bytes",
+			THREAD_LOG_INFO("KeCapturePersistentThreadState(context=0x{:X}, thread=0x{:X}, "
+				"bugcheck=0x{:X}, params=[0x{:X}, 0x{:X}, 0x{:X}, 0x{:X}], buffer=0x{:X})",
 				context, thread, bugcheck_code, p1, p2, p3, p4, buffer);
 
-			return 0;
+			if (!buffer)
+				return 0;
+
+			auto& space = *cpu.curr_addr_space();
+
+			std::vector<std::uint8_t> dump(dump_buffer_size, 0);
+			auto* const buf = dump.data();
+
+			const auto put32 = [buf](const std::size_t at, const std::uint32_t v)
+			{
+				std::memcpy(buf + at, &v, sizeof(v));
+			};
+
+			const auto put64 = [buf](const std::size_t at, const std::uint64_t v)
+			{
+				std::memcpy(buf + at, &v, sizeof(v));
+			};
+
+			put32(0, dump_signature);
+			put32(4, dump_valid_dump);
+			put32(12, st->nt_build_number);
+
+			const auto owner = thread
+				? thread
+				: (cpu.thread() ? std::dynamic_pointer_cast<win_thread>(cpu.thread())->ethread()
+					.address() : 0);
+
+			if (owner)
+			{
+				const auto process = space.read_mem<addr_t>(owner
+					+ offsetof(_KTHREAD, ApcState) + offsetof(_KAPC_STATE, Process));
+
+				if (process)
+					put64(16, space.read_mem<std::uint64_t>(process
+						+ offsetof(_KPROCESS, DirectoryTableBase)) & ~0xFFFull);
+			}
+
+			if (const auto pfn = m->find_symbol("MmPfnDatabase"))
+				put64(24, space.read_mem<std::uint64_t>(*pfn));
+
+			put64(32, st->loaded_module_list.address());
+			put64(40, st->active_process_list.address());
+
+			put32(48, win_target::image_machine);
+			put32(52, 1);
+
+			put32(56, bugcheck_code);
+			put64(64, p1);
+			put64(72, p2);
+			put64(80, p3);
+			put64(88, p4);
+
+			if (context)
+			{
+				space.read_mem(context, buf + dump_context_off, sizeof(_CONTEXT));
+				put64(dump_context_pc_off,
+					space.read_mem<std::uint64_t>(context + offsetof(_CONTEXT, Rip)));
+			}
+
+			put32(3840, static_cast<std::uint32_t>(win::status_breakpoint));
+			put32(3844, 1);
+			put32(3992, 4);
+			put64(4000, dump_buffer_size);
+			put32(4152, 0x82);
+			put32(4176, 24);
+
+			// Straight out of the shared page, so the dump says the same as everything else.
+			const auto shared = st->kuser_shared_data.address();
+			space.read_mem(shared + 0x14, buf + 4008, 4);
+			space.read_mem(shared + 0x18, buf + 4012, 4);
+			space.read_mem(shared + 0x08, buf + 4144, 4);
+			space.read_mem(shared + 0x0C, buf + 4148, 4);
+
+			put32(8196, dump_buffer_size);
+			put32(8200, dump_buffer_size - 4);
+			put32(8204, dump_context_off);
+			put32(8208, 3840);
+
+			put32(dump_buffer_size - 4, dump_end_signature);
+
+			space.write_mem(buffer, buf, dump.size());
+
+			THREAD_LOG_INFO("KeCapturePersistentThreadState: wrote 0x{:X} bytes to 0x{:X}",
+				dump_buffer_size, buffer);
+
+			return dump_buffer_size;
 		});
 
 	state.redirect_ntzw(mod, "TraceEvent",
