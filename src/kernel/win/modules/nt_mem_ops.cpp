@@ -5,8 +5,10 @@
 #include "../pool.hpp"
 #include "../status.hpp"
 #include "../types.hpp"
+#include "../../map.hpp"
 #include "../../../util/log.hpp"
 #include <algorithm>
+#include <span>
 #include <array>
 #include <cstring>
 #include <vector>
@@ -359,9 +361,17 @@ void modules::register_ntoskrnl_mem_ops(win_kernel_state& state, proc_module& mo
 				return STATUS_INVALID_PARAMETER;
 			}
 
-			host->size = host->file
-				? static_cast<std::uint64_t>(host->file->size())
-				: static_cast<std::uint64_t>(max_size);
+			// An image section is sized by SizeOfImage, not by the file: a driver that maps one
+			// walks it as an image, so the sections have to sit at their virtual addresses and
+			// the tail past the last one has to be there to be read.
+			if (host->is_image && host->file)
+				host->image = krnl::pe_virtual_image(host->file->data());
+
+			host->size = !host->image.empty()
+				? static_cast<std::uint64_t>(host->image.size())
+				: host->file
+					? static_cast<std::uint64_t>(host->file->size())
+					: static_cast<std::uint64_t>(max_size);
 
 			// The body carries the size at the offset a caller reads it from.
 			std::array<std::uint8_t, section_body_size> body{};
@@ -416,13 +426,14 @@ void modules::register_ntoskrnl_mem_ops(win_kernel_state& state, proc_module& mo
 			if (!base)
 				return STATUS_INSUFFICIENT_RESOURCES;
 
-			if (host->file)
-			{
-				const auto data = host->file->data();
-				const auto copied = std::min<std::size_t>(size, data.size());
+			const auto source = !host->image.empty()
+				? std::span<const std::uint8_t>(host->image)
+				: host->file ? host->file->data() : std::span<const std::uint8_t>{};
 
-				if (copied)
-					space.write_mem(base, data.data(), copied);
+			if (!source.empty())
+			{
+				const auto copied = std::min<std::size_t>(size, source.size());
+				space.write_mem(base, source.data(), copied);
 			}
 
 			if (mapped_base)

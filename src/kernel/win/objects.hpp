@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 
 struct file_host final : win_object
@@ -57,6 +58,10 @@ struct section_host final : win_object
 	std::string path;
 	std::uint64_t size = 0;
 	bool is_image = false;
+
+	// An image section's view is the file laid out at its virtual addresses, not the file as it
+	// sits on disk, so it is built once here and copied from. Empty for anything else.
+	std::vector<std::uint8_t> image;
 };
 
 struct dispatcher_host final : win_object

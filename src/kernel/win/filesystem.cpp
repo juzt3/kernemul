@@ -1,4 +1,5 @@
 #include "filesystem.hpp"
+#include "process_params.hpp"
 #include "../../util/file.hpp"
 #include "../../util/log.hpp"
 
@@ -16,6 +17,27 @@ void win_file::write(const void* buf, const std::size_t size)
 	data_.resize(size);
 	if (buf && size > 0)
 		std::memcpy(data_.data(), buf, size);
+}
+
+namespace
+{
+	constexpr std::string_view systemroot_name = "/systemroot";
+
+	// windows_dir_narrow in the spelling normalize() produces, derived rather than written out
+	// so the two cannot drift apart.
+	const std::string windows_dir_key = []
+	{
+		std::string s(windows_dir_narrow);
+
+		for (auto& c : s)
+		{
+			if (c == '\\')
+				c = '/';
+			c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+		}
+
+		return s;
+	}();
 }
 
 std::string win_filesystem::normalize(const std::string_view path)
@@ -40,6 +62,16 @@ std::string win_filesystem::normalize(const std::string_view path)
 			result.erase(0, prefix.size());
 			break;
 		}
+	}
+
+	// \SystemRoot is the one name for the windows directory that carries no drive letter, and
+	// the kernel hands it out itself: a loaded module's path reads \SystemRoot\System32\... So
+	// it has to come back to the same file the drive lettered spelling names, or a driver that
+	// takes a module path and opens it finds nothing there.
+	if (result.starts_with(systemroot_name)
+		&& (result.size() == systemroot_name.size() || result[systemroot_name.size()] == '/'))
+	{
+		result.replace(0, systemroot_name.size(), windows_dir_key);
 	}
 
 	return result;
