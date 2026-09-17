@@ -51,7 +51,10 @@ cpu_exception arch::intr_to_excp(int vector) const
 	case 3:  return cpu_exception::breakpoint;
 	case 6:  return cpu_exception::illegal_instruction;
 	case 14: return cpu_exception::page_fault;
-	default: return cpu_exception::other;
+
+	// 0 to 31 are the architecture's own faults; 32 and up are interrupts, not the os's to
+	// dispatch.
+	default: return vector >= 32 ? cpu_exception::interrupt : cpu_exception::other;
 	}
 }
 

@@ -2,6 +2,10 @@
 #
 # FetchContent re-runs PATCH_COMMAND whenever it re-checks out a dependency, and
 # a second `git apply` of the same patch fails -- so test for it first.
+#
+# PATCHES arrives joined on "|": ExternalProject splits the patch command on ";",
+# which would strand every patch but the first.
+string(REPLACE "|" ";" PATCHES "${PATCHES}")
 
 foreach(patch IN LISTS PATCHES)
 	execute_process(
