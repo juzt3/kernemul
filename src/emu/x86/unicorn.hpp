@@ -1,6 +1,7 @@
 #pragma once
 #include "../unicorn_base.hpp"
 #include "arch.hpp"
+#include "unicorn_cpu_ident.hpp"
 
 #include <cstring>
 
@@ -173,11 +174,17 @@ public:
 	}
 };
 
+// Answers CPUID out of a model rather than the host, so the cpu the guest sees is this
+// backend's to describe; it does so in unicorn_cpu_ident.cpp.
 class x86_unicorn_emu final : public unicorn_emu_base
 {
 public:
 	explicit x86_unicorn_emu(std::shared_ptr<mmu> mem, std::shared_ptr<calling_conv> call_conv = {})
-		:	unicorn_emu_base(std::make_shared<x86::arch>(), std::move(mem), std::move(call_conv)) { }
+		:	unicorn_emu_base(std::make_shared<x86::arch>(), std::move(mem), std::move(call_conv))
+	{
+		// Before any vcpu exists, which is what the hooks it installs rely on.
+		x86::install_cpu_identity(*this);
+	}
 
 protected:
 	uc_engine* open_engine() override
@@ -185,6 +192,17 @@ protected:
 		uc_engine* uc = nullptr;
 		if (uc_open(UC_ARCH_X86, UC_MODE_64, &uc) != UC_ERR_OK)
 			throw std::runtime_error("uc_open failed for x86-64");
+
+		// Unicorn's default is a Haswell whose brand string no retail cpu has carried, under an
+		// os that will not install on that generation. Same feature words, new identity. Has to
+		// be chosen before the cpu exists, so it cannot live anywhere a vcpu can reach.
+		if (uc_ctl_set_cpu_model(uc, UC_CPU_X86_RAPTORLAKE) != UC_ERR_OK)
+		{
+			uc_close(uc);
+			throw std::runtime_error("this unicorn has no RaptorLake model: the "
+				"patches/unicorn-x86-cpu-identity.patch that adds it did not apply");
+		}
+
 		return uc;
 	}
 
@@ -199,6 +217,8 @@ protected:
 		{
 		case hook_insn_t::cpuid:   return UC_X86_INS_CPUID;
 		case hook_insn_t::rdtsc:   return UC_X86_INS_RDTSC;
+		case hook_insn_t::rdmsr:   return UC_X86_INS_RDMSR;
+		case hook_insn_t::wrmsr:   return UC_X86_INS_WRMSR;
 		case hook_insn_t::syscall: return UC_X86_INS_SYSCALL;
 		default: return -1;
 		}
