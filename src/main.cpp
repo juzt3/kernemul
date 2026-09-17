@@ -5,24 +5,15 @@
 #include "util/log.hpp"
 #include "util/string.hpp"
 
+#include <algorithm>
 #include <filesystem>
+#include <limits>
 #include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
-#if defined(KERNEMUL_HAS_WHP)
-	#include "emu/x86/whp.hpp"
-
-	using guest_emu = x86_whp_emu;
-	inline constexpr std::size_t vcpu_count = 1;
-#else
-	#include "emu/unicorn.hpp"
-
-	using guest_emu = unicorn_emu;
-
-	inline constexpr std::size_t vcpu_count = 4;
-#endif
+#include "emu/guest_emu.hpp"
 
 #if defined(KERNEMUL_ARCH_ARM64)
 	#include "kernel/win/arm64_win.hpp"
@@ -82,7 +73,10 @@ std::shared_ptr<thread> setup_driver(guest::win_emulator& win,
 		return {};
 	}
 
-	const auto service = widen_string(std::filesystem::path(name).stem().string());
+	// Up to the first dot, not the last: a variant build is named <service>.<variant>.sys, and
+	// stem() would make vgk.calvin.sys a service called "vgk.calvin" that no driver expects.
+	const auto file = std::filesystem::path(name).filename().string();
+	const auto service = widen_string(file.substr(0, file.find('.')));
 
 	const auto args = kernel.create_driver(*driver, service);
 
@@ -145,7 +139,7 @@ int main(const int argc, const char* const* const argv)
 
 	auto mem = std::make_shared<guest::mmu>();
 	auto conv = std::make_shared<guest::calling_conv>();
-	auto e = std::make_shared<guest_emu>(mem, conv);
+	auto e = make_guest_emu(mem, conv);
 
 	guest::win_emulator win(e);
 
