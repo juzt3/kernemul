@@ -1,0 +1,200 @@
+diff --git a/include/unicorn/x86.h b/include/unicorn/x86.h
+--- a/include/unicorn/x86.h
++++ b/include/unicorn/x86.h
+@@ -53,6 +53,8 @@
+     UC_CPU_X86_EPYC,
+     UC_CPU_X86_DHYANA,
+     UC_CPU_X86_EPYC_ROME,
++    // Indexes builtin_x86_defs directly, so both stay last in their arrays.
++    UC_CPU_X86_RAPTORLAKE,
+
+     UC_CPU_X86_ENDING
+ } uc_cpu_x86;
+diff --git a/qemu/target/i386/cpu.c b/qemu/target/i386/cpu.c
+--- a/qemu/target/i386/cpu.c
++++ b/qemu/target/i386/cpu.c
+@@ -3780,6 +3780,46 @@
+         .cache_info = &epyc_rome_cache_info,
+         .use_epyc_apic_id_encoding = 1,
+     },
++    {
++        // Unicorn: a part a Windows 11 box can be, over Haswell's feature words.
++        // Every other model here is a 2013 machine or a server part. The words
++        // stay as they are: they say what TCG can really execute.
++        .name = "RaptorLake",
++        .level = 0x20,
++        .vendor = CPUID_VENDOR_INTEL,
++        .family = 6,
++        .model = 183,
++        .stepping = 1,
++        .features[FEAT_1_EDX] =
++            CPUID_VME | CPUID_SSE2 | CPUID_SSE | CPUID_FXSR | CPUID_MMX |
++            CPUID_CLFLUSH | CPUID_PSE36 | CPUID_PAT | CPUID_CMOV | CPUID_MCA |
++            CPUID_PGE | CPUID_MTRR | CPUID_SEP | CPUID_APIC | CPUID_CX8 |
++            CPUID_MCE | CPUID_PAE | CPUID_MSR | CPUID_TSC | CPUID_PSE |
++            CPUID_DE | CPUID_FP87,
++        .features[FEAT_1_ECX] =
++            CPUID_EXT_AVX | CPUID_EXT_XSAVE | CPUID_EXT_AES |
++            CPUID_EXT_POPCNT | CPUID_EXT_X2APIC | CPUID_EXT_SSE42 |
++            CPUID_EXT_SSE41 | CPUID_EXT_CX16 | CPUID_EXT_SSSE3 |
++            CPUID_EXT_PCLMULQDQ | CPUID_EXT_SSE3 |
++            CPUID_EXT_TSC_DEADLINE_TIMER | CPUID_EXT_FMA | CPUID_EXT_MOVBE |
++            CPUID_EXT_PCID | CPUID_EXT_F16C | CPUID_EXT_RDRAND,
++        .features[FEAT_8000_0001_EDX] =
++            CPUID_EXT2_LM | CPUID_EXT2_RDTSCP | CPUID_EXT2_NX |
++            CPUID_EXT2_SYSCALL,
++        .features[FEAT_8000_0001_ECX] =
++            CPUID_EXT3_ABM | CPUID_EXT3_LAHF_LM,
++        .features[FEAT_7_0_EBX] =
++            CPUID_7_0_EBX_FSGSBASE | CPUID_7_0_EBX_BMI1 |
++            CPUID_7_0_EBX_HLE | CPUID_7_0_EBX_AVX2 | CPUID_7_0_EBX_SMEP |
++            CPUID_7_0_EBX_BMI2 | CPUID_7_0_EBX_ERMS | CPUID_7_0_EBX_INVPCID |
++            CPUID_7_0_EBX_RTM,
++        .features[FEAT_XSAVE] =
++            CPUID_XSAVE_XSAVEOPT,
++        .features[FEAT_6_EAX] =
++            CPUID_6_EAX_ARAT,
++        .xlevel = 0x80000008,
++        .model_id = "13th Gen Intel(R) Core(TM) i9-13900K",
++    },
+ };
+
+
+diff --git a/qemu/target/i386/misc_helper.c b/qemu/target/i386/misc_helper.c
+--- a/qemu/target/i386/misc_helper.c
++++ b/qemu/target/i386/misc_helper.c
+@@ -313,9 +313,57 @@
+     raise_exception_err(env, EXCP06_ILLOP, 0);
+ }
+
++// Unicorn: run the UC_HOOK_INSN callbacks for an msr instruction. ANSWERED is
++// the contract CPUID and RDTSC use. DECLINED means hooks exist but none claimed
++// this register, so whoever registered them means it not to exist. UNHOOKED
++// keeps the fault below opt-in.
++//
++// No pc sync, unlike cpuid: these helpers are also reached from uc_reg_read of
++// UC_X86_REG_MSR, where GETPC() is an ordinary call's return address.
++#define UC_MSR_ANSWERED   1
++#define UC_MSR_DECLINED  -1
++#define UC_MSR_UNHOOKED   0
++
++static int uc_x86_msr_hooks(CPUX86State *env, int insn)
++{
++    uc_engine *uc = env->uc;
++    struct hook *hook;
++    int skip = 0;
++    int listening = 0;
++
++    HOOK_FOREACH_VAR_DECLARE;
++    HOOK_FOREACH(env->uc, hook, UC_HOOK_INSN) {
++        if (hook->to_delete)
++            continue;
++        if (!HOOK_BOUND_CHECK(hook, env->eip))
++            continue;
++
++        // Multiple msr callbacks returning different values is undefined.
++        if (hook->insn == insn) {
++            listening = 1;
++            JIT_CALLBACK_GUARD_VAR(skip, ((uc_cb_insn_cpuid_t)hook->callback)(env->uc, hook->user_data));
++        }
++
++        // the last callback may already have asked to stop emulation
++        if (env->uc->stop_request)
++            break;
++    }
++
++    if (skip) {
++        return UC_MSR_ANSWERED;
++    }
++
++    return listening ? UC_MSR_DECLINED : UC_MSR_UNHOOKED;
++}
++
+ void helper_wrmsr(CPUX86State *env)
+ {
+     uint64_t val;
++    int hooked = uc_x86_msr_hooks(env, UC_X86_INS_WRMSR);
++
++    if (hooked == UC_MSR_ANSWERED) {
++        return;
++    }
+
+     cpu_svm_check_intercept_param(env, SVM_EXIT_MSR, 1, GETPC());
+
+@@ -323,6 +371,9 @@
+         ((uint64_t)((uint32_t)env->regs[R_EDX]) << 32);
+
+     switch ((uint32_t)env->regs[R_ECX]) {
++    case MSR_IA32_TSC:
++        env->tsc_offset = val - cpu_get_tsc(env);
++        break;
+     case MSR_IA32_SYSENTER_CS:
+         env->sysenter_cs = val & 0xffff;
+         break;
+@@ -468,7 +519,12 @@
+             }
+             break;
+         }
+-        /* XXX: exception? */
++        // Unicorn: an msr this cpu does not implement. Dropping it silently is
++        // what a guest probing for a hypervisor's msr space looks for, so fault
++        // as hardware does -- but only for an emulator that registered a hook.
++        if (hooked == UC_MSR_DECLINED) {
++            raise_exception_err_ra(env, EXCP0D_GPF, 0, GETPC());
++        }
+         break;
+     }
+ }
+@@ -477,10 +533,19 @@
+ {
+     X86CPU *x86_cpu = env_archcpu(env);
+     uint64_t val;
++    int hooked = uc_x86_msr_hooks(env, UC_X86_INS_RDMSR);
++
++    if (hooked == UC_MSR_ANSWERED) {
++        return;
++    }
+
+     cpu_svm_check_intercept_param(env, SVM_EXIT_MSR, 0, GETPC());
+
+     switch ((uint32_t)env->regs[R_ECX]) {
++    // Unmodelled before this, so it read 0 while rdtsc of the same cpu ran.
++    case MSR_IA32_TSC:
++        val = cpu_get_tsc(env) + env->tsc_offset;
++        break;
+     case MSR_IA32_SYSENTER_CS:
+         val = env->sysenter_cs;
+         break;
+@@ -620,7 +685,11 @@
+             val = env->mce_banks[offset];
+             break;
+         }
+-        /* XXX: exception? */
++        // Unicorn: see the write path above. Reading zero says the register is
++        // there; the hardware answer is a fault.
++        if (hooked == UC_MSR_DECLINED) {
++            raise_exception_err_ra(env, EXCP0D_GPF, 0, GETPC());
++        }
+         val = 0;
+         break;
+     }
+diff --git a/qemu/target/i386/unicorn.c b/qemu/target/i386/unicorn.c
+--- a/qemu/target/i386/unicorn.c
++++ b/qemu/target/i386/unicorn.c
+@@ -2038,12 +2038,13 @@
+
+ static bool x86_insn_hook_validate(uint32_t insn_enum)
+ {
+-    // for x86 we can only hook IN, OUT, SYSCALL, SYSENTER, CPUID, RDTSC, and
+-    // RDTSCP
++    // for x86 we can only hook IN, OUT, SYSCALL, SYSENTER, CPUID, RDTSC,
++    // RDTSCP, RDMSR and WRMSR
+     if (insn_enum != UC_X86_INS_IN && insn_enum != UC_X86_INS_OUT &&
+         insn_enum != UC_X86_INS_SYSCALL && insn_enum != UC_X86_INS_SYSENTER &&
+         insn_enum != UC_X86_INS_CPUID && insn_enum != UC_X86_INS_RDTSC &&
+-        insn_enum != UC_X86_INS_RDTSCP) {
++        insn_enum != UC_X86_INS_RDTSCP && insn_enum != UC_X86_INS_RDMSR &&
++        insn_enum != UC_X86_INS_WRMSR) {
+         return false;
+     }
+     return true;
