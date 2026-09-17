@@ -3,6 +3,7 @@
 #include "syscalls.hpp"
 #include "thread.hpp"
 #include "../../emu/arm64/arch.hpp"
+#include "../../emu/arm64/mmu.hpp"
 #include <cstring>
 #include <span>
 

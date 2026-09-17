@@ -1,6 +1,7 @@
 #pragma once
 #include "../mmu.hpp"
 #include "addr_space.hpp"
+#include <optional>
 #include <unordered_map>
 
 namespace x86

@@ -308,6 +308,7 @@ set(kernemul_SOURCES
 	"src/kernel/win/win_obj_manager.hpp"
 	"src/kernel/win/win_user_mem.cpp"
 	"src/kernel/win/win_user_mem.hpp"
+	"src/kernel/win/x86_win.cpp"
 	"src/kernel/win/x86_win.hpp"
 	"src/main.cpp"
 	"src/sym/pdb.hpp"

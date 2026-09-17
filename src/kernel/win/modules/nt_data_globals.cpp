@@ -22,11 +22,8 @@
 // repo ships two image sets, so a hardcode here would be a wrong answer waiting for someone to
 // swap the guest filesystem.
 //
-// MmPteBase is deliberately NOT written. It names the base of the recursive page-table self
-// map, and this emulator has no self map at all -- x86::mmu builds real four-level tables but
-// never points the PML4 at itself. Every value is therefore a lie, the image's included, and
-// ours would additionally be a per-build hardcode that rots. Making PTE arithmetic work means
-// adding a real self map to the mmu, which is a different piece of work.
+// MmPteBase names the base of the recursive page-table self map, which only x86-64 has one of;
+// win_target::pte_base is zero on an architecture that does not.
 
 namespace
 {
@@ -150,6 +147,10 @@ void modules::init_ntoskrnl_globals(win_kernel_state& state, proc_module& mod)
 		const auto head = va + offsetof(_ERESOURCE, SystemResourcesList);
 		space.write_mem(head, guest_links(head, head));
 	}
+
+	// The slot this names is the one the mmu actually points back at itself.
+	if constexpr (win_target::pte_base)
+		write_global<addr_t>(space, mod, "MmPteBase", win_target::pte_base, false);
 
 	init_pfn_database(space, mod);
 

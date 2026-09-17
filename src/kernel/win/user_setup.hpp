@@ -12,9 +12,16 @@ namespace win_target
 #if defined(KERNEMUL_ARCH_ARM64)
 	inline constexpr std::uint16_t image_machine          = 0xAA64; // ARM64
 	inline constexpr std::uint16_t processor_architecture = 12;     // ARM64
+
+	// ARM64 has no recursive self map to name, so nothing here reports one.
+	inline constexpr addr_t pte_base = 0;
 #else
 	inline constexpr std::uint16_t image_machine          = 0x8664; // AMD64
 	inline constexpr std::uint16_t processor_architecture = 9;      // AMD64
+
+	// MmPteBase: the pml4 slot that points at the pml4, as a virtual address. The slot itself
+	// is x86::self_map_pml4_index, which is what the mmu actually writes.
+	inline constexpr addr_t pte_base = 0xFFFFF08000000000;
 #endif
 }
 
