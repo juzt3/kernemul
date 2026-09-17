@@ -33,6 +33,8 @@ public:
 	explicit os_emulator(std::shared_ptr<emu> emu)
 		: emu_(std::move(emu))
 	{
+		scheduler_.set_emu(emu_.get());
+
 		emu_->hook_exception([this](vcpu& cpu, cpu_exception ex) {
 			if (handle_exception(cpu, ex))
 				return true;
@@ -86,18 +88,33 @@ public:
 	// todo: a thread that spins without ever calling out keeps its cpu for good. Preempting it
 	// wants a switch the guest cannot tell from its own, not a stop part way through one.
 	void run_all()
+	static constexpr auto default_thread_runtime = std::chrono::milliseconds(50);
+
+	// A thread that never returns would own its cpu forever, so the waiting thread keeps time. It
+	// only takes a cpu away when there is a thread queued to put on it: an idle machine is left
+	// to run flat out rather than paying a context save and restore every tick for nothing.
+	void run_all(const std::chrono::milliseconds runtime = default_thread_runtime)
 	{
+		std::atomic<std::size_t> live{cpus().size()};
 		std::vector<std::thread> hosts;
 		hosts.reserve(cpus().size());
 
 		for (const auto& cpu : cpus())
 		{
-			hosts.emplace_back([this, cpu]
+			hosts.emplace_back([this, cpu, &live]
 			{
 				set_log_cpu(cpu.get());
 
 				scheduler_.run(*cpu);
+				--live;
 			});
+		}
+
+		while (live.load())
+		{
+			std::this_thread::sleep_for(runtime);
+
+			scheduler_.preempt_for_waiting(cpus());
 		}
 
 		for (auto& host : hosts)

@@ -111,6 +111,10 @@ public:
 	// Queued but not yet started stays off every cpu: the thread is not finished being built.
 	[[nodiscard]] virtual bool is_ready(vcpu&) { return started_ && !is_sleeping(); }
 
+	// Whether this thread wants a cpu, asked without taking one. is_ready() is the real answer,
+	// but it finishes a wait as it finds it, so only a cpu about to run the thread may call it.
+	[[nodiscard]] virtual bool may_run() const { return started_ && !is_sleeping(); }
+
 	// Runnable from here on. Defined below, where the scheduler it wakes is a complete type.
 	void start();
 	[[nodiscard]] bool is_started() const noexcept { return started_; }
@@ -220,7 +224,44 @@ public:
 
 	// A thread that became runnable without being queued -- one being started, or coming off a
 	// suspend -- is not noticed by a cpu already parked, so whoever made it runnable says so.
-	void wake() { cv_.notify_all(); }
+	void wake()
+	{
+		cv_.notify_all();
+
+		// Every cpu may already be busy, in which case nobody is listening for that and the
+		// thread would wait out a whole tick before the timekeeper noticed it.
+		if (emu_)
+			preempt_for_waiting(emu_->cpus());
+	}
+
+	// The cpus a thread can be handed to. Set once, before any of them is running.
+	void set_emu(class emu* const e) { emu_ = e; }
+
+	// Takes a cpu off the thread holding it for each queued thread that wants one, and no more.
+	// A stop buys a switch only if somebody is waiting to be switched to; with nobody there it
+	// costs a whole context saved and restored to put the same thread back where it was.
+	void preempt_for_waiting(const std::span<const std::shared_ptr<vcpu>> cpus)
+	{
+		// try_stop only raises a flag on the cpu, so nothing here waits on a cpu to notice it.
+		std::scoped_lock lock(mtx_);
+
+		auto spare = std::ranges::count_if(ready_queue_,
+			[](const auto& t) { return t->may_run(); });
+
+		for (const auto& cpu : cpus)
+		{
+			if (spare <= 0)
+				break;
+
+			// Parked in schedule() with no thread of its own: it takes the next one itself, and
+			// spending a stop on it would leave a cpu that is actually running somebody alone.
+			if (!cpu->thread())
+				continue;
+
+			cpu->try_stop();
+			--spare;
+		}
+	}
 
 	void remove(const thread::id_type id)
 	{
@@ -379,6 +420,7 @@ private:
 	std::deque<std::shared_ptr<thread>> ready_queue_;
 	mutable std::mutex mtx_;
 	std::condition_variable cv_;
+	class emu* emu_ = nullptr;
 	bool stopped_ = false;
 };
 

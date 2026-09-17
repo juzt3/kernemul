@@ -69,6 +69,7 @@ public:
 
 	// Neither answer needs guest memory, which is why the scheduler can ask.
 	[[nodiscard]] bool is_ready(vcpu& cpu) override;
+	[[nodiscard]] bool may_run() const override;
 
 	// Kernel APCs are disabled while this is negative, and the guest checks it directly.
 	[[nodiscard]] auto kernel_apc_disable() const

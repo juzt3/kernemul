@@ -169,6 +169,23 @@ std::uint32_t win_thread::resume()
 	return previous;
 }
 
+// The same question is_ready() answers, minus the answering: a wait is read, never finished. An
+// unsatisfied wait whose deadline has passed still counts, since the cpu that takes the thread is
+// the one that turns that into STATUS_TIMEOUT.
+bool win_thread::may_run() const
+{
+	if (suspend_count_)
+		return false;
+
+	if (wait_)
+	{
+		return wait_->satisfied
+			|| (wait_->timed && wait_->deadline <= static_cast<std::int64_t>(win_system_time()));
+	}
+
+	return thread::may_run();
+}
+
 bool win_thread::is_ready(vcpu& cpu)
 {
 	// Ahead of the wait, so a thread suspended while parked stays off the cpu.
