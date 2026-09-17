@@ -7,7 +7,7 @@ diff --git a/include/unicorn/x86.h b/include/unicorn/x86.h
      UC_CPU_X86_EPYC_ROME,
 +    // Indexes builtin_x86_defs directly, so both stay last in their arrays.
 +    UC_CPU_X86_RAPTORLAKE,
-
+ 
      UC_CPU_X86_ENDING
  } uc_cpu_x86;
 diff --git a/qemu/target/i386/cpu.c b/qemu/target/i386/cpu.c
@@ -58,15 +58,15 @@ diff --git a/qemu/target/i386/cpu.c b/qemu/target/i386/cpu.c
 +        .model_id = "13th Gen Intel(R) Core(TM) i9-13900K",
 +    },
  };
-
-
+ 
+ 
 diff --git a/qemu/target/i386/misc_helper.c b/qemu/target/i386/misc_helper.c
 --- a/qemu/target/i386/misc_helper.c
 +++ b/qemu/target/i386/misc_helper.c
 @@ -313,9 +313,57 @@
      raise_exception_err(env, EXCP06_ILLOP, 0);
  }
-
+ 
 +// Unicorn: run the UC_HOOK_INSN callbacks for an msr instruction. ANSWERED is
 +// the contract CPUID and RDTSC use. DECLINED means hooks exist but none claimed
 +// this register, so whoever registered them means it not to exist. UNHOOKED
@@ -118,12 +118,12 @@ diff --git a/qemu/target/i386/misc_helper.c b/qemu/target/i386/misc_helper.c
 +    if (hooked == UC_MSR_ANSWERED) {
 +        return;
 +    }
-
+ 
      cpu_svm_check_intercept_param(env, SVM_EXIT_MSR, 1, GETPC());
-
+ 
 @@ -323,6 +371,9 @@
          ((uint64_t)((uint32_t)env->regs[R_EDX]) << 32);
-
+ 
      switch ((uint32_t)env->regs[R_ECX]) {
 +    case MSR_IA32_TSC:
 +        env->tsc_offset = val - cpu_get_tsc(env);
@@ -154,9 +154,9 @@ diff --git a/qemu/target/i386/misc_helper.c b/qemu/target/i386/misc_helper.c
 +    if (hooked == UC_MSR_ANSWERED) {
 +        return;
 +    }
-
+ 
      cpu_svm_check_intercept_param(env, SVM_EXIT_MSR, 0, GETPC());
-
+ 
      switch ((uint32_t)env->regs[R_ECX]) {
 +    // Unmodelled before this, so it read 0 while rdtsc of the same cpu ran.
 +    case MSR_IA32_TSC:
@@ -182,7 +182,7 @@ diff --git a/qemu/target/i386/unicorn.c b/qemu/target/i386/unicorn.c
 --- a/qemu/target/i386/unicorn.c
 +++ b/qemu/target/i386/unicorn.c
 @@ -2038,12 +2038,13 @@
-
+ 
  static bool x86_insn_hook_validate(uint32_t insn_enum)
  {
 -    // for x86 we can only hook IN, OUT, SYSCALL, SYSENTER, CPUID, RDTSC, and
