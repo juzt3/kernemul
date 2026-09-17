@@ -3,6 +3,7 @@
 #include "../defs.hpp"
 #include "../per_cpu.hpp"
 #include "../user_setup.hpp"
+#include "../string.hpp"
 #include "../../../util/log.hpp"
 
 #include <cstddef>
@@ -112,6 +113,42 @@ void init_pfn_database(addr_space& space, const proc_module& mod)
 		emulated_physical_pages, sizeof(_MMPFN), base, read_back);
 }
 
+// Ob creates one _OBJECT_TYPE per kind of object it manages and publishes a pointer to each in
+// an exported global. Those globals are null in the image, and nothing here ran ObCreateObjectType
+// to fill them, so a driver that reads one gets null and dereferences it -- Vanguard reads the
+// process type's TotalNumberOfObjects, which is a load through the null pointer at +0x2C.
+//
+// The type is otherwise empty on purpose: the counts are the only fields anything here could
+// answer honestly, and they belong to an object manager that keeps its bookkeeping host side.
+addr_t init_object_type(addr_space& space, const proc_module& mod, const std::string_view global,
+	const std::u16string_view name)
+{
+	const auto addr = space.alloc(sizeof(_OBJECT_TYPE), prot_rw | prot_supervisor);
+
+	if (!addr)
+	{
+		LOG_ERR("no room for an _OBJECT_TYPE, so {} stays null", global);
+		return 0;
+	}
+
+	_OBJECT_TYPE type{};
+	type.Name = win::init_unicode_string(space, name);
+
+	space.write_mem(addr, type);
+
+	// Both lists are empty, and an empty list head points at itself rather than holding zeroes.
+	for (const auto head : { addr + offsetof(_OBJECT_TYPE, TypeList),
+		addr + offsetof(_OBJECT_TYPE, CallbackList) })
+	{
+		space.write_mem(head, guest_links(head, head));
+	}
+
+	if (!write_global<addr_t>(space, mod, global, addr))
+		return 0;
+
+	return addr;
+}
+
 }
 
 void modules::init_ntoskrnl_globals(win_kernel_state& state, proc_module& mod)
@@ -153,6 +190,13 @@ void modules::init_ntoskrnl_globals(win_kernel_state& state, proc_module& mod)
 		write_global<addr_t>(space, mod, "MmPteBase", win_target::pte_base, false);
 
 	init_pfn_database(space, mod);
+
+	// The four ObGetObjectType can name, so that reading a type back gives the same pointer the
+	// global holds rather than null.
+	init_object_type(space, mod, "PsProcessType", u"Process");
+	init_object_type(space, mod, "PsThreadType", u"Thread");
+	init_object_type(space, mod, "IoFileObjectType", u"File");
+	init_object_type(space, mod, "MmSectionObjectType", u"Section");
 
 	// The mapped ntoskrnl is the authority on its own build, and NtBuildNumber is exported on
 	// both arches so this needs no pdb. The low 16 bits are the build; the rest are flags.
