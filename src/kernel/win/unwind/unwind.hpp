@@ -30,6 +30,7 @@ struct unwind_result
 	addr_t handler;
 	addr_t handler_data;
 	addr_t establisher_frame;
+	addr_t function_entry;
 };
 
 struct stack_frame

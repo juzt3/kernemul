@@ -30,6 +30,38 @@ unwind_context x64_unwinder::context_from_vcpu(vcpu& cpu)
 	return ctx;
 }
 
+namespace
+{
+
+// Where the entry sits in the guest's copy of the image.
+addr_t function_entry_addr(const proc_module& mod, const pe::runtime_function_x64& func)
+{
+	const auto* img = mod.pe();
+
+	if (!img)
+		return 0;
+
+	const auto& exc = img->nt_hdrs()->optional_hdr.data_dirs.exception;
+
+	if (!exc.used())
+		return 0;
+
+	const auto* base = img->as<const std::uint8_t*>();
+	const auto* funcs = reinterpret_cast<const pe::runtime_function_x64*>(
+		base + exc.virtual_address);
+	const std::uint32_t count = exc.size / sizeof(pe::runtime_function_x64);
+
+	for (std::uint32_t i = 0; i < count; ++i)
+	{
+		if (funcs[i].begin_address == func.begin_address)
+			return mod.addr + exc.virtual_address + i * sizeof(pe::runtime_function_x64);
+	}
+
+	return 0;
+}
+
+}
+
 std::optional<pe::runtime_function_x64> x64_unwinder::lookup_function_entry(
 	const proc_module& mod, const addr_t rip)
 {
@@ -71,6 +103,8 @@ static unwind_result apply_unwind_info(
 	unwind_result result{};
 	const auto* img_base = mod.pe()->as<const std::uint8_t*>();
 	auto unwind_rva = func.unwind_info_rva;
+
+
 
 	for (;;)
 	{
@@ -206,6 +240,12 @@ bool x64_unwinder::unwind_frame(
 	}
 
 	result = apply_unwind_info(mem, mod, *func, ctx);
+
+	// The guest address of the RUNTIME_FUNCTION itself, which a language handler dereferences
+	// to find the function's bounds. lookup_function_entry hands back a copy, so it is found
+	// again here rather than taken from where that copy happens to live.
+	result.function_entry = function_entry_addr(mod, *func);
+
 	return ctx.pc != 0;
 }
 

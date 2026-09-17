@@ -152,6 +152,7 @@ bool win_exception::handle(vcpu& cpu, const cpu_exception ex)
 		dispatcher_context64 dispatch{};
 		dispatch.control_pc = control_pc;
 		dispatch.image_base = mod->addr;
+		dispatch.function_entry = result.function_entry;
 		dispatch.establisher_frame = result.establisher_frame;
 		dispatch.context_record = frame.context;
 		dispatch.language_handler = result.handler;
@@ -162,13 +163,17 @@ bool win_exception::handle(vcpu& cpu, const cpu_exception ex)
 		const std::uint64_t args[] = {
 			frame.record, result.establisher_frame, frame.context, frame.dispatcher };
 
-		LOG_INFO("  calling handler at 0x{:X}", result.handler);
+		LOG_INFO("  calling handler at 0x{:X} (handler_data=0x{:X}, scopes={}, frame=0x{:X})",
+			result.handler, result.handler_data,
+			result.handler_data ? space.read_mem<std::uint32_t>(result.handler_data) : 0,
+			result.establisher_frame);
 
 		const auto disposition = static_cast<std::int32_t>(
 			kernel_.calls.call(cpu, result.handler, args, frame.scratch));
 
-		// A handler's jump cannot survive the call it was made in, so it says so in the context.
 		const auto answered = space.read_mem<dispatcher_context64>(frame.dispatcher);
+
+		LOG_INFO("  handler returned {} (target=0x{:X})", disposition, answered.target_ip);
 
 		if (disposition == exception_execute_handler && answered.target_ip)
 		{
