@@ -85,7 +85,12 @@ set(unicorn_patches
 	"${CMAKE_CURRENT_SOURCE_DIR}/patches/unicorn-arm64-fault-regs.patch"
 	"${CMAKE_CURRENT_SOURCE_DIR}/patches/unicorn-x86-clear-old-exception.patch"
 	"${CMAKE_CURRENT_SOURCE_DIR}/patches/unicorn-x86-ss-cpl.patch"
+	"${CMAKE_CURRENT_SOURCE_DIR}/patches/unicorn-x86-cpu-identity.patch"
 )
+
+# Joined on "|": ExternalProject splits the patch command on ";" to run it, so a
+# cmake list arrives as one argument per patch and all but the first are lost.
+string(REPLACE ";" "|" unicorn_patch_arg "${unicorn_patches}")
 
 include(FetchContent)
 message(STATUS "Fetching unicorn (patched)...")
@@ -94,7 +99,7 @@ FetchContent_Declare(unicorn
 	GIT_TAG 7c5db94191defc1e04a4f66f4eb1220903cba837
 	PATCH_COMMAND "${CMAKE_COMMAND}"
 		"-DSRC=<SOURCE_DIR>"
-		"-DPATCHES=${unicorn_patches}"
+		"-DPATCHES=${unicorn_patch_arg}"
 		-P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/apply_patch.cmake"
 )
 FetchContent_MakeAvailable(unicorn)
@@ -179,6 +184,8 @@ set(kernemul_SOURCES
 	"src/emu/x86/mmu.cpp"
 	"src/emu/x86/mmu.hpp"
 	"src/emu/x86/unicorn.hpp"
+	"src/emu/x86/unicorn_cpu_ident.cpp"
+	"src/emu/x86/unicorn_cpu_ident.hpp"
 	"src/emu/x86/whp.cpp"
 	"src/emu/x86/whp.hpp"
 	"src/kernel/kernel.hpp"
