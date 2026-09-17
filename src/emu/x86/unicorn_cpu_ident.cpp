@@ -288,7 +288,7 @@ bool cpu_identity::on_rdmsr(vcpu& cpu)
 		// Declining hands it to the cpu, which faults on everything it does not model itself.
 		// A guest probing for a hypervisor's registers is looking for exactly this, so it is
 		// worth seeing every time rather than once.
-		LOG_WARN("cpu {}: rdmsr 0x{:X}: not in this cpu's msr space, so the cpu answers -- "
+		LOG_WARN("cpu {}: rdmsr 0x{:X}: not in this cpu's msr space, so the cpu answers it. "
 			"#GP unless it models the register", cpu.id(), id);
 
 		return false;
@@ -370,7 +370,7 @@ bool cpu_identity::on_wrmsr(vcpu& cpu)
 	if (taken)
 		LOG_INFO("cpu {}: wrmsr 0x{:X} <- 0x{:X}", cpu.id(), id, value);
 	else
-		LOG_WARN("cpu {}: wrmsr 0x{:X} <- 0x{:X}: declined, so the cpu answers -- #GP unless "
+		LOG_WARN("cpu {}: wrmsr 0x{:X} <- 0x{:X}: declined, so the cpu answers it. #GP unless "
 			"it models the register", cpu.id(), id, value);
 
 	return taken;
