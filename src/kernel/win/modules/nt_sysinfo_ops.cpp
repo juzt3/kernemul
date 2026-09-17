@@ -24,6 +24,10 @@ enum system_information_class : std::uint32_t
 	system_numa_processor_map       = 55,
 	system_module_information       = 0x0B,
 	system_module_information_ex    = 0x4D,
+	system_kernel_debugger_information    = 0x23,
+	system_kernel_debugger_information_ex = 0x42,
+	system_code_integrity_policy_information = 0x5A,
+	system_code_integrity_information     = 0x67,
 
 	system_logical_processor_and_group_information = 107,
 
@@ -443,6 +447,85 @@ void modules::register_ntoskrnl_sysinfo_ops(win_kernel_state& state, proc_module
 				"0x{:X} bytes", count, required);
 
 			return STATUS_SUCCESS;
+		}
+
+		// { BOOLEAN DebuggerEnabled, BOOLEAN DebuggerNotPresent } -- the same answer
+		// KdDebuggerEnabled and KdDebuggerNotPresent give, so the two cannot disagree.
+		case system_kernel_debugger_information:
+		{
+			constexpr std::uint8_t info[] = { 0, 1 };
+
+			if (return_length)
+				return_length.write(sizeof(info));
+
+			if (length < sizeof(info))
+				return STATUS_INFO_LENGTH_MISMATCH;
+
+			space.write_mem(system_information, info, sizeof(info));
+
+			THREAD_LOG_INFO("NtQuerySystemInformation(SystemKernelDebuggerInformation): "
+				"no debugger");
+
+			return STATUS_SUCCESS;
+		}
+
+		// { BOOLEAN DebuggerAllowed, BOOLEAN DebuggerEnabled, BOOLEAN DebuggerPresent }
+		case system_kernel_debugger_information_ex:
+		{
+			constexpr std::uint8_t info[] = { 1, 0, 0 };
+
+			if (return_length)
+				return_length.write(sizeof(info));
+
+			if (length < sizeof(info))
+				return STATUS_INFO_LENGTH_MISMATCH;
+
+			space.write_mem(system_information, info, sizeof(info));
+
+			THREAD_LOG_INFO("NtQuerySystemInformation(SystemKernelDebuggerInformationEx): "
+				"allowed, not enabled, not present");
+
+			return STATUS_SUCCESS;
+		}
+
+		// { ULONG Length, ULONG CodeIntegrityOptions }. Enabled, and enforced by the hypervisor:
+		// a driver that finds code integrity off concludes the machine is already compromised.
+		case system_code_integrity_information:
+		{
+			constexpr std::uint32_t option_enabled = 0x01;
+			constexpr std::uint32_t option_hvci_kmci_enabled = 0x400;
+
+			struct
+			{
+				std::uint32_t length;
+				std::uint32_t options;
+			} info{ sizeof(info), option_enabled | option_hvci_kmci_enabled };
+
+			if (return_length)
+				return_length.write(sizeof(info));
+
+			if (length < sizeof(info))
+				return STATUS_INFO_LENGTH_MISMATCH;
+
+			space.write_mem(system_information, info);
+
+			THREAD_LOG_INFO("NtQuerySystemInformation(SystemCodeIntegrityInformation): "
+				"enabled, options 0x{:X}", info.options);
+
+			return STATUS_SUCCESS;
+		}
+
+		// Nothing here holds a policy, and an empty one would read as a policy that allows
+		// everything -- so the caller is told there is none rather than shown a permissive one.
+		case system_code_integrity_policy_information:
+		{
+			if (return_length)
+				return_length.write(0);
+
+			THREAD_LOG_WARN("NtQuerySystemInformation(SystemCodeIntegrityPolicyInformation): "
+				"nothing here holds a code integrity policy");
+
+			return STATUS_NOT_IMPLEMENTED;
 		}
 
 		default:
