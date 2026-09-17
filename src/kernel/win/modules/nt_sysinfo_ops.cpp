@@ -20,6 +20,7 @@ namespace
 enum system_information_class : std::uint32_t
 {
 	system_basic_information        = 0,
+	system_process_information      = 5,
 	system_time_of_day_information  = 3,
 	system_numa_processor_map       = 55,
 	system_module_information       = 0x0B,
@@ -68,16 +69,108 @@ struct rtl_process_module_information_ex_t
 	std::uint32_t time_date_stamp;
 	std::uint64_t default_base;
 };
+
+struct system_thread_information_t
+{
+	std::int64_t  kernel_time;
+	std::int64_t  user_time;
+	std::int64_t  create_time;
+	std::uint32_t wait_time;
+	std::uint32_t padding0;
+	std::uint64_t start_address;
+	std::uint64_t unique_process_id;
+	std::uint64_t unique_thread_id;
+	std::int32_t  priority;
+	std::int32_t  base_priority;
+	std::uint32_t context_switches;
+	std::uint32_t thread_state;
+	std::uint32_t wait_reason;
+	std::uint32_t padding1;
+};
+
+struct system_process_information_t
+{
+	std::uint32_t next_entry_offset;
+	std::uint32_t number_of_threads;
+	std::int64_t  working_set_private_size;
+	std::uint32_t hard_fault_count;
+	std::uint32_t number_of_threads_high_watermark;
+	std::uint64_t cycle_time;
+	std::int64_t  create_time;
+	std::int64_t  user_time;
+	std::int64_t  kernel_time;
+	_UNICODE_STRING image_name;
+	std::int32_t  base_priority;
+	std::uint32_t padding0;
+	std::uint64_t unique_process_id;
+	std::uint64_t inherited_from_unique_process_id;
+	std::uint32_t handle_count;
+	std::uint32_t session_id;
+	std::uint64_t unique_process_key;
+	std::uint64_t peak_virtual_size;
+	std::uint64_t virtual_size;
+	std::uint32_t page_fault_count;
+	std::uint32_t padding1;
+	std::uint64_t peak_working_set_size;
+	std::uint64_t working_set_size;
+	std::uint64_t quota_peak_paged_pool_usage;
+	std::uint64_t quota_paged_pool_usage;
+	std::uint64_t quota_peak_non_paged_pool_usage;
+	std::uint64_t quota_non_paged_pool_usage;
+	std::uint64_t pagefile_usage;
+	std::uint64_t peak_pagefile_usage;
+	std::uint64_t private_page_count;
+	std::int64_t  read_operation_count;
+	std::int64_t  write_operation_count;
+	std::int64_t  other_operation_count;
+	std::int64_t  read_transfer_count;
+	std::int64_t  write_transfer_count;
+	std::int64_t  other_transfer_count;
+};
 #pragma pack(pop)
 
 static_assert(sizeof(rtl_process_module_information_t) == 0x128);
 static_assert(sizeof(rtl_process_module_information_ex_t) == 0x140);
 static_assert(offsetof(rtl_process_modules_t, modules) == 8);
+static_assert(sizeof(system_thread_information_t) == 0x50);
+static_assert(sizeof(system_process_information_t) == 0x100);
 
 constexpr std::uint32_t module_entry_size = sizeof(rtl_process_module_information_t);
 constexpr std::uint32_t module_ex_entry_size = sizeof(rtl_process_module_information_ex_t);
 constexpr std::uint32_t module_list_header_size =
 	static_cast<std::uint32_t>(offsetof(rtl_process_modules_t, modules));
+
+// Read out of PsActiveProcessHead rather than the host side process map, so this query and the
+// list a driver walks itself never disagree about what is running.
+struct listed_process_t
+{
+	std::uint64_t pid;
+	std::string name;
+};
+
+std::vector<listed_process_t> collect_processes(win_kernel_state& state)
+{
+	std::vector<listed_process_t> out;
+
+	if (!state.active_process_list.address())
+		return out;
+
+	state.active_process_list.for_each([&](emu_object<_EPROCESS> entry)
+	{
+		const auto ep = entry.read();
+
+		// ImageFileName is a fixed 15 byte field that is only null terminated when it fits.
+		const auto* const image = reinterpret_cast<const char*>(ep.ImageFileName);
+		const auto len = ::strnlen(image, sizeof(ep.ImageFileName));
+
+		out.push_back({ static_cast<std::uint64_t>(
+			reinterpret_cast<std::uintptr_t>(ep.UniqueProcessId)), std::string(image, len) });
+
+		return true;
+	});
+
+	return out;
+}
 
 // What the loaded module list holds, flattened once so both classes describe the same modules
 // in the same order as the list the guest can walk itself.
@@ -369,6 +462,87 @@ void modules::register_ntoskrnl_sysinfo_ops(win_kernel_state& state, proc_module
 
 			THREAD_LOG_INFO("NtQuerySystemInformation(SystemNumaProcessorMap): "
 				"1 node, processor mask 0x{:X}", info.node[0].mask);
+
+			return STATUS_SUCCESS;
+		}
+
+		// Each process is followed by its threads and then its name, because the name is pointed
+		// at by a UNICODE_STRING whose buffer has to live in the caller's buffer too.
+		case system_process_information:
+		{
+			const auto procs = collect_processes(*st);
+
+			// The name is padded out so the entry after it stays 8 aligned.
+			const auto entry_size_for = [](const listed_process_t& proc)
+			{
+				const auto name_bytes = proc.name.size() * sizeof(char16_t);
+
+				return static_cast<std::uint32_t>(sizeof(system_process_information_t)
+					+ sizeof(system_thread_information_t) + ((name_bytes + 7) & ~std::size_t{7}));
+			};
+
+			std::uint32_t required = 0;
+
+			for (const auto& proc : procs)
+				required += entry_size_for(proc);
+
+			if (return_length)
+				return_length.write(required);
+
+			if (length < required)
+			{
+				THREAD_LOG_INFO("NtQuerySystemInformation(SystemProcessInformation): buffer 0x{:X}"
+					" < required 0x{:X} for {} process(es)", length, required, procs.size());
+
+				return STATUS_INFO_LENGTH_MISMATCH;
+			}
+
+			std::vector<std::uint8_t> out(required, 0);
+			std::uint32_t offset = 0;
+
+			for (std::size_t i = 0; i < procs.size(); ++i)
+			{
+				const auto& proc = procs[i];
+				const auto wide = widen_string(proc.name);
+				const auto name_bytes = wide.size() * sizeof(char16_t);
+				const auto entry_size = entry_size_for(proc);
+
+				auto* const entry = reinterpret_cast<system_process_information_t*>(
+					out.data() + offset);
+				auto* const thread = reinterpret_cast<system_thread_information_t*>(
+					out.data() + offset + sizeof(system_process_information_t));
+
+				const auto name_at = offset + static_cast<std::uint32_t>(
+					sizeof(system_process_information_t) + sizeof(system_thread_information_t));
+
+				std::memcpy(out.data() + name_at, wide.data(), name_bytes);
+
+				entry->next_entry_offset = i + 1 < procs.size() ? entry_size : 0;
+				entry->number_of_threads = 1;
+				entry->base_priority = 8;
+				entry->unique_process_id = proc.pid;
+				entry->handle_count = 32;
+				entry->image_name.Length = static_cast<unsigned short>(name_bytes);
+				entry->image_name.MaximumLength =
+					static_cast<unsigned short>(name_bytes + sizeof(char16_t));
+				entry->image_name.Buffer = guest_ptr<char16_t>(system_information + name_at);
+
+				// One thread each: nothing here tracks per process threads, and a process with
+				// none would read as a process that is already gone.
+				thread->unique_process_id = proc.pid;
+				thread->unique_thread_id = proc.pid + 4;
+				thread->priority = 8;
+				thread->base_priority = 8;
+				thread->thread_state = 5;  // Waiting
+				thread->wait_reason = 13;  // WrQueue
+
+				offset += entry_size;
+			}
+
+			space.write_mem(system_information, out.data(), out.size());
+
+			THREAD_LOG_INFO("NtQuerySystemInformation(SystemProcessInformation): {} process(es),"
+				" 0x{:X} bytes", procs.size(), required);
 
 			return STATUS_SUCCESS;
 		}
