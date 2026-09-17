@@ -113,6 +113,8 @@ enum class hook_insn_t : std::uint8_t
 {
 	cpuid,
 	rdtsc,
+	rdmsr,
+	wrmsr,
 	syscall,
 };
 
@@ -123,6 +125,7 @@ enum class cpu_exception : std::uint8_t
 	breakpoint,
 	illegal_instruction,
 	page_fault,
+	interrupt,
 	other,
 };
 
@@ -135,6 +138,7 @@ constexpr std::string_view to_string(const cpu_exception ex)
 	case cpu_exception::breakpoint:          return "breakpoint";
 	case cpu_exception::illegal_instruction: return "illegal instruction";
 	case cpu_exception::page_fault:          return "page fault";
+	case cpu_exception::interrupt:           return "interrupt";
 	case cpu_exception::other:               return "exception";
 	}
 

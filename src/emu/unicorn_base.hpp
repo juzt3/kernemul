@@ -20,6 +20,9 @@ struct unicorn_hook : emu_hook
 
 	bool insn_via_intr = false;
 
+	// See insn_answers_instruction.
+	bool insn_answers = false;
+
 	std::vector<uc_hook> handles;
 };
 
@@ -224,7 +227,8 @@ public:
 	hook_handle hook_insn(addr_t start_addr, addr_t end_addr, hook_insn_t insn, insn_hk_cb cb) override
 	{
 		if (const int uc_insn = to_uc_insn(insn); uc_insn >= 0)
-			return add_hook(start_addr, end_addr, UC_HOOK_INSN, uc_insn, std::move(cb));
+			return add_hook(start_addr, end_addr, UC_HOOK_INSN, uc_insn, std::move(cb),
+				false, insn_answers_instruction(insn));
 
 		if (const int intno = insn_as_intr(insn); intno >= 0)
 			return add_hook(start_addr, end_addr, UC_HOOK_INTR, intno, std::move(cb), true);
@@ -249,6 +253,7 @@ public:
 
 	hook_handle hook_exception(exception_hk_cb cb) override
 	{
+		// Every vector; exception_hook_trampoline sorts the faults from the interrupts.
 		return add_hook(1, 0, UC_HOOK_INTR, 0, std::move(cb));
 	}
 
@@ -268,6 +273,13 @@ protected:
 	virtual std::shared_ptr<unicorn_vcpu_base> wrap_engine(uc_engine* uc, std::size_t id) = 0;
 
 	virtual int to_uc_insn(hook_insn_t insn) const = 0;
+
+	// Whether Unicorn takes the callback's answer as the instruction's result and leaves it
+	// unexecuted. Syscall is the exception: its callback moves the pc instead.
+	static constexpr bool insn_answers_instruction(const hook_insn_t insn)
+	{
+		return insn != hook_insn_t::syscall;
+	}
 
 	// The QEMU exception index the instruction raises, or -1 if it does not raise one.
 	virtual int insn_as_intr(hook_insn_t) const { return -1; }
@@ -309,7 +321,7 @@ protected:
 private:
 	template <typename Cb>
 	hook_handle add_hook(addr_t start_addr, addr_t end_addr, int uc_type, int uc_insn, Cb cb,
-		bool insn_via_intr = false)
+		bool insn_via_intr = false, bool insn_answers = false)
 	{
 		hooks_.push_back({});
 		auto& hk = hooks_.back();
@@ -320,6 +332,7 @@ private:
 		hk.uc_type = uc_type;
 		hk.uc_insn = uc_insn;
 		hk.insn_via_intr = insn_via_intr;
+		hk.insn_answers = insn_answers;
 
 		for (auto& cpu : cpus_)
 			add_uc_hook(hk, engine(cpu));
@@ -345,7 +358,9 @@ private:
 		}
 	}
 
-	static void insn_hook_trampoline(uc_engine* uc, void* user_data)
+	// Both contracts: Unicorn calls this through a bool-returning pointer for the instructions a
+	// hook may answer, and a void one for syscall, which ignores what is returned.
+	static int insn_hook_trampoline(uc_engine* uc, void* user_data)
 	{
 		auto* hk = static_cast<unicorn_hook*>(user_data);
 		auto* self = static_cast<unicorn_emu_base*>(hk->owner);
@@ -353,18 +368,27 @@ private:
 
 		for (auto& cpu : self->cpus_)
 		{
-			if (engine(cpu) == uc)
-			{
-				unicorn_vcpu_base::hook_guard guard(*cpu);
+			if (engine(cpu) != uc)
+				continue;
 
-				if (cb(*cpu))
-				{
-					static_cast<unicorn_vcpu_base*>(cpu.get())->request_redirect();
-					uc_emu_stop(uc);
-				}
-				return;
+			unicorn_vcpu_base::hook_guard guard(*cpu);
+			const bool handled = cb(*cpu);
+
+			// The instruction's result, which leaves it unexecuted.
+			if (hk->insn_answers)
+				return handled ? 1 : 0;
+
+			// A new pc, which the cpu has to stop to resume from.
+			if (handled)
+			{
+				static_cast<unicorn_vcpu_base*>(cpu.get())->request_redirect();
+				uc_emu_stop(uc);
 			}
+
+			break;
 		}
+
+		return 0;
 	}
 
 	static void insn_intr_trampoline(uc_engine* uc, std::uint32_t intno, void* user_data)
@@ -471,6 +495,13 @@ private:
 				unicorn_vcpu_base::hook_guard guard(*cpu);
 
 				auto ex = cpu->arch()->intr_to_excp(static_cast<int>(intno));
+
+				// Not a fault the os dispatches. Returning without claiming it leaves Unicorn
+				// to discard the vector and resume, so the instruction after it runs -- but the
+				// guest's handler never does, which a check for that would see through.
+				if (ex == cpu_exception::interrupt)
+					return;
+
 				if (cb(*cpu, ex))
 				{
 					static_cast<unicorn_vcpu_base*>(cpu.get())->request_redirect();
@@ -488,9 +519,11 @@ private:
 			uc_hook_add(uc, &h, hk.uc_type, reinterpret_cast<void*>(insn_hook_trampoline),
 				&hk, hk.start, hk.end, hk.uc_insn);
 		else if (hk.uc_type == UC_HOOK_INTR)
+			// Unbounded: Unicorn would read the range as vectors, and for an instruction taken
+			// as an interrupt it is addresses, which insn_intr_trampoline checks itself.
 			uc_hook_add(uc, &h, hk.uc_type, reinterpret_cast<void*>(
 					hk.insn_via_intr ? insn_intr_trampoline : exception_hook_trampoline),
-				&hk, hk.start, hk.end);
+				&hk, 1, 0);
 		else if (hk.uc_type == UC_HOOK_CODE || hk.uc_type == UC_HOOK_BLOCK)
 			uc_hook_add(uc, &h, hk.uc_type, reinterpret_cast<void*>(code_hook_trampoline),
 				&hk, hk.start, hk.end);
