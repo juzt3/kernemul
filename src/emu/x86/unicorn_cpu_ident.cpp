@@ -112,11 +112,19 @@ constexpr msr_range implemented[] = {
 	{ msr_mperf, msr_aperf },
 	{ 0x10A, 0x10B }, { 0x122, 0x123 }, { 0x17D, 0x17D },
 	{ 0x198, 0x19C }, { 0x1A0, 0x1A2 }, { 0x1B0, 0x1B1 },
-	{ 0x1C9, 0x1C9 }, { msr_debugctl, 0x1DE }, { 0x1F2, 0x1F3 },
+	{ msr_debugctl, msr_debugctl }, { 0x1F2, 0x1F3 },
 	{ 0x280, 0x2FF }, { 0x345, 0x345 }, { 0x38D, 0x391 }, { 0x3F1, 0x3F7 },
-	{ 0x680, 0x69F }, { 0x6C0, 0x6DF },  // lbr stack, read once debugctl.LBR is on
 	{ 0x6E0, 0x6E1 }, { 0xC80, 0xC82 }, { 0xC0000103, 0xC0000104 },
 };
+
+// Deliberately absent from the table above, so they fault: the last branch record stack, at
+// 0x1C9 and 0x1DA..0x1DE on the P6 layout and 0x680..0x69F / 0x6C0..0x6DF on the later one.
+// A driver works out which layout a cpu has by reading one inside __try/__except and taking
+// the #GP as its answer. vgk.calvin.sys tries 0x680, falls back to 0x1DB, and only when both
+// fault does it record that there is no lbr unit here; answering either puts it on the branch
+// that goes on to use the stack, which nothing here can fill with anything but zeros. A unit
+// that records no branches is not a state a running cpu is in, so while there are no real
+// records to hand out, having none at all is the answer that holds together.
 
 template <typename Ratio>
 std::uint64_t elapsed()
