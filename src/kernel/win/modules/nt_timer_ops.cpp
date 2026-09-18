@@ -6,6 +6,7 @@
 #include "../types.hpp"
 #include "../../../util/log.hpp"
 #include <chrono>
+#include <string_view>
 
 namespace
 {
@@ -128,36 +129,55 @@ void modules::register_ntoskrnl_timer_ops(win_kernel_state& state, proc_module& 
 				synchronization ? "SynchronizationTimer" : "NotificationTimer");
 		});
 
+	const auto set_timer = [](const emu_object<_KTIMER>& timer, const std::int64_t due_time,
+		const std::int32_t period, const emu_object<_KDPC>& dpc, const std::string_view who)
+	{
+		auto entry = timer.read();
+		const bool was_set = entry.DueTime.QuadPart != 0;
+
+		const auto absolute = due_time < 0
+			? win_system_time() + static_cast<std::uint64_t>(-due_time)
+			: static_cast<std::uint64_t>(due_time);
+
+		entry.DueTime.QuadPart = absolute;
+		entry.Dpc = guest_ptr<_KDPC>(dpc.address());
+		entry.Header.SignalState = 0;
+		entry.Period = static_cast<std::uint32_t>(period);
+
+		timer.write(entry);
+
+		const auto interval = std::chrono::duration_cast<std::chrono::milliseconds>(
+			win_ticks(due_time < 0 ? -due_time : due_time));
+
+		THREAD_LOG_WARN("{}(0x{:X}, due={} ({} {} ms) -> absolute 0x{:X}, period={} ms, "
+			"dpc=0x{:X}): nothing here walks a timer list, so it will not go off",
+			who, timer.address(), due_time, due_time < 0 ? "in" : "at", interval.count(),
+			absolute, period, dpc.address());
+
+		return was_set;
+	};
+
 	state.redirect(mod, "KeSetTimer",
-		[](vcpu&, emu_object<_KTIMER> timer, const std::int64_t due_time,
+		[set_timer](vcpu&, emu_object<_KTIMER> timer, const std::int64_t due_time,
 			emu_object<_KDPC> dpc) -> bool
 		{
-			if (!timer)
+			return timer && set_timer(timer, due_time, 0, dpc, "KeSetTimer");
+		});
+
+	state.redirect(mod, "KeSetTimerEx",
+		[set_timer](vcpu&, emu_object<_KTIMER> timer, const std::int64_t due_time,
+			const std::int32_t period, emu_object<_KDPC> dpc) -> bool
+		{
+			if (period < 0)
+			{
+				// Real NT bugchecks on a negative period; the guest is left standing instead.
+				THREAD_LOG_ERR("KeSetTimerEx: 0x{:X} was given period {}",
+					timer.address(), period);
+
 				return false;
+			}
 
-			auto entry = timer.read();
-			const bool was_set = entry.DueTime.QuadPart != 0;
-
-			const auto absolute = due_time < 0
-				? win_system_time() + static_cast<std::uint64_t>(-due_time)
-				: static_cast<std::uint64_t>(due_time);
-
-			entry.DueTime.QuadPart = absolute;
-			entry.Dpc = guest_ptr<_KDPC>(dpc.address());
-			entry.Header.SignalState = 0;
-			entry.Period = 0;
-
-			timer.write(entry);
-
-			const auto interval = std::chrono::duration_cast<std::chrono::milliseconds>(
-				win_ticks(due_time < 0 ? -due_time : due_time));
-
-			THREAD_LOG_WARN("KeSetTimer(0x{:X}, due={} ({} {} ms) -> absolute 0x{:X}, dpc=0x{:X}): "
-				"nothing here walks a timer list, so it will not go off",
-				timer.address(), due_time, due_time < 0 ? "in" : "at", interval.count(),
-				absolute, dpc.address());
-
-			return was_set;
+			return timer && set_timer(timer, due_time, period, dpc, "KeSetTimerEx");
 		});
 
 	state.redirect(mod, "KeCancelTimer", [](vcpu&, emu_object<_KTIMER> timer) -> bool
