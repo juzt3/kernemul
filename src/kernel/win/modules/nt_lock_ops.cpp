@@ -1,5 +1,6 @@
 #include "nt_lock_ops.hpp"
 #include "../win_kernel.hpp"
+#include "../pool.hpp"
 #include "../rundown.hpp"
 #include "../thread.hpp"
 #include "../status.hpp"
@@ -32,6 +33,9 @@ enum eresource_flag : std::uint16_t
 // An OWNER_ENTRY's second word packs three flag bits under the recursion count.
 constexpr std::uint32_t owner_flag_mask = 0x7;
 constexpr std::uint32_t owner_count_shift = 3;
+
+// KeLargestCacheLine, which is what KeGetRecommendedSharedDataAlignment hands back.
+constexpr std::uint32_t largest_cache_line = 64;
 
 addr_t current_ethread(vcpu& cpu)
 {
@@ -166,6 +170,8 @@ bool take_resource(const emu_object<_ERESOURCE>& resource, vcpu& cpu,
 // A redirect runs with its cpu stopped, so none of these locks can contend.
 void modules::register_ntoskrnl_lock_ops(win_kernel_state& state, proc_module& mod)
 {
+	auto* st = &state;
+
 	// The linker folds ExInitializeRundownProtection and KeInitializeSpinLock onto this.
 	state.redirect(mod, "ExInitializePushLock",
 		[](vcpu&, emu_object<std::uint64_t> push_lock)
@@ -313,4 +319,47 @@ void modules::register_ntoskrnl_lock_ops(win_kernel_state& state, proc_module& m
 		THREAD_LOG_INFO("ExWaitForRundownProtectionRelease(0x{:X}): running down",
 			run_ref.address());
 	});
+
+	state.redirect(mod, "ExAllocateCacheAwareRundownProtection",
+		[st](vcpu& cpu, [[maybe_unused]] const std::uint32_t pool_type,
+			const std::uint32_t pool_tag) -> addr_t
+		{
+			const auto processors = static_cast<std::uint32_t>(cpu.emu()->cpus().size());
+			const auto stride = processors > 1
+				? largest_cache_line : static_cast<std::uint32_t>(sizeof(_EX_RUNDOWN_REF));
+
+			const auto header = st->pool.allocate(
+				sizeof(_EX_RUNDOWN_REF_CACHE_AWARE), pool_tag, true);
+
+			// The pool only aligns to 16, so the per-cpu stride is carved out of the padding.
+			const auto pool_to_free = header
+				? st->pool.allocate(stride * (processors + 1ull), pool_tag, true) : 0;
+
+			if (!header || !pool_to_free)
+			{
+				if (header)
+					st->pool.free(header);
+
+				THREAD_LOG_ERR("ExAllocateCacheAwareRundownProtection: out of pool for {} "
+					"processor(s) (tag '{}')", processors, pool_tag_name(pool_tag));
+
+				return 0;
+			}
+
+			emu_object<_EX_RUNDOWN_REF_CACHE_AWARE> run_ref(*cpu.curr_addr_space(), header);
+
+			_EX_RUNDOWN_REF_CACHE_AWARE out{};
+			out.RunRefs = guest_ptr<_EX_RUNDOWN_REF>((pool_to_free + stride - 1) & ~(stride - 1ull));
+			out.PoolToFree = guest_ptr<void>(pool_to_free);
+			out.RunRefSize = stride;
+			out.Number = processors;
+
+			run_ref.write(out);
+
+			THREAD_LOG_INFO("ExAllocateCacheAwareRundownProtection(pool_type=0x{:X}, tag='{}') -> "
+				"0x{:X} ({} x {} bytes at 0x{:X})", pool_type, pool_tag_name(pool_tag), header,
+				processors, stride, guest_va(out.RunRefs));
+
+			return header;
+		});
 }
