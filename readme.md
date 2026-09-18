@@ -85,6 +85,10 @@ examples:
   kernemul test_driver.sys test_user.exe
 ```
 
+# Credits
+
+- [John](https://github.com/invpcid) for helping with bugs on EAC, ideas, and some function implementation handlers.
+
 # License
 
 This project uses the GPL-2.0 license.
