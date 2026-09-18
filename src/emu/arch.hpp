@@ -32,6 +32,8 @@ struct arch
 	virtual cpu_exception intr_to_excp(int vector) const = 0;
 	virtual addr_t fault_addr(vcpu& cpu) const = 0;
 
+	virtual void on_exception(vcpu&) const {}
+
 	void set_emu(emu* e) { emu_ = e; }
 
 protected:

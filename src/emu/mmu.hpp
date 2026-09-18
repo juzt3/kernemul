@@ -42,6 +42,8 @@ public:
 
 	addr_t alloc_phys(std::size_t size, mem_prot prot);
 
+	void back_phys(addr_t pa, std::size_t size);
+
 	virtual std::size_t page_size() const = 0;
 
 	virtual std::optional<addr_t> virt_to_phys(const addr_space& space, addr_t va) = 0;

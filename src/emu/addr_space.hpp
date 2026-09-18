@@ -12,6 +12,9 @@ struct addr_space
 	// Both `pa` and `size` are page aligned by the caller.
 	virtual addr_t map_phys(addr_t pa, std::size_t size, mem_prot prot) = 0;
 
+	// Backs `pa` and maps it, for an address the machine has rather than one this allocated.
+	addr_t alloc_phys(addr_t pa, std::size_t size, mem_prot prot);
+
 	void read_mem(addr_t va, void* buf, std::size_t size);
 	void write_mem(addr_t va, const void* buf, std::size_t size);
 	void prot_mem(addr_t va, std::size_t size, mem_prot prot);

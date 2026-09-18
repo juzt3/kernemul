@@ -85,7 +85,8 @@ struct win_kernel_state : kernel_state
 		processes[sys_proc->id()] = sys_proc;
 		auto& space = *emu->default_addr_space();
 
-		fs.load_dir(target::guest_fs_dir, system32_dir_narrow);
+		// The host tree is laid out as the guest's drive, so a file sits where the guest names it.
+		fs.load_dir(target::guest_fs_dir, root_dir_narrow);
 
 		const auto ntoskrnl = map_redirect_module("ntoskrnl.exe", modules::register_ntoskrnl);
 
@@ -148,16 +149,16 @@ struct win_kernel_state : kernel_state
 	template <typename F>
 	std::shared_ptr<proc_module> map_redirect_module(const std::string_view name, F&& registrar)
 	{
-		const auto path = std::string(target::guest_fs_dir) + std::string(name);
+		const auto file = sys_proc->open_system_image(name);
 
-		if (!std::filesystem::exists(path))
+		if (!file)
 		{
 			LOG_WARN("{} is not in {}, so nothing importing from it will map",
 				name, target::guest_fs_dir);
 			return nullptr;
 		}
 
-		const auto mod = kernel_state::map_redirect_module(*sys_proc, path, true);
+		const auto mod = kernel_state::map_redirect_module(*sys_proc, name, file->data(), true);
 
 		if (!mod)
 		{

@@ -59,6 +59,8 @@ bool win_exception::handle(vcpu& cpu, const cpu_exception ex)
 	const auto original_pc = cpu.pc();
 	const auto code = exception_to_status(ex);
 
+	cpu.arch()->on_exception(cpu);
+
 	LOG_INFO("exception dispatch: code=0x{:X}, rip={}, address=0x{:X}", code,
 		symbols::format_addr(proc, original_pc), cpu.arch()->fault_addr(cpu));
 

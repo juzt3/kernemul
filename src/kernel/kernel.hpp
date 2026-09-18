@@ -9,6 +9,7 @@
 #include <atomic>
 #include <chrono>
 #include <exception>
+#include <span>
 #include <format>
 #include <functional>
 #include <filesystem>
@@ -147,9 +148,10 @@ struct kernel_state
 		return nullptr;
 	}
 
-	std::shared_ptr<proc_module> map_redirect_module(process& proc, const std::filesystem::path& path, bool supervisor)
+	std::shared_ptr<proc_module> map_redirect_module(process& proc, const std::string_view name,
+		const std::span<const std::uint8_t> image, bool supervisor)
 	{
-		auto mod = krnl::map_img(proc, path, supervisor, true);
+		auto mod = krnl::map_img(proc, name, image, supervisor, true);
 
 		if (!mod)
 			return nullptr;

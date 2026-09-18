@@ -63,4 +63,13 @@ addr_t arch::fault_addr(vcpu& cpu) const
 	return cpu.reg(cr2);
 }
 
+void arch::on_exception(vcpu& cpu) const
+{
+	// A gate does not carry these into the handler, or a single step would never end.
+	constexpr std::uint64_t trap_flag = 1ull << 8;
+	constexpr std::uint64_t resume_flag = 1ull << 16;
+
+	cpu.reg(rflags, cpu.reg(rflags) & ~(trap_flag | resume_flag));
+}
+
 }

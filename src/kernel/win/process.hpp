@@ -51,9 +51,9 @@ public:
 	void set_eprocess(emu_object<_EPROCESS> ep) { eprocess_ = std::move(ep); }
 	[[nodiscard]] const emu_object<_EPROCESS>& eprocess() const { return eprocess_; }
 
-protected:
 	[[nodiscard]] std::shared_ptr<win_file> open_system_image(std::string_view name) const;
 
+protected:
 	// 0 if the module is not mapped or has no such symbol, logging either way.
 	addr_t find_symbol(std::string_view mod_name, std::string_view sym) const;
 

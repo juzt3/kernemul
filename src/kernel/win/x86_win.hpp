@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cstring>
 #include <span>
+#include <utility>
 
 inline constexpr context_flags context_amd64    { 0x00100000 };
 inline constexpr context_flags context_control  = context_amd64.with(0x1);
@@ -59,6 +60,20 @@ public:
 	// slot is in that half. Defined out of line because a page table entry is an ia32 type.
 	static void install_self_map(::addr_space& space);
 
+	// What rdmsr 0x1B reports, so it is the page a driver goes on to map.
+	static constexpr addr_t local_apic_phys = 0xFEE00000;
+
+	void map_local_apic(::addr_space& space)
+	{
+		if (std::exchange(apic_mapped_, true))
+			return;
+
+		const auto va = space.alloc_phys(local_apic_phys,
+			space.mmu_->page_size(), prot_rw | prot_supervisor);
+
+		LOG_INFO("local apic: physical 0x{:X} -> 0x{:X}", local_apic_phys, va);
+	}
+
 	std::shared_ptr<vcpu> add_vcpu() override
 	{
 		auto cpu = emu_->add_vcpu();
@@ -66,6 +81,7 @@ public:
 		if (const auto nt = kernel().sys_proc->find_module("ntoskrnl.exe"))
 		{
 			install_self_map(*cpu->curr_addr_space());
+			map_local_apic(*cpu->curr_addr_space());
 
 			const auto tables = x86_win_seg::init_vcpu(*cpu, *nt);
 
@@ -356,4 +372,7 @@ public:
 			}
 		}
 	}
+
+private:
+	bool apic_mapped_ = false;
 };

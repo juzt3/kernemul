@@ -46,5 +46,6 @@ namespace x86
 		std::size_t reg_size(reg_t r) const override;
 		cpu_exception intr_to_excp(int vector) const override;
 		addr_t fault_addr(vcpu& cpu) const override;
+		void on_exception(vcpu& cpu) const override;
 	};
 }

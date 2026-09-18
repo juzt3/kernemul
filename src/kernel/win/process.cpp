@@ -151,7 +151,10 @@ void windows_process::terminate_thread(const thread_id_type id)
 
 std::shared_ptr<win_file> windows_process::open_system_image(const std::string_view name) const
 {
-	return fs_.open(std::string(system32_dir_narrow) + std::string(name));
+	if (auto file = fs_.open(std::string(system32_dir_narrow) + std::string(name)))
+		return file;
+
+	return fs_.open(std::string(system32_dir_narrow) + "drivers/" + std::string(name));
 }
 
 // There is no loader in the guest behind a driver, so the imports are resolved here.
