@@ -246,7 +246,7 @@ bool x64_unwinder::unwind_frame(
 	// again here rather than taken from where that copy happens to live.
 	result.function_entry = function_entry_addr(mod, *func);
 
-	return ctx.pc != 0;
+	return true;
 }
 
 } // namespace win
