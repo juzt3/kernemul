@@ -91,6 +91,26 @@ void modules::register_ntoskrnl_info_ops(win_kernel_state& state, proc_module& m
 			return count;
 		});
 
+	// With a single group the group relative index is the system wide one.
+	state.redirect(mod, "KeGetCurrentProcessorNumberEx",
+		[](vcpu& cpu, emu_object<_PROCESSOR_NUMBER> proc_number) -> std::uint32_t
+		{
+			const auto number = static_cast<std::uint32_t>(cpu.id());
+
+			if (proc_number)
+			{
+				_PROCESSOR_NUMBER out{};
+				out.Number = static_cast<std::uint8_t>(number);
+
+				proc_number.write(out);
+			}
+
+			THREAD_LOG_INFO("KeGetCurrentProcessorNumberEx(0x{:X}) -> {}",
+				proc_number.address(), number);
+
+			return number;
+		});
+
 	// Interrupts are the third term on real Windows, never masked here, so that term is dropped.
 	state.redirect(mod, "KeAreAllApcsDisabled", [st](vcpu& cpu) -> bool
 	{
@@ -159,6 +179,19 @@ void modules::register_ntoskrnl_info_ops(win_kernel_state& state, proc_module& m
 
 	state.redirect(mod, "PsGetCurrentThreadProcessId", current_process_id);
 	state.redirect(mod, "PsGetCurrentProcessId", current_process_id);
+
+	state.redirect(mod, "PsGetCurrentThreadId", [](vcpu& cpu) -> addr_t
+	{
+		const auto t = std::dynamic_pointer_cast<win_thread>(cpu.thread());
+
+		const auto id = (t && t->ethread())
+			? guest_va(t->client_id().field(&_CLIENT_ID::UniqueThread).read())
+			: (cpu.thread() ? cpu.thread()->id() : 0);
+
+		THREAD_LOG_INFO("PsGetCurrentThreadId() -> {}", id);
+
+		return id;
+	});
 
 	state.redirect(mod, "RtlGetVersion",
 		[st](vcpu& cpu, emu_object<_RTL_OSVERSIONINFOEXW> version_information) -> NTSTATUS

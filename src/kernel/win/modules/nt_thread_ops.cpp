@@ -126,6 +126,24 @@ void modules::register_ntoskrnl_thread_ops(win_kernel_state& state, proc_module&
 			return previous;
 		});
 
+	state.redirect(mod, "KeSetActualBasePriorityThread",
+		[](vcpu&, emu_object<_KTHREAD> thread, const std::int32_t base_priority) -> std::int32_t
+		{
+			if (!thread)
+				return 0;
+
+			const auto previous = thread.field(&_KTHREAD::BasePriority).read();
+			const auto updated = static_cast<char>(base_priority);
+
+			thread.field(&_KTHREAD::BasePriority).write(updated);
+			thread.field(&_KTHREAD::Priority).write(updated);
+
+			THREAD_LOG_INFO("KeSetActualBasePriorityThread(thread=0x{:X}, base_priority={}) -> {}",
+				thread.address(), base_priority, previous);
+
+			return previous;
+		});
+
 	// Nothing here builds an irp, so the guest reads back only what the guest put there.
 	state.redirect(mod, "IoGetTopLevelIrp", [](vcpu& cpu) -> addr_t
 	{

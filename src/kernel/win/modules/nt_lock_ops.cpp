@@ -362,4 +362,62 @@ void modules::register_ntoskrnl_lock_ops(win_kernel_state& state, proc_module& m
 
 			return header;
 		});
+
+	state.redirect(mod, "ExFreeCacheAwareRundownProtection",
+		[st](vcpu&, emu_object<_EX_RUNDOWN_REF_CACHE_AWARE> cache_aware)
+		{
+			if (!cache_aware)
+				return;
+
+			const auto free_block = [st](const addr_t block)
+			{
+				if (block && !st->pool.free(block))
+					THREAD_LOG_ERR("ExFreeCacheAwareRundownProtection: 0x{:X} is not a live "
+						"pool allocation", block);
+			};
+
+			const auto refs = guest_va(cache_aware
+				.field(&_EX_RUNDOWN_REF_CACHE_AWARE::PoolToFree).read());
+
+			free_block(refs);
+			free_block(cache_aware.address());
+
+			THREAD_LOG_INFO("ExFreeCacheAwareRundownProtection(0x{:X}): run refs at 0x{:X}",
+				cache_aware.address(), refs);
+		});
+
+	state.redirect(mod, "ExWaitForRundownProtectionReleaseCacheAware",
+		[](vcpu& cpu, emu_object<_EX_RUNDOWN_REF_CACHE_AWARE> cache_aware)
+		{
+			if (!cache_aware)
+				return;
+
+			const auto entry = cache_aware.read();
+			const auto refs = guest_va(entry.RunRefs);
+
+			if (!refs)
+			{
+				THREAD_LOG_ERR("ExWaitForRundownProtectionReleaseCacheAware: 0x{:X} has no "
+					"run refs", cache_aware.address());
+				return;
+			}
+
+			std::uint64_t held = 0;
+
+			for (std::uint32_t i = 0; i < entry.Number; ++i)
+			{
+				const win::rundown_ref run_ref(*cpu.curr_addr_space(),
+					refs + static_cast<std::uint64_t>(entry.RunRefSize) * i);
+
+				held += win::rundown_references(run_ref);
+				win::begin_rundown(run_ref);
+			}
+
+			if (held)
+				THREAD_LOG_ERR("ExWaitForRundownProtectionReleaseCacheAware: 0x{:X} has {} "
+					"references and nothing here can wait", cache_aware.address(), held);
+
+			THREAD_LOG_INFO("ExWaitForRundownProtectionReleaseCacheAware(0x{:X}): {} run refs "
+				"running down", cache_aware.address(), entry.Number);
+		});
 }

@@ -129,7 +129,7 @@ void modules::register_ntoskrnl_timer_ops(win_kernel_state& state, proc_module& 
 				synchronization ? "SynchronizationTimer" : "NotificationTimer");
 		});
 
-	const auto set_timer = [](const emu_object<_KTIMER>& timer, const std::int64_t due_time,
+	const auto set_timer = [](emu_object<_KTIMER> timer, const std::int64_t due_time,
 		const std::int32_t period, const emu_object<_KDPC>& dpc, const std::string_view who)
 	{
 		auto entry = timer.read();

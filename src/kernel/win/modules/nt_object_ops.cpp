@@ -76,6 +76,28 @@ void modules::register_ntoskrnl_object_ops(win_kernel_state& state, proc_module&
 			objs.reference_object(object);
 		});
 
+	// Only four object types exist here and nothing ties one to an object, so the type a caller
+	// asks for is logged rather than enforced: a mismatch it never made is worse than no check.
+	state.redirect(mod, "ObReferenceObjectByPointer",
+		[&objs = state.objs](vcpu&, const addr_t object,
+			[[maybe_unused]] const std::uint32_t desired_access, const addr_t object_type,
+			[[maybe_unused]] const std::uint8_t access_mode) -> NTSTATUS
+		{
+			if (!object)
+				return STATUS_INVALID_PARAMETER;
+
+			if (!objs.has_object(object))
+				THREAD_LOG_WARN("ObReferenceObjectByPointer: 0x{:X} is not an object here, so "
+					"the reference is not counted", object);
+			else
+				objs.reference_object(object);
+
+			THREAD_LOG_INFO("ObReferenceObjectByPointer(object=0x{:X}, type=0x{:X})",
+				object, object_type);
+
+			return STATUS_SUCCESS;
+		});
+
 	auto deref = [&objs = state.objs](vcpu&, addr_t object) -> void
 	{
 		THREAD_LOG_INFO("ObfDereferenceObject(object=0x{:X})", object);
