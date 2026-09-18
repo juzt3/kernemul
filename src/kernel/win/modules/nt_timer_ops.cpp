@@ -16,6 +16,9 @@ constexpr std::uint8_t dpc_object_type = 19;
 // KDPC::Importance.
 constexpr std::uint8_t medium_importance = 1;
 
+// TIMER_TYPE.
+constexpr std::uint32_t synchronization_timer = 1;
+
 }
 
 // A DPC is started on a thread of its own; nothing walks a timer list, so a timer only records.
@@ -91,19 +94,39 @@ void modules::register_ntoskrnl_timer_ops(win_kernel_state& state, proc_module& 
 		THREAD_LOG_INFO("KeFlushQueuedDpcs(): a DPC runs when it is inserted, so none are queued");
 	});
 
-	state.redirect(mod, "KeInitializeTimer", [](vcpu&, emu_object<_KTIMER> timer)
+	const auto init_timer = [](const emu_object<_KTIMER>& timer, const win::dispatcher_type type)
 	{
-		if (!timer)
-			return;
-
-		win::init_dispatcher(timer, win::timer_notification_object, 0);
+		win::init_dispatcher(timer, type, 0);
 
 		timer.field(&_KTIMER::DueTime).field(&_ULARGE_INTEGER::QuadPart).write(0);
 		timer.field(&_KTIMER::Dpc).write(nullptr);
 		timer.field(&_KTIMER::Period).write(0);
+	};
+
+	state.redirect(mod, "KeInitializeTimer", [init_timer](vcpu&, emu_object<_KTIMER> timer)
+	{
+		if (!timer)
+			return;
+
+		init_timer(timer, win::timer_notification_object);
 
 		THREAD_LOG_INFO("KeInitializeTimer(0x{:X})", timer.address());
 	});
+
+	state.redirect(mod, "KeInitializeTimerEx",
+		[init_timer](vcpu&, emu_object<_KTIMER> timer, const std::uint32_t type)
+		{
+			if (!timer)
+				return;
+
+			const bool synchronization = type == synchronization_timer;
+
+			init_timer(timer, synchronization
+				? win::timer_synchronization_object : win::timer_notification_object);
+
+			THREAD_LOG_INFO("KeInitializeTimerEx(0x{:X}, {})", timer.address(),
+				synchronization ? "SynchronizationTimer" : "NotificationTimer");
+		});
 
 	state.redirect(mod, "KeSetTimer",
 		[](vcpu&, emu_object<_KTIMER> timer, const std::int64_t due_time,
