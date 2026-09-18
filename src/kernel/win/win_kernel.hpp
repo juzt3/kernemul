@@ -111,6 +111,14 @@ struct win_kernel_state : kernel_state
 			map_redirect_module("tdi.sys", modules::register_tdi);
 			map_redirect_module("win32k.sys", modules::register_win32k);
 
+			for (const auto name : { "hal.dll", "kd.dll", "wdfldr.sys" })
+			{
+				if (const auto file = sys_proc->open_system_image(name))
+					krnl::map_img(*sys_proc, name, file->data(), true, true);
+				else
+					LOG_WARN("{} is not in {}", name, target::guest_fs_dir);
+			}
+
 			if (const auto ps_active = ntoskrnl->find_symbol("PsActiveProcessHead"))
 			{
 				active_process_list = active_process_list_t(space, *ps_active,
@@ -125,6 +133,8 @@ struct win_kernel_state : kernel_state
 
 				if (const auto ps_init = ntoskrnl->find_export("PsInitialSystemProcess"))
 					space.write_mem(*ps_init, sys_eproc.address());
+
+				seed_process_list(space);
 			}
 
 			build_syscall_table(*ntoskrnl);
@@ -184,6 +194,22 @@ struct win_kernel_state : kernel_state
 
 		if (!bound_nt && !bound_zw)
 			LOG_ERR("neither {} nor {} is in {}", nt, zw, mod.name);
+	}
+
+	std::shared_ptr<windows_process> create_dummy_process(addr_space& space,
+		const std::string_view name)
+	{
+		const auto id = objs.allocate_id();
+
+		auto proc = std::make_shared<windows_process>(
+			id, emu_->default_addr_space(), objs, fs);
+
+		proc->set_eprocess(insert_process(space, id, name));
+
+		std::unique_lock lock(proc_mtx_);
+		processes[id] = proc;
+
+		return proc;
 	}
 
 	// Named for the half it covers rather than for its type: 'addr_space' is also a type this
@@ -535,6 +561,28 @@ private:
 			std::format("EPROCESS.ThreadListHead[pid={}]", id), true).init();
 
 		return obj;
+	}
+
+	void seed_process_list(addr_space& space)
+	{
+		static constexpr std::string_view names[] = {
+			"Registry",       "smss.exe",       "csrss.exe",      "wininit.exe",
+			"csrss.exe",      "winlogon.exe",   "services.exe",   "lsass.exe",
+			"svchost.exe",    "svchost.exe",    "svchost.exe",    "svchost.exe",
+			"svchost.exe",    "svchost.exe",    "svchost.exe",    "svchost.exe",
+			"fontdrvhost.ex", "fontdrvhost.ex", "dwm.exe",        "svchost.exe",
+			"svchost.exe",    "svchost.exe",    "svchost.exe",    "svchost.exe",
+			"svchost.exe",    "svchost.exe",    "WmiPrvSE.exe",   "spoolsv.exe",
+			"MsMpEng.exe",    "NisSrv.exe",     "SearchIndexer.", "explorer.exe",
+			"RuntimeBroker.", "sihost.exe",     "taskhostw.exe",  "ctfmon.exe",
+			"conhost.exe",    "dllhost.exe",    "SearchHost.exe", "StartMenuExper",
+		};
+
+		for (const auto name : names)
+			create_dummy_process(space, name);
+
+		LOG_INFO("PsActiveProcessHead: seeded {} process(es) behind System",
+			std::size(names));
 	}
 
 };
