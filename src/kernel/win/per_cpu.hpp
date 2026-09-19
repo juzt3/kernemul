@@ -32,6 +32,7 @@ using irql_t = std::uint8_t;
 inline constexpr irql_t passive_level  = 0;
 inline constexpr irql_t apc_level      = 1;
 inline constexpr irql_t dispatch_level = 2;
+inline constexpr irql_t ipi_level      = 14;
 
 // x86-64 mirrors it in cr8, which is where __readcr8 and the guest's inlined KeGetCurrentIrql look.
 inline constexpr std::size_t kpcr_irql_off =

@@ -743,22 +743,51 @@ void modules::register_ntoskrnl_misc_ops(win_kernel_state& state, proc_module& m
 			return base;
 		});
 
-	// A tail call, so the broadcast function's result reaches the caller unchanged.
+	// Every cpu's turn is taken on this one, in its own name: nothing here can stop a cpu to run
+	// code on it, so the KPCR points at the cpu whose turn it is and the worker reads its number.
 	state.redirect(mod, "KeIpiGenericCall",
-		[](vcpu& cpu, const addr_t broadcast_function, const std::uint64_t context)
+		[st](vcpu& cpu, const addr_t broadcast_function,
+			const std::uint64_t context) -> std::uint64_t
 		{
 			if (!broadcast_function)
 			{
 				THREAD_LOG_ERR("KeIpiGenericCall: null broadcast function");
-				return;
+				return 0;
 			}
 
-			THREAD_LOG_WARN("KeIpiGenericCall(0x{:X}, context=0x{:X}): nothing here holds the "
-				"other cpus still, so it runs on this one alone",
-				broadcast_function, context);
+			auto* const emulator = st->emulator();
+			const auto self = cpu.id();
+			const auto count = cpu.emu()->cpus().size();
+
+			THREAD_LOG_INFO("KeIpiGenericCall(0x{:X}, context=0x{:X}) on {} cpu(s)",
+				broadcast_function, context, count);
 
 			const std::uint64_t args[] = { context };
-			guest_tail_call(cpu, broadcast_function, args);
+			const auto old_irql = emulator ? emulator->set_irql(cpu, ipi_level) : passive_level;
+
+			const auto* const own = emulator ? st->per_cpu(self) : nullptr;
+
+			std::uint64_t result = 0;
+
+			for (std::size_t id = 0; id < count; ++id)
+			{
+				if (const auto* const target = own ? st->per_cpu(id) : nullptr)
+					emulator->set_pcr(cpu, target->address());
+
+				const auto value = st->calls.call(cpu, broadcast_function, args);
+
+				// The caller is given what the worker returned on the cpu it called from.
+				if (id == self)
+					result = value;
+			}
+
+			if (own)
+				emulator->set_pcr(cpu, own->address());
+
+			if (emulator)
+				emulator->set_irql(cpu, old_irql);
+
+			return result;
 		});
 
 	// A triage dump is undocumented, and a length claiming the buffer was filled is worse.
