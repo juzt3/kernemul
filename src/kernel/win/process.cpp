@@ -255,9 +255,25 @@ void windows_process::for_each_thread(const std::function<void(win_thread&)>& fn
 
 void windows_process::wake_waiters(struct addr_space& space, const addr_t object) const
 {
+	bool released = false;
+
 	for_each_thread([&](win_thread& t)
 	{
 		if (t.waiting_on(object) && t.try_satisfy(space))
+		{
 			THREAD_LOG_INFO("wait on 0x{:X} satisfied for tid={}", object, t.id());
+			released = true;
+		}
 	});
+
+	// Satisfying the wait is only half of releasing the thread: it is runnable again without
+	// having been queued, and a cpu parked on an empty answer does not look a second time on
+	// its own. An untimed wait leaves nothing for next_wake() to arm either, so that cpu waits
+	// on a notify that never comes. start() and resume() are the other two ways a thread turns
+	// runnable out of band, and both say so exactly here.
+	if (released)
+	{
+		if (const auto s = scheduler())
+			s->wake();
+	}
 }
