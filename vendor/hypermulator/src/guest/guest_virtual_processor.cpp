@@ -173,4 +173,12 @@ void hm::vcpu::reset_exception_state()
 	reg_write(reg::pending_interruption, &zero_8, sizeof(zero_8));
 	reg_write(reg::pending_event, &zero_16, sizeof(zero_16));
 	reg_write(reg::interrupt_state, &zero_8, sizeof(zero_8));
+
+	// A trap flag armed for a step latches a debug exception the moment anything else exits
+	// first, and the run may end right there -- a stop taken in run() breaks out before the
+	// exit is processed, so the step callback that would have cleared the latch never runs.
+	// Left set, it is delivered on the next entry, which by then is whatever thread the
+	// scheduler put on this cpu: a single step nobody armed, at an address nobody expects.
+	// The flag itself is dropped here too (reset_tf), so the latch has nothing left to mean.
+	reg_write(reg::pending_debug_exception, &zero_8, sizeof(zero_8));
 }
