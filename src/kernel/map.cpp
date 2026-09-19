@@ -168,6 +168,9 @@ std::shared_ptr<proc_module> krnl::map_img(process& proc, const std::string_view
 		space->write_mem(reloc_addr, val + delta);
 	}
 
+	LOG_INFO("mapped {} at 0x{:X}-0x{:X} (size 0x{:X}, entry 0x{:X})",
+		name, addr, addr + size, size, addr + img->entry_point());
+
 	// Registered before its own imports resolve, or modules that import each other load for ever.
 	auto mod = proc.add_module(name, addr, img);
 

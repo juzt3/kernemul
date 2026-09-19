@@ -11,6 +11,7 @@
 
 struct proc_module;
 class process;
+class vcpu;
 
 struct symbol_info
 {
@@ -56,6 +57,10 @@ struct symbols
 	virtual void load(proc_module& mod) = 0;
 
 	static std::string format_addr(const process& proc, addr_t addr);
+
+	// nullopt when no loaded module owns addr, so a caller with its own label for that
+	// memory -- a watched IDT or GDT -- can keep using it.
+	static std::optional<std::string> try_format_addr(const vcpu& cpu, addr_t addr);
 };
 
 struct export_symbols : symbols

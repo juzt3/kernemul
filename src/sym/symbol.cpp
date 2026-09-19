@@ -1,5 +1,6 @@
 #include "symbol.hpp"
 #include "../kernel/process.hpp"
+#include "../kernel/thread_scheduler.hpp"
 
 #include <algorithm>
 #include <format>
@@ -62,6 +63,27 @@ std::string symbols::format_addr(const process& proc, const addr_t addr)
 
 	if (!mod)
 		return std::format("0x{:X}", addr);
+
+	const auto sym = mod->symbols.resolve(addr);
+
+	if (!sym)
+		return std::format("{}+0x{:X}", mod->name, addr - mod->addr);
+
+	return std::format("{}!{}", mod->name, sym->format());
+}
+
+std::optional<std::string> symbols::try_format_addr(const vcpu& cpu, const addr_t addr)
+{
+	const auto t = cpu.thread();
+	const auto proc = t ? t->proc() : nullptr;
+
+	if (!proc)
+		return std::nullopt;
+
+	const auto mod = proc->find_module_by_addr(addr);
+
+	if (!mod)
+		return std::nullopt;
 
 	const auto sym = mod->symbols.resolve(addr);
 

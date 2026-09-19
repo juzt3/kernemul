@@ -4,6 +4,8 @@
 #include "mmu.hpp"
 #include "emu.hpp"
 #include "../util/log.hpp"
+#include "../sym/symbol.hpp"
+#include <format>
 #include <cstddef>
 #include <type_traits>
 #include <typeinfo>
@@ -178,8 +180,13 @@ inline emu_hook* monitor_range(addr_space& space, const addr_t addr, const std::
 			[base = addr, name = std::move(name)](vcpu& cpu, const addr_t accessed,
 				std::size_t, const mem_prot access)
 			{
-				LOG_INFO("0x{:X} accessed '{}'+0x{:X} (type={})",
-					cpu.pc(), name, accessed - base, static_cast<unsigned>(access));
+				// A module-owned address names the global that was touched; anything else --
+				// a watched IDT, GDT or TSS -- keeps the label its installer gave it.
+				const auto sym = symbols::try_format_addr(cpu, accessed);
+
+				LOG_INFO("0x{:X} accessed {} (type={})", cpu.pc(),
+					sym ? *sym : std::format("'{}'+0x{:X}", name, accessed - base),
+					static_cast<unsigned>(access));
 			});
 	}
 	catch (const std::exception& e)
