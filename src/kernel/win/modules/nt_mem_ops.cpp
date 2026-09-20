@@ -1,4 +1,5 @@
 #include "nt_mem_ops.hpp"
+#include "ntoskrnl.hpp"
 #include "../win_kernel.hpp"
 #include "../mdl.hpp"
 #include "../objects.hpp"
@@ -55,7 +56,7 @@ void modules::register_ntoskrnl_mem_ops(win_kernel_state& state, proc_module& mo
 		});
 
 	state.redirect(mod, "MmGetPhysicalAddress",
-		[](vcpu& cpu, const addr_t base_address) -> std::uint64_t
+		[st](vcpu& cpu, const addr_t base_address) -> std::uint64_t
 		{
 			auto& space = *cpu.curr_addr_space();
 			const auto pa = space.mmu_->virt_to_phys(space, base_address).value_or(0);
@@ -187,11 +188,21 @@ void modules::register_ntoskrnl_mem_ops(win_kernel_state& state, proc_module& mo
 				number_of_bytes + mdl_page_offset(base_address));
 		});
 
-	// The pool hands out one run per allocation, so a pool block already is contiguous.
+	// The pool hands out one run per allocation, so a pool block already is contiguous. What it
+	// does not do for a request under a page is start one: it aligns those to 16 bytes. Windows
+	// gives a contiguous allocation whole pages however few bytes were asked for, so the address
+	// is always page aligned -- and a caller that rounds the pointer down to its page, as a
+	// driver storing per-page state does, lands somewhere else entirely when it is not. Asking
+	// for the pages the request really costs is what makes the pool's own alignment rule right.
 	auto allocate_contiguous = [st](vcpu& cpu, const std::uint64_t number_of_bytes,
 		const std::uint64_t highest_acceptable_address, const std::string_view who) -> addr_t
 	{
-		const auto addr = st->pool.allocate(number_of_bytes, pool_tag("MmCo"), true);
+		auto& space = *cpu.curr_addr_space();
+
+		const auto page = space.mmu_->page_size();
+		const auto pages = (number_of_bytes + page - 1) & ~(page - 1);
+
+		const auto addr = st->pool.allocate(pages, pool_tag("MmCo"), true);
 
 		if (!addr)
 		{
@@ -199,7 +210,6 @@ void modules::register_ntoskrnl_mem_ops(win_kernel_state& state, proc_module& mo
 			return 0;
 		}
 
-		auto& space = *cpu.curr_addr_space();
 		const auto pa = space.mmu_->virt_to_phys(space, addr).value_or(0);
 
 		if (pa > highest_acceptable_address)
@@ -245,6 +255,191 @@ void modules::register_ntoskrnl_mem_ops(win_kernel_state& state, proc_module& mo
 
 			return allocate_contiguous(cpu, number_of_bytes, highest_acceptable_address,
 				"MmAllocateContiguousNodeMemory");
+		});
+
+	// Pages with a page table entry each rather than a large page behind them, which is what
+	// the pool hands out anyway. A caller reprotects these page by page afterwards, so the
+	// block has to start on a page -- the pool aligns anything a page or larger.
+	state.redirect(mod, "MmAllocateIndependentPages",
+		[st](vcpu& cpu, const std::uint64_t number_of_bytes,
+			const std::uint32_t node_number) -> addr_t
+		{
+			constexpr std::size_t page = 0x1000;
+			const auto rounded = (number_of_bytes + page - 1) & ~(page - 1);
+
+			const auto addr = rounded ? st->pool.allocate(rounded, pool_tag("MmIp"), true) : 0;
+
+			if (!addr)
+			{
+				THREAD_LOG_ERR("MmAllocateIndependentPages: out of pool for {} bytes",
+					number_of_bytes);
+
+				return 0;
+			}
+
+			THREAD_LOG_INFO("MmAllocateIndependentPages({} bytes, node={}) -> 0x{:X}",
+				number_of_bytes, node_number, addr);
+
+			return addr;
+		});
+
+	state.redirect(mod, "MmFreeIndependentPages",
+		[st](vcpu&, const addr_t base_address, const std::uint64_t number_of_bytes)
+		{
+			const auto freed = st->pool.free(base_address);
+
+			if (!freed)
+			{
+				THREAD_LOG_ERR("MmFreeIndependentPages: 0x{:X} was not allocated here",
+					base_address);
+
+				return;
+			}
+
+			THREAD_LOG_INFO("MmFreeIndependentPages(0x{:X}, {} bytes): {} freed",
+				base_address, number_of_bytes, freed->size);
+		});
+
+	// The pages are already mapped in kernel space, so the list describes memory that exists
+	// rather than frames waiting for an address. StartVa is unused by this allocator on NT,
+	// which leaves it as the place to keep the block the list belongs to.
+	state.redirect(mod, "MmAllocatePagesForMdl",
+		[st](vcpu& cpu, const std::uint64_t low_address, const std::uint64_t high_address,
+			const std::uint64_t skip_bytes, const std::uint64_t total_bytes) -> addr_t
+		{
+			const auto pages = (total_bytes + mdl_page_size - 1) / mdl_page_size;
+
+			if (!pages)
+				return 0;
+
+			const auto buffer = st->pool.allocate(pages * mdl_page_size, pool_tag("MmMd"), true);
+			const auto bytes = sizeof(mdl_t) + pages * sizeof(addr_t);
+			const auto list = buffer ? st->pool.allocate(bytes, pool_tag("Mdl "), true) : 0;
+
+			if (!buffer || !list)
+			{
+				THREAD_LOG_ERR("MmAllocatePagesForMdl: out of pool for {} bytes", total_bytes);
+
+				if (buffer)
+					st->pool.free(buffer);
+
+				return 0;
+			}
+
+			auto& space = *cpu.curr_addr_space();
+
+			mdl_t m{};
+			m.size = static_cast<std::int16_t>(bytes);
+			m.mdl_flags = mdl_pages_locked;
+			m.start_va = buffer;
+			m.byte_count = static_cast<std::uint32_t>(pages * mdl_page_size);
+
+			space.write_mem(list, m);
+
+			for (std::size_t i = 0; i < pages; ++i)
+			{
+				const auto pa = space.mmu_->virt_to_phys(space, buffer + i * mdl_page_size);
+
+				space.write_mem<addr_t>(list + sizeof(mdl_t) + i * sizeof(addr_t),
+					pa.value_or(0) / mdl_page_size);
+			}
+
+			THREAD_LOG_INFO("MmAllocatePagesForMdl(low=0x{:X}, high=0x{:X}, skip=0x{:X}, "
+				"{} bytes) -> 0x{:X} ({} page(s) at 0x{:X})",
+				low_address, high_address, skip_bytes, total_bytes, list, pages, buffer);
+
+			return list;
+		});
+
+	state.redirect(mod, "MmFreePagesFromMdl",
+		[st](vcpu& cpu, emu_object<mdl_t> memory_descriptor_list)
+		{
+			if (!memory_descriptor_list)
+				return;
+
+			const auto m = memory_descriptor_list.read();
+
+			// The list itself belongs to the caller, who frees it separately.
+			if (m.start_va)
+				st->pool.free(m.start_va);
+
+			THREAD_LOG_INFO("MmFreePagesFromMdl(0x{:X}): {} bytes at 0x{:X}",
+				memory_descriptor_list.address(), m.byte_count, m.start_va);
+		});
+
+	state.redirect(mod, "MmMapLockedPagesSpecifyCache",
+		[](vcpu&, emu_object<mdl_t> memory_descriptor_list, const std::uint8_t access_mode,
+			const std::uint32_t cache_type, const addr_t requested_address,
+			const std::uint32_t bug_check_on_failure, const std::uint32_t priority) -> addr_t
+		{
+			if (!memory_descriptor_list)
+				return 0;
+
+			auto m = memory_descriptor_list.read();
+
+			// One mapping, the one the pages already have: there is no second address space
+			// here to give a user mode caller its own view.
+			const auto va = m.mapped_system_va ? m.mapped_system_va : m.start_va;
+
+			m.mapped_system_va = va;
+			m.mdl_flags = static_cast<std::int16_t>(m.mdl_flags | mdl_mapped_to_system_va);
+
+			memory_descriptor_list.write(m);
+
+			THREAD_LOG_INFO("MmMapLockedPagesSpecifyCache(0x{:X}, mode={}, {}, requested=0x{:X}, "
+				"priority={}) -> 0x{:X}",
+				memory_descriptor_list.address(), access_mode, caching_type_name(cache_type),
+				requested_address, priority, va);
+
+			return va;
+		});
+
+	state.redirect(mod, "MmUnmapLockedPages",
+		[](vcpu&, const addr_t base_address, emu_object<mdl_t> memory_descriptor_list)
+		{
+			if (!memory_descriptor_list)
+				return;
+
+			auto m = memory_descriptor_list.read();
+			m.mdl_flags = static_cast<std::int16_t>(m.mdl_flags & ~mdl_mapped_to_system_va);
+			m.mapped_system_va = 0;
+
+			memory_descriptor_list.write(m);
+
+			THREAD_LOG_INFO("MmUnmapLockedPages(0x{:X}, 0x{:X}): the pages keep the address "
+				"they were allocated at", base_address, memory_descriptor_list.address());
+		});
+
+	// A probe either returns or raises; nothing here raises, so the check is reported and the
+	// caller carries on, which is what it expects for an address that is in fact valid.
+	auto probe = [](vcpu& cpu, const addr_t address, const std::uint64_t length,
+		const std::uint64_t alignment, const std::string_view who)
+	{
+		if (!length)
+			return;
+
+		auto& space = *cpu.curr_addr_space();
+		const bool mapped = space.mmu_->virt_to_phys(space, address).has_value();
+
+		if (!mapped || (alignment && (address & (alignment - 1))))
+			THREAD_LOG_ERR("{}(0x{:X}, {} bytes, align {}): {}", who, address, length, alignment,
+				mapped ? "misaligned" : "not mapped");
+		else
+			THREAD_LOG_INFO("{}(0x{:X}, {} bytes, align {})", who, address, length, alignment);
+	};
+
+	state.redirect(mod, "ProbeForRead",
+		[probe](vcpu& cpu, const addr_t address, const std::uint64_t length,
+			const std::uint64_t alignment)
+		{
+			probe(cpu, address, length, alignment, "ProbeForRead");
+		});
+
+	state.redirect(mod, "ProbeForWrite",
+		[probe](vcpu& cpu, const addr_t address, const std::uint64_t length,
+			const std::uint64_t alignment)
+		{
+			probe(cpu, address, length, alignment, "ProbeForWrite");
 		});
 
 	state.redirect(mod, "MmFreeContiguousMemory", [st](vcpu&, const addr_t base_address)
@@ -295,10 +490,11 @@ void modules::register_ntoskrnl_mem_ops(win_kernel_state& state, proc_module& mo
 	state.redirect(mod, "MmGetPhysicalMemoryRanges", [st](vcpu& cpu) -> addr_t
 	{
 		const auto range = cpu.curr_addr_space()->mmu_->phys_range();
+		const auto bytes = emulated_physical_pages * cpu.curr_addr_space()->mmu_->page_size();
 
 		const _PHYSICAL_MEMORY_RANGE entries[2] = {
 			{ .BaseAddress = { .QuadPart = static_cast<long long>(range.first) },
-			  .NumberOfBytes = { .QuadPart = static_cast<long long>(range.second) } },
+			  .NumberOfBytes = { .QuadPart = static_cast<long long>(bytes) } },
 			{},
 		};
 
@@ -313,7 +509,7 @@ void modules::register_ntoskrnl_mem_ops(win_kernel_state& state, proc_module& mo
 		cpu.curr_addr_space()->write_mem(addr, entries, sizeof(entries));
 
 		THREAD_LOG_INFO("MmGetPhysicalMemoryRanges() -> 0x{:X}: 0x{:X}..0x{:X}",
-			addr, range.first, range.first + range.second);
+			addr, range.first, range.first + bytes);
 
 		return addr;
 	});
