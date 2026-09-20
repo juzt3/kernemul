@@ -13,8 +13,14 @@
 # User-specific files (MonoDevelop/Xamarin Studio)
 *.userprefs
 
-*.txt
-
+build-vcpkg-test/
+build-x64-whp/
+build-x64-whp-msvc/
+test/
+build/
+build-x64/
+build-arm64/
+build-whp/
 build_wsl/
 src/config.hpp
 
@@ -36,9 +42,11 @@ mono_crash.*
 [Rr]eleases/
 x64/
 x86/
+!src/**/x86/
 [Ww][Ii][Nn]32/
 [Aa][Rr][Mm]/
 [Aa][Rr][Mm]64/
+!src/**/arm64/
 bld/
 [Bb]in/
 [Oo]bj/
@@ -415,3 +423,15 @@ FodyWeavers.xsd
 
 # Virtual filesystem folder
 vfs/
+
+# Emulator filesystem
+fs_x86_64/
+
+tools/*
+fs_arm64/
+
+# Symbol server cache (PDBs downloaded from msdl.microsoft.com)
+symbols/
+
+# Local toolchain paths for the cmake presets; never shared.
+CMakeUserPresets.json

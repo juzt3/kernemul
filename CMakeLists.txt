@@ -24,85 +24,380 @@ if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
 	set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS cmake.toml)
 endif()
 
+# vcpkg settings
 project(kernemul
 	LANGUAGES
 		CXX
 )
 
-include(FetchContent)
+# Guest architecture, fixed at build time: the Windows type layouts in
+# kernel/win/types.hpp come from one ntoskrnl PDB and are memcpy'd into guest
+# memory as-is, so two architectures cannot coexist in one binary.
+#
+# This stays raw CMake because cmkr [options] are boolean only, and [variables]
+# emits an uncached set() that would clobber -DKERNEMUL_ARCH. It lives at
+# project level so the value exists before the arch-* conditions below are
+# evaluated.
+set(KERNEMUL_ARCH "x64" CACHE STRING "guest architecture: x64 or arm64")
+set_property(CACHE KERNEMUL_ARCH PROPERTY STRINGS x64 arm64)
 
-# Fix warnings about DOWNLOAD_EXTRACT_TIMESTAMP
-if(POLICY CMP0135)
-	cmake_policy(SET CMP0135 NEW)
+if(NOT KERNEMUL_ARCH MATCHES "^(x64|arm64)$")
+	message(FATAL_ERROR "KERNEMUL_ARCH must be x64 or arm64, got: ${KERNEMUL_ARCH}")
 endif()
-message(STATUS "Fetching spdlog (v1.x)...")
-FetchContent_Declare(spdlog
-	GIT_REPOSITORY
-		"https://github.com/gabime/spdlog"
-	GIT_TAG
-		v1.x
-)
-FetchContent_MakeAvailable(spdlog)
 
-message(STATUS "Fetching unicorn (master)...")
+message(STATUS "kernemul guest architecture: ${KERNEMUL_ARCH}")
+
+# Emulator backend, fixed at build time the same way. Unicorn interprets and
+# builds anywhere; whp runs the guest on the host cpu in a Hyper-V partition,
+# which needs the host to be the guest's own architecture.
+set(KERNEMUL_BACKEND "unicorn" CACHE STRING "emulator backend: unicorn or whp")
+set_property(CACHE KERNEMUL_BACKEND PROPERTY STRINGS unicorn whp)
+
+if(NOT KERNEMUL_BACKEND MATCHES "^(unicorn|whp)$")
+	message(FATAL_ERROR "KERNEMUL_BACKEND must be unicorn or whp, got: ${KERNEMUL_BACKEND}")
+endif()
+
+if(KERNEMUL_BACKEND STREQUAL "whp" AND NOT (WIN32 AND KERNEMUL_ARCH STREQUAL "x64"))
+	message(FATAL_ERROR "KERNEMUL_BACKEND=whp needs Windows and KERNEMUL_ARCH=x64")
+endif()
+
+message(STATUS "kernemul backend: ${KERNEMUL_BACKEND}")
+
+# Unicorn is declared here rather than in [fetch-content] because it needs a
+# PATCH_COMMAND, which cmkr has no key for.
+#
+# The first two are one hole: Unicorn calls the UC_HOOK_INTR callback in place of
+# the target's do_interrupt, so whatever that function would have done to the
+# cpu state never happens. AArch64 never latches the faulting address and
+# syndrome into FAR_ELn / ESR_ELn, which is the only way arm64::arch::fault_addr
+# can learn which address faulted -- no Unicorn API exposes it. x86 leaves the
+# delivered exception pending, and the next fault combines with it into a double
+# fault.
+#
+# The third is a hole of its own: Unicorn's 64-bit register path writes a segment
+# selector without going through cpu_x86_load_seg_cache, so writing a ring 0
+# selector never moved CPL, which is what the softmmu indexes its tlb by. Without
+# it nothing can enter kernel mode on a live cpu, and a driver dispatched to from
+# a syscall faults on the first instruction of its own handler.
+#
+# Pinned to a commit rather than master so the patches keep applying.
+set(unicorn_patches
+	"${CMAKE_CURRENT_SOURCE_DIR}/patches/unicorn-arm64-fault-regs.patch"
+	"${CMAKE_CURRENT_SOURCE_DIR}/patches/unicorn-x86-clear-old-exception.patch"
+	"${CMAKE_CURRENT_SOURCE_DIR}/patches/unicorn-x86-ss-cpl.patch"
+	"${CMAKE_CURRENT_SOURCE_DIR}/patches/unicorn-x86-cpu-identity.patch"
+)
+
+# Joined on "|": ExternalProject splits the patch command on ";" to run it, so a
+# cmake list arrives as one argument per patch and all but the first are lost.
+string(REPLACE ";" "|" unicorn_patch_arg "${unicorn_patches}")
+
+include(FetchContent)
+message(STATUS "Fetching unicorn (patched)...")
 FetchContent_Declare(unicorn
-	GIT_REPOSITORY
-		"https://github.com/unicorn-engine/unicorn"
-	GIT_TAG
-		master
+	GIT_REPOSITORY "https://github.com/unicorn-engine/unicorn"
+	GIT_TAG 7c5db94191defc1e04a4f66f4eb1220903cba837
+	PATCH_COMMAND "${CMAKE_COMMAND}"
+		"-DSRC=<SOURCE_DIR>"
+		"-DPATCHES=${unicorn_patch_arg}"
+		-P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/apply_patch.cmake"
 )
 FetchContent_MakeAvailable(unicorn)
+
+if(CMKR_ROOT_PROJECT AND NOT CMKR_DISABLE_VCPKG)
+	include(FetchContent)
+	# Fix warnings about DOWNLOAD_EXTRACT_TIMESTAMP
+	if(POLICY CMP0135)
+		cmake_policy(SET CMP0135 NEW)
+	endif()
+	message(STATUS "Fetching vcpkg (2026.07.29)...")
+	FetchContent_Declare(vcpkg
+		URL
+			"https://github.com/microsoft/vcpkg/archive/refs/tags/2026.07.29.tar.gz"
+		SUBBUILD_DIR
+			"CMakeFiles/vcpkg-subbuild"
+		SOURCE_DIR
+			vcpkg
+		BINARY_DIR
+			"CMakeFiles/vcpkg-build"
+	)
+	FetchContent_MakeAvailable(vcpkg)
+
+	if(CMAKE_HOST_SYSTEM_NAME STREQUAL Darwin AND CMAKE_OSX_ARCHITECTURES STREQUAL "")
+		set(CMAKE_OSX_ARCHITECTURES ${CMAKE_HOST_SYSTEM_PROCESSOR} CACHE STRING "" FORCE)
+	endif()
+	include("${vcpkg_SOURCE_DIR}/scripts/buildsystems/vcpkg.cmake")
+endif()
+
+# Packages
+find_package(Boost REQUIRED CONFIG
+	COMPONENTS
+		beast
+)
+
+find_package(OpenSSL REQUIRED)
+
+find_package(spdlog REQUIRED CONFIG)
+
+if(KERNEMUL_BACKEND STREQUAL "whp") # whp
+	find_package(zydis REQUIRED CONFIG)
+
+endif()
+include(FetchContent)
+
+message(STATUS "Fetching raw_pdb (main)...")
+FetchContent_Declare(raw_pdb
+	GIT_REPOSITORY
+		"https://github.com/MolecularMatters/raw_pdb"
+	GIT_TAG
+		main
+)
+FetchContent_MakeAvailable(raw_pdb)
 
 # Target: kernemul
 set(kernemul_SOURCES
 	cmake.toml
 	"src/emu/addr_space.hpp"
 	"src/emu/arch.hpp"
+	"src/emu/arm64/addr_space.hpp"
+	"src/emu/arm64/arch.cpp"
+	"src/emu/arm64/arch.hpp"
+	"src/emu/arm64/calling_conv.cpp"
+	"src/emu/arm64/calling_conv.hpp"
+	"src/emu/arm64/mmu.cpp"
+	"src/emu/arm64/mmu.hpp"
+	"src/emu/arm64/unicorn.hpp"
 	"src/emu/calling_conv.hpp"
 	"src/emu/defs.hpp"
 	"src/emu/emu.hpp"
+	"src/emu/guest_call.hpp"
+	"src/emu/guest_emu.cpp"
+	"src/emu/guest_emu.hpp"
 	"src/emu/mmu.cpp"
 	"src/emu/mmu.hpp"
 	"src/emu/object.hpp"
 	"src/emu/unicorn.hpp"
+	"src/emu/unicorn_base.hpp"
 	"src/emu/x86/addr_space.hpp"
 	"src/emu/x86/arch.cpp"
 	"src/emu/x86/arch.hpp"
+	"src/emu/x86/calling_conv.cpp"
+	"src/emu/x86/calling_conv.hpp"
 	"src/emu/x86/mmu.cpp"
 	"src/emu/x86/mmu.hpp"
+	"src/emu/x86/unicorn.hpp"
+	"src/emu/x86/unicorn_cpu_ident.cpp"
+	"src/emu/x86/unicorn_cpu_ident.hpp"
+	"src/emu/x86/whp.cpp"
+	"src/emu/x86/whp.hpp"
 	"src/kernel/kernel.hpp"
+	"src/kernel/log.cpp"
 	"src/kernel/map.cpp"
 	"src/kernel/map.hpp"
 	"src/kernel/process.cpp"
 	"src/kernel/process.hpp"
+	"src/kernel/thread_scheduler.hpp"
+	"src/kernel/win/api_set.hpp"
+	"src/kernel/win/arm64_win.cpp"
+	"src/kernel/win/arm64_win.hpp"
+	"src/kernel/win/boot_seed.cpp"
+	"src/kernel/win/boot_seed.hpp"
 	"src/kernel/win/defs.hpp"
+	"src/kernel/win/dispatcher.hpp"
+	"src/kernel/win/driver.hpp"
+	"src/kernel/win/eprocess.hpp"
+	"src/kernel/win/ethread.hpp"
+	"src/kernel/win/exception.cpp"
+	"src/kernel/win/exception.hpp"
+	"src/kernel/win/filesystem.cpp"
+	"src/kernel/win/filesystem.hpp"
+	"src/kernel/win/irp.hpp"
+	"src/kernel/win/ldr.hpp"
 	"src/kernel/win/linked_list.hpp"
+	"src/kernel/win/mdl.hpp"
+	"src/kernel/win/modules/ci.cpp"
+	"src/kernel/win/modules/ci.hpp"
+	"src/kernel/win/modules/cng.cpp"
+	"src/kernel/win/modules/cng.hpp"
+	"src/kernel/win/modules/fltmgr.cpp"
+	"src/kernel/win/modules/fltmgr.hpp"
+	"src/kernel/win/modules/ndis.cpp"
+	"src/kernel/win/modules/ndis.hpp"
+	"src/kernel/win/modules/nt_crt_ops.cpp"
+	"src/kernel/win/modules/nt_crt_ops.hpp"
+	"src/kernel/win/modules/nt_ctx_ops.cpp"
+	"src/kernel/win/modules/nt_ctx_ops.hpp"
+	"src/kernel/win/modules/nt_data_globals.cpp"
+	"src/kernel/win/modules/nt_dbg_ops.cpp"
+	"src/kernel/win/modules/nt_dbg_ops.hpp"
+	"src/kernel/win/modules/nt_dispatch_ops.cpp"
+	"src/kernel/win/modules/nt_dispatch_ops.hpp"
+	"src/kernel/win/modules/nt_ex_ops.cpp"
+	"src/kernel/win/modules/nt_ex_ops.hpp"
+	"src/kernel/win/modules/nt_info_ops.cpp"
+	"src/kernel/win/modules/nt_info_ops.hpp"
+	"src/kernel/win/modules/nt_io_ops.cpp"
+	"src/kernel/win/modules/nt_io_ops.hpp"
+	"src/kernel/win/modules/nt_iocp_ops.cpp"
+	"src/kernel/win/modules/nt_iocp_ops.hpp"
+	"src/kernel/win/modules/nt_irql_ops.cpp"
+	"src/kernel/win/modules/nt_irql_ops.hpp"
+	"src/kernel/win/modules/nt_lock_ops.cpp"
+	"src/kernel/win/modules/nt_lock_ops.hpp"
+	"src/kernel/win/modules/nt_lpc_ops.cpp"
+	"src/kernel/win/modules/nt_lpc_ops.hpp"
+	"src/kernel/win/modules/nt_mem_ops.cpp"
+	"src/kernel/win/modules/nt_mem_ops.hpp"
+	"src/kernel/win/modules/nt_misc_ops.cpp"
+	"src/kernel/win/modules/nt_misc_ops.hpp"
+	"src/kernel/win/modules/nt_object_ops.cpp"
+	"src/kernel/win/modules/nt_object_ops.hpp"
+	"src/kernel/win/modules/nt_pool_ops.cpp"
+	"src/kernel/win/modules/nt_pool_ops.hpp"
+	"src/kernel/win/modules/nt_process_ops.cpp"
+	"src/kernel/win/modules/nt_process_ops.hpp"
+	"src/kernel/win/modules/nt_reg_ops.cpp"
+	"src/kernel/win/modules/nt_reg_ops.hpp"
+	"src/kernel/win/modules/nt_string_ops.cpp"
+	"src/kernel/win/modules/nt_string_ops.hpp"
+	"src/kernel/win/modules/nt_sync_ops.cpp"
+	"src/kernel/win/modules/nt_sync_ops.hpp"
+	"src/kernel/win/modules/nt_sysinfo_ops.cpp"
+	"src/kernel/win/modules/nt_sysinfo_ops.hpp"
+	"src/kernel/win/modules/nt_task_ops.cpp"
+	"src/kernel/win/modules/nt_task_ops.hpp"
+	"src/kernel/win/modules/nt_thread_ops.cpp"
+	"src/kernel/win/modules/nt_thread_ops.hpp"
+	"src/kernel/win/modules/nt_timer_ops.cpp"
+	"src/kernel/win/modules/nt_timer_ops.hpp"
+	"src/kernel/win/modules/nt_vm_ops.cpp"
+	"src/kernel/win/modules/nt_vm_ops.hpp"
+	"src/kernel/win/modules/nt_wait_ops.cpp"
+	"src/kernel/win/modules/nt_wait_ops.hpp"
 	"src/kernel/win/modules/ntoskrnl.cpp"
 	"src/kernel/win/modules/ntoskrnl.hpp"
+	"src/kernel/win/modules/tbs.cpp"
+	"src/kernel/win/modules/tbs.hpp"
+	"src/kernel/win/modules/tdi.cpp"
+	"src/kernel/win/modules/tdi.hpp"
+	"src/kernel/win/modules/win32k.cpp"
+	"src/kernel/win/modules/win32k.hpp"
+	"src/kernel/win/objects.hpp"
+	"src/kernel/win/per_cpu.hpp"
+	"src/kernel/win/pool.cpp"
+	"src/kernel/win/pool.hpp"
 	"src/kernel/win/process.cpp"
 	"src/kernel/win/process.hpp"
+	"src/kernel/win/process_params.hpp"
+	"src/kernel/win/registry.cpp"
+	"src/kernel/win/registry.hpp"
+	"src/kernel/win/rundown.hpp"
+	"src/kernel/win/segments.cpp"
+	"src/kernel/win/segments.hpp"
+	"src/kernel/win/status.hpp"
 	"src/kernel/win/string.hpp"
+	"src/kernel/win/syscalls.cpp"
+	"src/kernel/win/syscalls.hpp"
+	"src/kernel/win/thread.cpp"
+	"src/kernel/win/thread.hpp"
 	"src/kernel/win/types.hpp"
+	"src/kernel/win/types_arm64.hpp"
+	"src/kernel/win/types_x64.hpp"
+	"src/kernel/win/unwind/arm64_unwind.cpp"
+	"src/kernel/win/unwind/arm64_unwind.hpp"
+	"src/kernel/win/unwind/unwind.cpp"
+	"src/kernel/win/unwind/unwind.hpp"
+	"src/kernel/win/unwind/x64_unwind.cpp"
+	"src/kernel/win/unwind/x64_unwind.hpp"
+	"src/kernel/win/user_setup.hpp"
+	"src/kernel/win/win_handle_table.cpp"
+	"src/kernel/win/win_handle_table.hpp"
 	"src/kernel/win/win_kernel.hpp"
+	"src/kernel/win/win_obj_manager.cpp"
+	"src/kernel/win/win_obj_manager.hpp"
+	"src/kernel/win/win_user_mem.cpp"
+	"src/kernel/win/win_user_mem.hpp"
+	"src/kernel/win/x86_win.cpp"
+	"src/kernel/win/x86_win.hpp"
 	"src/main.cpp"
+	"src/sym/pdb.hpp"
+	"src/sym/pdb_server.hpp"
+	"src/sym/symbol.cpp"
+	"src/sym/symbol.hpp"
+	"src/target.hpp"
 	"src/util/file.hpp"
 	"src/util/format.hpp"
 	"src/util/log.hpp"
 	"src/util/string.hpp"
 )
 
+if(KERNEMUL_BACKEND STREQUAL "whp") # whp
+	list(APPEND kernemul_SOURCES
+		"vendor/hypermulator/src/arch/decoder.cpp"
+		"vendor/hypermulator/src/arch/decoder.hpp"
+		"vendor/hypermulator/src/arch/instruction.hpp"
+		"vendor/hypermulator/src/arch/register.cpp"
+		"vendor/hypermulator/src/arch/register.hpp"
+		"vendor/hypermulator/src/emulator/emulator.cpp"
+		"vendor/hypermulator/src/emulator/emulator.hpp"
+		"vendor/hypermulator/src/emulator/emulator_hook.cpp"
+		"vendor/hypermulator/src/emulator/mode_setup.cpp"
+		"vendor/hypermulator/src/guest/guest_memory.hpp"
+		"vendor/hypermulator/src/guest/guest_partition.cpp"
+		"vendor/hypermulator/src/guest/guest_partition.hpp"
+		"vendor/hypermulator/src/guest/guest_register.hpp"
+		"vendor/hypermulator/src/guest/guest_virtual_processor.cpp"
+		"vendor/hypermulator/src/guest/guest_virtual_processor.hpp"
+		"vendor/hypermulator/src/guest/guest_vmexit.cpp"
+		"vendor/hypermulator/src/guest/guest_vmexit.hpp"
+	)
+endif()
+
 add_executable(kernemul)
 
 target_sources(kernemul PRIVATE ${kernemul_SOURCES})
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${kernemul_SOURCES})
 
+if(WIN32) # windows
+	target_compile_definitions(kernemul PRIVATE
+		NOMINMAX
+	)
+endif()
+
+if(KERNEMUL_ARCH STREQUAL "x64") # arch-x64
+	target_compile_definitions(kernemul PRIVATE
+		KERNEMUL_ARCH_X64=1
+	)
+endif()
+
+if(KERNEMUL_ARCH STREQUAL "arm64") # arch-arm64
+	target_compile_definitions(kernemul PRIVATE
+		KERNEMUL_ARCH_ARM64=1
+	)
+endif()
+
+if(KERNEMUL_BACKEND STREQUAL "whp") # whp
+	target_compile_definitions(kernemul PRIVATE
+		KERNEMUL_HAS_WHP=1
+	)
+endif()
+
 target_compile_features(kernemul PRIVATE
 	cxx_std_23
 )
 
-target_compile_options(kernemul PRIVATE
-	-Wno-changes-meaning
-)
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU") # gnu
+	target_compile_options(kernemul PRIVATE
+		-Wno-changes-meaning
+		-mms-bitfields
+	)
+endif()
+
+if(MSVC) # msvc
+	target_compile_options(kernemul PRIVATE
+		"/Zc:preprocessor"
+	)
+endif()
 
 target_include_directories(kernemul PRIVATE
 	src
@@ -110,10 +405,33 @@ target_include_directories(kernemul PRIVATE
 	"vendor/ia32-doc/out"
 )
 
+if(KERNEMUL_BACKEND STREQUAL "whp") # whp
+	target_include_directories(kernemul PRIVATE
+		"vendor/hypermulator/src"
+	)
+endif()
+
 target_link_libraries(kernemul PRIVATE
 	spdlog::spdlog
 	unicorn
+	raw_pdb
+	Boost::beast
+	OpenSSL::SSL
+	OpenSSL::Crypto
 )
+
+if(WIN32) # windows
+	target_link_libraries(kernemul PRIVATE
+		ws2_32
+	)
+endif()
+
+if(KERNEMUL_BACKEND STREQUAL "whp") # whp
+	target_link_libraries(kernemul PRIVATE
+		Zydis::Zydis
+		WinHvPlatform
+	)
+endif()
 
 get_directory_property(CMKR_VS_STARTUP_PROJECT DIRECTORY ${PROJECT_SOURCE_DIR} VS_STARTUP_PROJECT)
 if(NOT CMKR_VS_STARTUP_PROJECT)

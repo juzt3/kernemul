@@ -3,18 +3,17 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
-#include <optional>
 #include <vector>
 
 namespace util
 {
-	inline std::optional<std::vector<std::uint8_t>> read_file(const std::filesystem::path& path)
+	inline std::vector<std::uint8_t> read_file(const std::filesystem::path& path)
 	{
 		std::ifstream file(path, std::ios::binary | std::ios::ate);
 
 		if (!file.is_open())
 		{
-			return std::nullopt;
+			return {};
 		}
 
 		const auto file_size = file.tellg();

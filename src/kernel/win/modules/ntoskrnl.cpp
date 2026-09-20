@@ -1,0 +1,55 @@
+#include "ntoskrnl.hpp"
+#include "nt_dbg_ops.hpp"
+#include "nt_thread_ops.hpp"
+#include "nt_object_ops.hpp"
+#include "nt_irql_ops.hpp"
+#include "nt_string_ops.hpp"
+#include "nt_sync_ops.hpp"
+#include "nt_info_ops.hpp"
+#include "nt_crt_ops.hpp"
+#include "nt_pool_ops.hpp"
+#include "nt_process_ops.hpp"
+#include "nt_lock_ops.hpp"
+#include "nt_mem_ops.hpp"
+#include "nt_ex_ops.hpp"
+#include "nt_misc_ops.hpp"
+#include "nt_reg_ops.hpp"
+#include "nt_io_ops.hpp"
+#include "nt_timer_ops.hpp"
+#include "nt_vm_ops.hpp"
+#include "nt_dispatch_ops.hpp"
+#include "nt_wait_ops.hpp"
+#include "nt_task_ops.hpp"
+#include "nt_sysinfo_ops.hpp"
+#include "nt_ctx_ops.hpp"
+#include "nt_iocp_ops.hpp"
+#include "nt_lpc_ops.hpp"
+
+void modules::register_ntoskrnl(win_kernel_state& state, proc_module& mod)
+{
+	register_ntoskrnl_dbg_ops(state, mod);
+	register_ntoskrnl_thread_ops(state, mod);
+	register_ntoskrnl_object_ops(state, mod);
+	register_ntoskrnl_irql_ops(state, mod);
+	register_ntoskrnl_string_ops(state, mod);
+	register_ntoskrnl_sync_ops(state, mod);
+	register_ntoskrnl_info_ops(state, mod);
+	register_ntoskrnl_crt_ops(state, mod);
+	register_ntoskrnl_pool_ops(state, mod);
+	register_ntoskrnl_process_ops(state, mod);
+	register_ntoskrnl_lock_ops(state, mod);
+	register_ntoskrnl_mem_ops(state, mod);
+	register_ntoskrnl_ex_ops(state, mod);
+	register_ntoskrnl_misc_ops(state, mod);
+	register_ntoskrnl_reg_ops(state, mod);
+	register_ntoskrnl_io_ops(state, mod);
+	register_ntoskrnl_timer_ops(state, mod);
+	register_ntoskrnl_vm_ops(state, mod);
+	register_ntoskrnl_dispatch_ops(state, mod);
+	register_ntoskrnl_wait_ops(state, mod);
+	register_ntoskrnl_task_ops(state, mod);
+	register_ntoskrnl_sysinfo_ops(state, mod);
+	register_ntoskrnl_ctx_ops(state, mod);
+	register_ntoskrnl_iocp_ops(state, mod);
+	register_ntoskrnl_lpc_ops(state, mod);
+}

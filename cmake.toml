@@ -1,19 +1,162 @@
 [project]
 name = "kernemul"
 languages = ["CXX"]
+cmake-after = """
+# Guest architecture, fixed at build time: the Windows type layouts in
+# kernel/win/types.hpp come from one ntoskrnl PDB and are memcpy'd into guest
+# memory as-is, so two architectures cannot coexist in one binary.
+#
+# This stays raw CMake because cmkr [options] are boolean only, and [variables]
+# emits an uncached set() that would clobber -DKERNEMUL_ARCH. It lives at
+# project level so the value exists before the arch-* conditions below are
+# evaluated.
+set(KERNEMUL_ARCH "x64" CACHE STRING "guest architecture: x64 or arm64")
+set_property(CACHE KERNEMUL_ARCH PROPERTY STRINGS x64 arm64)
 
-[fetch-content.spdlog]
-git = "https://github.com/gabime/spdlog"
-tag = "v1.x"
+if(NOT KERNEMUL_ARCH MATCHES "^(x64|arm64)$")
+	message(FATAL_ERROR "KERNEMUL_ARCH must be x64 or arm64, got: ${KERNEMUL_ARCH}")
+endif()
 
-[fetch-content.unicorn]
-git = "https://github.com/unicorn-engine/unicorn"
-tag = "master"
+message(STATUS "kernemul guest architecture: ${KERNEMUL_ARCH}")
+
+# Emulator backend, fixed at build time the same way. Unicorn interprets and
+# builds anywhere; whp runs the guest on the host cpu in a Hyper-V partition,
+# which needs the host to be the guest's own architecture.
+set(KERNEMUL_BACKEND "unicorn" CACHE STRING "emulator backend: unicorn or whp")
+set_property(CACHE KERNEMUL_BACKEND PROPERTY STRINGS unicorn whp)
+
+if(NOT KERNEMUL_BACKEND MATCHES "^(unicorn|whp)$")
+	message(FATAL_ERROR "KERNEMUL_BACKEND must be unicorn or whp, got: ${KERNEMUL_BACKEND}")
+endif()
+
+if(KERNEMUL_BACKEND STREQUAL "whp" AND NOT (WIN32 AND KERNEMUL_ARCH STREQUAL "x64"))
+	message(FATAL_ERROR "KERNEMUL_BACKEND=whp needs Windows and KERNEMUL_ARCH=x64")
+endif()
+
+message(STATUS "kernemul backend: ${KERNEMUL_BACKEND}")
+
+# Unicorn is declared here rather than in [fetch-content] because it needs a
+# PATCH_COMMAND, which cmkr has no key for.
+#
+# The first two are one hole: Unicorn calls the UC_HOOK_INTR callback in place of
+# the target's do_interrupt, so whatever that function would have done to the
+# cpu state never happens. AArch64 never latches the faulting address and
+# syndrome into FAR_ELn / ESR_ELn, which is the only way arm64::arch::fault_addr
+# can learn which address faulted -- no Unicorn API exposes it. x86 leaves the
+# delivered exception pending, and the next fault combines with it into a double
+# fault.
+#
+# The third is a hole of its own: Unicorn's 64-bit register path writes a segment
+# selector without going through cpu_x86_load_seg_cache, so writing a ring 0
+# selector never moved CPL, which is what the softmmu indexes its tlb by. Without
+# it nothing can enter kernel mode on a live cpu, and a driver dispatched to from
+# a syscall faults on the first instruction of its own handler.
+#
+# Pinned to a commit rather than master so the patches keep applying.
+set(unicorn_patches
+	"${CMAKE_CURRENT_SOURCE_DIR}/patches/unicorn-arm64-fault-regs.patch"
+	"${CMAKE_CURRENT_SOURCE_DIR}/patches/unicorn-x86-clear-old-exception.patch"
+	"${CMAKE_CURRENT_SOURCE_DIR}/patches/unicorn-x86-ss-cpl.patch"
+	"${CMAKE_CURRENT_SOURCE_DIR}/patches/unicorn-x86-cpu-identity.patch"
+)
+
+# Joined on "|": ExternalProject splits the patch command on ";" to run it, so a
+# cmake list arrives as one argument per patch and all but the first are lost.
+string(REPLACE ";" "|" unicorn_patch_arg "${unicorn_patches}")
+
+include(FetchContent)
+message(STATUS "Fetching unicorn (patched)...")
+FetchContent_Declare(unicorn
+	GIT_REPOSITORY "https://github.com/unicorn-engine/unicorn"
+	GIT_TAG 7c5db94191defc1e04a4f66f4eb1220903cba837
+	PATCH_COMMAND "${CMAKE_COMMAND}"
+		"-DSRC=<SOURCE_DIR>"
+		"-DPATCHES=${unicorn_patch_arg}"
+		-P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/apply_patch.cmake"
+)
+FetchContent_MakeAvailable(unicorn)
+
+"""
+
+[vcpkg]
+# Everything but unicorn and raw_pdb comes from here. unicorn has to stay a
+# FetchContent dependency because it is built from a patched tree, and raw_pdb
+# has no vcpkg port. Pinned to a release tag so every machine resolves the same
+# port versions.
+#
+# This is what makes a clean Windows box work: none of these have a system copy
+# there, and OpenSSL in particular cannot be built without perl and nasm, which
+# the openssl port acquires itself (vcpkg_find_acquire_program) rather than
+# expecting them on PATH.
+#
+# zydis is only linked by the whp backend, but [vcpkg].packages is written into
+# a static vcpkg.json and cannot be made conditional, so it is installed for
+# every configuration. It is small. The find-package below is the part that is
+# conditional.
+version = "2026.07.29"
+packages = ["boost-beast", "openssl", "spdlog", "zydis"]
+
+[conditions]
+windows = "WIN32"
+# Both of these are gcc's own spelling: clang rejects -Wno-changes-meaning as an
+# unknown warning option, and msvc takes neither.
+gnu = "CMAKE_CXX_COMPILER_ID STREQUAL \"GNU\""
+msvc = "MSVC"
+arch-x64 = "KERNEMUL_ARCH STREQUAL \"x64\""
+arch-arm64 = "KERNEMUL_ARCH STREQUAL \"arm64\""
+whp = "KERNEMUL_BACKEND STREQUAL \"whp\""
+
+# Only beast is asked for by name; vcpkg pulls in the ~30 header-only boost
+# modules it needs and nothing else, where the old boost-1.86.0-cmake tarball
+# configured the whole superproject (Log, Locale, Iostreams, Stacktrace...) to
+# get at one header-only library.
+[find-package.Boost]
+config = true
+components = ["beast"]
+required = true
+
+[find-package.OpenSSL]
+required = true
+
+[find-package.spdlog]
+config = true
+required = true
+
+# Installed unconditionally, linked only by the whp backend. The lowercase name
+# matches the zydis-config.cmake the port installs; the target it exports is
+# Zydis::Zydis.
+[find-package.zydis]
+condition = "whp"
+config = true
+required = true
+
+# No vcpkg port exists for raw_pdb, so it stays a source dependency.
+[fetch-content.raw_pdb]
+git = "https://github.com/MolecularMatters/raw_pdb"
+tag = "main"
 
 [target.kernemul]
 type = "executable"
 sources = ["src/**.cpp", "src/**.hpp"]
 include-directories = ["src", "vendor/pe/src", "vendor/ia32-doc/out"]
 compile-features = ["cxx_std_23"]
-link-libraries = ["spdlog::spdlog", "unicorn"]
-compile-options = ["-Wno-changes-meaning"]
+link-libraries = ["spdlog::spdlog", "unicorn", "raw_pdb", "Boost::beast", "OpenSSL::SSL", "OpenSSL::Crypto"]
+windows.link-libraries = ["ws2_32"]
+windows.compile-definitions = ["NOMINMAX"]
+# The generated Windows types put every struct under #pragma pack(1) and lean on
+# ms_struct for the rest of the layout, so a bitfield keeps a whole allocation
+# unit of its declared type. gcc ignores "#pragma ms_struct on" everywhere it is
+# not the native convention and packs the bitfield down to the bits it uses
+# instead, which leaves 78 of the generated structs short of the size pdbex
+# recorded for them. -mms-bitfields is the flag behind that pragma. clang honours
+# the pragma unaided and mingw already defaults to this, so gcc is the only one
+# that has to be told.
+gnu.compile-options = ["-Wno-changes-meaning", "-mms-bitfields"]
+# The logging macros use __VA_OPT__, which only msvc's conformant preprocessor has.
+msvc.compile-options = ["/Zc:preprocessor"]
+arch-x64.compile-definitions = ["KERNEMUL_ARCH_X64=1"]
+arch-arm64.compile-definitions = ["KERNEMUL_ARCH_ARM64=1"]
+whp.sources = ["vendor/hypermulator/src/**.cpp", "vendor/hypermulator/src/**.hpp"]
+whp.include-directories = ["vendor/hypermulator/src"]
+whp.link-libraries = ["Zydis::Zydis", "WinHvPlatform"]
+whp.compile-definitions = ["KERNEMUL_HAS_WHP=1"]

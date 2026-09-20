@@ -1,0 +1,129 @@
+#pragma once
+#include "guest_register.hpp"
+#include "guest_memory.hpp"
+
+#include <stdexcept>
+#include <optional>
+#include <atomic>
+#include <cstring>
+#include <memory>
+#include <array>
+#include <span>
+
+namespace hm
+{
+	struct vmexit_context;
+	class partition;
+	struct reg_t;
+
+	class vcpu
+	{
+	public:
+		vcpu() = default;
+
+		vcpu(std::shared_ptr<partition> partition, const std::uint32_t id)
+				:	partition_(std::move(partition)),
+					id_(id) { }
+
+		[[nodiscard]] std::uint32_t id() const;
+
+		void run();
+		void stop();
+
+		void try_stop();
+
+		[[nodiscard]] std::uint32_t depth() const;
+
+		[[nodiscard]] bool stop_pending() const;
+
+		[[nodiscard]] std::optional<addr_t> virt_to_phys(addr_t virt_addr) const;
+
+		bool write_virt_mem(addr_t virt_addr, const void* buf, std::size_t size);
+		bool write_virt_mem(addr_t virt_addr, std::span<const std::uint8_t> buf);
+
+		bool read_virt_mem(addr_t virt_addr, void* buf, std::size_t size) const;
+		bool read_virt_mem(addr_t virt_addr, std::span<std::uint8_t> buf) const;
+
+		bool read_mem(addr_t addr, void* buf, std::size_t size) const;
+		bool read_mem(addr_t addr, std::span<std::uint8_t> buf) const;
+
+		bool write_mem(addr_t addr, const void* buf, std::size_t size);
+		bool write_mem(addr_t addr, std::span<const std::uint8_t> buf);
+
+		bool reg_write(const reg_t& r, const void* value, std::size_t size);
+		bool reg_read(const reg_t& r, void* value, std::size_t size) const;
+
+		[[nodiscard]] bool uses_paging() const;
+
+		template <reg_t Register, class T>
+		[[nodiscard]] T reg_read() const
+		{
+			static_assert(std::is_trivially_copyable_v<T>, "reading non trivially copyable type from a register");
+		
+			T value = { };
+			bool status;
+
+			if constexpr (sizeof(T) == Register.size)
+			{
+				status = reg_read(Register, &value, sizeof(T));
+			}
+			else
+			{
+				std::array<std::uint8_t, Register.size> buf = { };
+
+				status = reg_read(Register, buf.data(), buf.size());
+
+				const std::size_t copy_size = std::min(sizeof(T), static_cast<std::size_t>(Register.size));
+
+				std::memcpy(&value, buf.data(), copy_size);
+			}
+
+			if (!status)
+			{
+				throw std::runtime_error("unable to read register value");
+			}
+
+			return value;
+		}
+
+		template <reg_t Register, class T>
+		void reg_write(const T& value)
+		{
+			static_assert(std::is_trivially_copyable_v<T>, "writing non trivially copyable type to a register");
+			static_assert(sizeof(T) <= Register.size, "writing too large of a value to a register");
+
+			bool status;
+
+			if constexpr (sizeof(T) == Register.size)
+			{
+				status = reg_write(Register, &value, sizeof(T));
+			}
+			else
+			{
+				std::array<std::uint8_t, Register.size> buf = { };
+
+				std::memcpy(buf.data(), &value, sizeof(T));
+
+				status = reg_write(Register, buf.data(), buf.size());
+			}
+
+			if (!status)
+			{
+				throw std::runtime_error("unable to write register value");
+			}
+		}
+
+	protected:
+		[[nodiscard]] bool process_vmexit(vmexit_context& context);
+
+		[[nodiscard]] bool take_stop(std::uint32_t depth) const;
+
+		void reset_exception_state();
+
+		std::shared_ptr<partition> partition_ = { };
+		std::uint32_t id_ = 0;
+
+		std::shared_ptr<std::atomic<std::uint32_t>> depth_ = std::make_shared<std::atomic<std::uint32_t>>(0);
+		std::shared_ptr<std::atomic<std::uint32_t>> stop_depth_ = std::make_shared<std::atomic<std::uint32_t>>(0);
+	};
+}

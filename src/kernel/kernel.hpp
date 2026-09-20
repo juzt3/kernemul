@@ -1,79 +1,248 @@
 #pragma once
-#include "../emulator/emulator.hpp"
-#include "../emulator/object.hpp"
-#include "../image/mapped_image.hpp"
-#include "../filesystem/filesystem.hpp"
-#include "../registry/registry.hpp"
-#include "kernel_def.hpp"
-#include "handle_table.hpp"
-#include "object_manager.hpp"
-#include "process_loader.hpp"
-#include "thread.hpp"
-
-#include <functional>
-#include <memory>
-#include <optional>
-#include <unordered_map>
-#include <unordered_set>
-#include <vector>
+#include "process.hpp"
+#include "map.hpp"
+#include "thread_scheduler.hpp"
+#include "../sym/symbol.hpp"
+#include "../emu/emu.hpp"
+#include "../emu/calling_conv.hpp"
+#include "../util/log.hpp"
 #include <atomic>
-#include <queue>
+#include <chrono>
+#include <exception>
+#include <span>
+#include <format>
+#include <functional>
+#include <filesystem>
+#include <map>
+#include <mutex>
+#include <shared_mutex>
+#include <thread>
+#include <vector>
+#include <unordered_map>
 
-namespace kernel
+using redirect_fn = std::function<void(vcpu&)>;
+
+struct os_exception
 {
-	constexpr std::uint32_t processor_count = 4;
+	virtual ~os_exception() = default;
+	virtual bool handle(vcpu& cpu, cpu_exception ex) = 0;
+};
 
-	using function_implementation_t = std::function<void(bool& skip_return)>;
-	using handle_t = std::uint64_t;
-
-	inline emulator_object_t<_LIST_ENTRY> ps_loaded_module_list;
-	inline std::vector<std::shared_ptr<image_t>> module_entries;
-	inline std::shared_ptr<image_t> emulated_module;
-
-	inline std::vector<std::shared_ptr<process_t>> process_entries;
-
-	inline std::queue<std::shared_ptr<thread_t>> pending_threads;
-	inline std::atomic_bool pending_thread_switch = false;
-	inline std::atomic_bool delete_current_thread = false;
-	inline std::shared_ptr<thread_t> current_thread;
-	inline std::shared_ptr<thread_t> main_thread;
-	inline emulator_object_t<_DRIVER_OBJECT> driver_object;
-
-	inline emulator_t::address_type kprcb_address = 0;
-	inline emulator_t::address_type kpcr_address = 0;
-
-	inline std::shared_ptr<filesystem_t> filesystem;
-	inline std::shared_ptr<registry_t> registry;
-	inline std::shared_ptr<object_manager_t> object_manager;
-	inline std::unordered_map<emulator_t::address_type, function_implementation_t> redirected_functions;
-
-	inline std::vector<emulator_t::address_type> process_create_notify_routines;
-	inline std::vector<emulator_t::address_type> process_create_notify_routines_ex;
-
-	struct dpc_info_t
+class os_emulator
+{
+public:
+	explicit os_emulator(std::shared_ptr<emu> emu)
+		: emu_(std::move(emu))
 	{
-		emulator_t::address_type routine;
-		emulator_t::address_type context;
-	};
+		scheduler_.set_emu(emu_.get());
 
-	inline std::unordered_map<emulator_t::address_type, dpc_info_t> registered_dpcs;
+		emu_->hook_exception([this](vcpu& cpu, cpu_exception ex) {
+			if (handle_exception(cpu, ex))
+				return true;
 
-	[[nodiscard]] std::shared_ptr<image_t> find_module(std::string_view name);
-	[[nodiscard]] std::shared_ptr<image_t> find_module_from_rip(emulator_t::address_type rip);
-	[[nodiscard]] std::optional<function_implementation_t> find_redirected_function(emulator_t::address_type address);
+			const auto t = cpu.thread();
 
-	[[nodiscard]] inline const std::shared_ptr<process_t>& active_process()
+			LOG_ERR("unhandled {} on cpu {}: nothing anywhere claimed it, so the "
+				"machine stops here", to_string(ex), cpu.id());
+			LOG_ERR("  pc      0x{:X}", cpu.pc());
+			LOG_ERR("  address 0x{:X}", cpu.arch()->fault_addr(cpu));
+
+			if (t)
+				LOG_ERR("  thread  {} of process {}", t->id(), t->proc()->id());
+
+			scheduler_.stop();
+			cpu.stop();
+
+			return false;
+		});
+	}
+
+	virtual ~os_emulator() = default;
+
+	emu& emu() { return *emu_; }
+	thread_scheduler& scheduler() { return scheduler_; }
+	std::shared_ptr<os_exception> excp() const { return excp_; }
+
+	bool handle_exception(vcpu& cpu, cpu_exception ex)
 	{
-		if (current_thread)
+		return excp_ && excp_->handle(cpu, ex);
+	}
+
+	virtual std::shared_ptr<vcpu> add_vcpu() = 0;
+	virtual std::shared_ptr<thread> create_kernel_thread(vcpu& cpu, addr_t start_addr) = 0;
+
+	virtual void create_vcpus(const std::size_t count)
+	{
+		for (std::size_t i = 0; i < count; ++i)
+			add_vcpu();
+	}
+
+	[[nodiscard]] std::span<const std::shared_ptr<vcpu>> cpus() const noexcept
+	{
+		return emu_->cpus();
+	}
+
+	static constexpr auto default_thread_runtime = std::chrono::milliseconds(50);
+
+	// A thread that never returns would own its cpu forever, so the waiting thread keeps time. It
+	// only takes a cpu away when there is a thread queued to put on it: an idle machine is left
+	// to run flat out rather than paying a context save and restore every tick for nothing.
+	void run_all(const std::chrono::milliseconds runtime = default_thread_runtime)
+	{
+		std::atomic<std::size_t> live{cpus().size()};
+		std::vector<std::thread> hosts;
+		hosts.reserve(cpus().size());
+
+		for (const auto& cpu : cpus())
 		{
-			return current_thread->process();
+			hosts.emplace_back([this, cpu, &live]
+			{
+				set_log_cpu(cpu.get());
+
+				scheduler_.run(*cpu);
+				--live;
+			});
 		}
 
-		return process_entries.front();
+		while (live.load())
+		{
+			std::this_thread::sleep_for(runtime);
+
+			scheduler_.preempt_for_waiting(cpus());
+		}
+
+		for (auto& host : hosts)
+			host.join();
 	}
 
-	[[nodiscard]] inline handle_table_t& active_handle_table()
+protected:
+	std::shared_ptr<class emu> emu_;
+	std::shared_ptr<os_exception> excp_;
+	thread_scheduler scheduler_;
+};
+
+struct kernel_state
+{
+	virtual ~kernel_state() = default;
+
+	virtual std::shared_ptr<process> create_process(std::string_view name) = 0;
+
+	std::shared_ptr<process> find_process(const process::id_type id)
 	{
-		return *active_process()->handle_table();
+		std::shared_lock lock(proc_mtx_);
+		const auto it = processes.find(id);
+		return it != processes.end() ? it->second : nullptr;
 	}
-}
+
+	// Thread ids are handed out machine wide rather than per process, so this searches all of them.
+	std::shared_ptr<thread> find_thread(const process::thread_id_type id)
+	{
+		std::shared_lock lock(proc_mtx_);
+
+		for (const auto& [_, proc] : processes)
+		{
+			if (auto t = proc->find_thread(id))
+				return t;
+		}
+
+		return nullptr;
+	}
+
+	std::shared_ptr<proc_module> map_redirect_module(process& proc, const std::string_view name,
+		const std::span<const std::uint8_t> image, bool supervisor)
+	{
+		auto mod = krnl::map_img(proc, name, image, supervisor, true);
+
+		if (!mod)
+			return nullptr;
+
+		hook_module_redirects(*mod);
+
+		return mod;
+	}
+
+	static std::string name_at(const proc_module& mod, const addr_t addr)
+	{
+		if (const auto sym = mod.symbols.resolve(addr))
+			return sym->format();
+
+		return std::format("+0x{:X}", addr - mod.addr);
+	}
+
+	void hook_module_redirects(proc_module& mod)
+	{
+		auto* redirections = &redirections_;
+		auto* m = &mod;
+		auto a = emu_->arch();
+
+		emu_->hook_code(mod.addr, mod.addr + mod.size - 1,
+			[redirections, m, a](vcpu& cpu, addr_t addr, std::size_t)
+			{
+				const auto it = redirections->find(addr);
+
+				if (it != redirections->end())
+				{
+					// The throw would otherwise unwind through the emulator's own C frames.
+					try
+					{
+						it->second(cpu);
+					}
+					catch (const std::exception& e)
+					{
+						THREAD_LOG_ERR("{}!{} faulted: {}", m->name,
+							name_at(*m, addr), e.what());
+					}
+
+					// Stopping the cpu moves the pc on some architectures, so it is put back.
+					if (cpu.pc() == addr)
+						cpu.set_pc(a->ret_addr(cpu));
+
+					return;
+				}
+
+				THREAD_LOG_ERR("unimplemented function {}!{}", m->name, name_at(*m, addr));
+
+				// Left running, the thread would be rescheduled onto this address forever.
+				if (const auto t = cpu.thread())
+					t->finish();
+
+				cpu.stop();
+			});
+	}
+
+	bool try_redirect(proc_module& mod, const std::string_view name, redirect_fn fn)
+	{
+		const auto addr = mod.find_symbol(name);
+
+		if (!addr)
+			return false;
+
+		redirections_[*addr] = std::move(fn);
+
+		return true;
+	}
+
+	void redirect(proc_module& mod, const std::string_view name, redirect_fn fn)
+	{
+		if (!try_redirect(mod, name, std::move(fn)))
+			LOG_ERR("symbol '{}' not found in {}", name, mod.name);
+	}
+
+	template <typename F>
+	void redirect(proc_module& mod, const std::string_view name, F&& fn)
+	{
+		redirect(mod, name, make_redirect(emu_->call_conv(), std::forward<F>(fn)));
+	}
+
+	[[nodiscard]] const redirect_fn* find_redirect(const addr_t addr) const
+	{
+		const auto it = redirections_.find(addr);
+		return it != redirections_.end() ? &it->second : nullptr;
+	}
+
+protected:
+	std::shared_ptr<class emu> emu_;
+	std::shared_mutex proc_mtx_;
+	std::map<process::id_type, std::shared_ptr<process>> processes;
+	std::unordered_map<addr_t, redirect_fn> redirections_;
+};

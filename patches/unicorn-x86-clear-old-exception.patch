@@ -1,0 +1,19 @@
+diff --git a/qemu/accel/tcg/cpu-exec.c b/qemu/accel/tcg/cpu-exec.c
+index 77168f35..8496a843 100644
+--- a/qemu/accel/tcg/cpu-exec.c
++++ b/qemu/accel/tcg/cpu-exec.c
+@@ -423,6 +423,14 @@ static inline bool cpu_handle_exception(CPUState *cpu, int *ret)
+             return true;
+         }
+ 
++#if defined(TARGET_X86_64) || defined(TARGET_I386)
++        // Unicorn: the callback above stands in for x86_cpu_do_interrupt, and
++        // that is what would normally clear this once the exception has been
++        // delivered. Left set, check_exception() combines the next fault with
++        // it and raises a double fault instead.
++        env->old_exception = -1;
++#endif
++
+         cpu->exception_index = -1;
+     }
+ 

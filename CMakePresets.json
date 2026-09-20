@@ -1,0 +1,73 @@
+{
+	"version": 6,
+	"configurePresets": [
+		{
+			"name": "base",
+			"hidden": true,
+			"cacheVariables": {
+				"CMAKE_BUILD_TYPE": "Release"
+			}
+		},
+		{
+			"name": "x64",
+			"displayName": "x64 guest, unicorn backend",
+			"description": "Interprets the guest. Builds and runs anywhere.",
+			"inherits": "base",
+			"binaryDir": "${sourceDir}/build-x64",
+			"cacheVariables": {
+				"KERNEMUL_ARCH": "x64",
+				"KERNEMUL_BACKEND": "unicorn"
+			}
+		},
+		{
+			"name": "x64-whp",
+			"displayName": "x64 guest, whp backend",
+			"description": "Runs the guest on the host cpu in a Hyper-V partition, so the host has to be the guest's own architecture.",
+			"inherits": "base",
+			"binaryDir": "${sourceDir}/build-x64-whp",
+			"cacheVariables": {
+				"KERNEMUL_ARCH": "x64",
+				"KERNEMUL_BACKEND": "whp"
+			},
+			"condition": {
+				"type": "equals",
+				"lhs": "${hostSystemName}",
+				"rhs": "Windows"
+			}
+		},
+		{
+			"name": "arm64",
+			"displayName": "arm64 guest, unicorn backend",
+			"description": "The only backend for arm64: whp would need an arm64 host.",
+			"inherits": "base",
+			"binaryDir": "${sourceDir}/build",
+			"cacheVariables": {
+				"KERNEMUL_ARCH": "arm64",
+				"KERNEMUL_BACKEND": "unicorn"
+			}
+		}
+	],
+	"buildPresets": [
+		{
+			"name": "base",
+			"hidden": true,
+			"targets": [ "kernemul" ],
+			"configuration": "Release"
+		},
+		{
+			"name": "x64",
+			"inherits": "base",
+			"configurePreset": "x64"
+		},
+		{
+			"name": "x64-whp",
+			"inherits": "base",
+			"configurePreset": "x64-whp"
+		},
+		{
+			"name": "arm64",
+			"inherits": "base",
+			"configurePreset": "arm64"
+		}
+	]
+}
