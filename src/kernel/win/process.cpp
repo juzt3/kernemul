@@ -178,6 +178,14 @@ std::shared_ptr<proc_module> win_user_proc::load_module(const std::string_view n
 	if (!file)
 		file = open_system_image(name);
 
+	// Last, so nothing in the root can stand in front of a real system module. A process is
+	// created from a bare name, which leaves it no directory of its own to look in, and the
+	// guest filesystem is loaded from a host directory whose root is where an image dropped in
+	// to be run actually lands -- so without this the only place a user image can be started
+	// from is System32, and a copy left in the root is loaded and then reported missing.
+	if (!file)
+		file = fs_.open(std::string(root_dir_narrow) + std::string(name));
+
 	if (!file)
 		return nullptr;
 
