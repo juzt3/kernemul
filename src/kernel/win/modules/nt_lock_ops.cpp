@@ -173,6 +173,72 @@ void modules::register_ntoskrnl_lock_ops(win_kernel_state& state, proc_module& m
 	auto* st = &state;
 
 	// The linker folds ExInitializeRundownProtection and KeInitializeSpinLock onto this.
+	// One thread runs at a time here, so a spin lock is a word that is never contended.
+	state.redirect(mod, "KeInitializeSpinLock",
+		[](vcpu&, emu_object<std::uint64_t> spin_lock)
+		{
+			if (!spin_lock)
+				return;
+
+			spin_lock.write(0);
+
+			THREAD_LOG_INFO("KeInitializeSpinLock(lock=0x{:X})", spin_lock.address());
+		});
+
+	// Rundown protection counts users of an object against a teardown that waits for them.
+	// Nothing here tears one down, so acquiring always succeeds and the count is the record.
+	state.redirect(mod, "ExInitializeRundownProtection",
+		[](vcpu&, emu_object<std::uint64_t> rundown_ref)
+		{
+			if (!rundown_ref)
+				return;
+
+			rundown_ref.write(0);
+
+			THREAD_LOG_INFO("ExInitializeRundownProtection(0x{:X})", rundown_ref.address());
+		});
+
+	state.redirect(mod, "ExAcquireRundownProtection",
+		[](vcpu&, emu_object<std::uint64_t> rundown_ref) -> bool
+		{
+			if (!rundown_ref)
+				return false;
+
+			rundown_ref.write(rundown_ref.read() + 2);
+
+			THREAD_LOG_INFO("ExAcquireRundownProtection(0x{:X}) -> true", rundown_ref.address());
+
+			return true;
+		});
+
+	state.redirect(mod, "ExReleaseRundownProtection",
+		[](vcpu&, emu_object<std::uint64_t> rundown_ref)
+		{
+			if (!rundown_ref)
+				return;
+
+			const auto count = rundown_ref.read();
+			rundown_ref.write(count >= 2 ? count - 2 : 0);
+
+			THREAD_LOG_INFO("ExReleaseRundownProtection(0x{:X})", rundown_ref.address());
+		});
+
+	state.redirect(mod, "ExAcquireRundownProtectionCacheAwareEx",
+		[](vcpu&, const addr_t rundown_ref, const std::uint32_t count) -> bool
+		{
+			THREAD_LOG_INFO("ExAcquireRundownProtectionCacheAwareEx(0x{:X}, {}) -> true",
+				rundown_ref, count);
+
+			return true;
+		});
+
+	state.redirect(mod, "ExReleaseRundownProtectionCacheAwareEx",
+		[](vcpu&, const addr_t rundown_ref, const std::uint32_t count)
+		{
+			THREAD_LOG_INFO("ExReleaseRundownProtectionCacheAwareEx(0x{:X}, {})",
+				rundown_ref, count);
+		});
+
 	state.redirect(mod, "ExInitializePushLock",
 		[](vcpu&, emu_object<std::uint64_t> push_lock)
 		{
