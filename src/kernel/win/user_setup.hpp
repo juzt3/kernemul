@@ -26,21 +26,26 @@ namespace win_target
 
 	// MmPteBase: the pml4 slot that points at the pml4, as a virtual address. The slot itself
 	// is x86::self_map_pml4_index, which is what the mmu actually writes.
-	inline constexpr addr_t pte_base = 0xFFFFF08000000000;
+	inline constexpr addr_t pte_base = 0xFFFFF68000000000;
 
 	inline constexpr std::size_t context_pc_offset = offsetof(_CONTEXT, Rip);
 #endif
 }
 
+// KdDebuggerDataBlock's size as its own header reports it. A triage dump carries a copy of the
+// block, so the size is needed away from the code that builds the original.
+inline constexpr std::uint32_t kdbg_block_size = 0x3A0;
+
 constexpr std::uint64_t kuser_shared_data_user_va   = 0x7FFE0000;
 constexpr std::uint64_t kuser_shared_data_kernel_va  = 0xFFFFF78000000000;
 
 // How much physical memory the guest is told it has. The fake PFN database is sized from the
-// same number, so a driver that walks 0..NumberOfPhysicalPages cannot walk off the end of it.
-// Every page of that array is host memory the emulator commits up front -- the mmu backs a
-// physical allocation with a std::vector, mapped into every vcpu -- which is why this is 1GB
-// of 4K pages rather than the 4GB it used to claim.
-inline constexpr std::uint64_t emulated_physical_pages = 0x40000;
+// same number, so a driver that walks 0..NumberOfPhysicalPages cannot walk off the end of it,
+// and every page of that array is host memory the emulator commits up front -- at 0x30 bytes
+// an entry, 8gb of 4k pages costs about 96mb. It buys a machine a driver will run on: the
+// builds this pretends to be do not install on less than 4gb, so a smaller number here is one
+// a real one never reports.
+inline constexpr std::uint64_t emulated_physical_pages = 0x200000;
 
 // Only what an image whose NtBuildNumber cannot be read falls back to. The mapped ntoskrnl is
 // the authority on its own build; see win_kernel_state::nt_build_number.
