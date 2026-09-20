@@ -1,7 +1,0 @@
-<Solution>
-  <Configurations>
-    <Platform Name="x64" />
-    <Platform Name="x86" />
-  </Configurations>
-  <Project Path="kernemul.vcxproj" Id="2317b32c-1969-4217-82ee-1fad3bf8aaa9" />
-</Solution>
