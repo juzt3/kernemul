@@ -147,6 +147,25 @@ void modules::register_ntoskrnl_info_ops(win_kernel_state& state, proc_module& m
 		return eprocess;
 	});
 
+	// The same pointer under the name the io manager exports it as.
+	state.redirect(mod, "IoGetCurrentProcess", [st](vcpu& cpu) -> addr_t
+	{
+		const auto t = cpu.thread();
+		auto proc = t ? std::dynamic_pointer_cast<windows_process>(t->proc()) : nullptr;
+
+		if (!proc)
+			proc = st->sys_proc;
+
+		const auto eprocess = proc->eprocess().address();
+
+		if (!eprocess)
+			THREAD_LOG_WARN("IoGetCurrentProcess: pid={} has no EPROCESS", proc->id());
+
+		THREAD_LOG_INFO("IoGetCurrentProcess() -> 0x{:X} (pid={})", eprocess, proc->id());
+
+		return eprocess;
+	});
+
 	state.redirect(mod, "PsGetProcessId",
 		[](vcpu&, emu_object<_EPROCESS> process) -> addr_t
 		{
