@@ -65,6 +65,98 @@ void modules::register_ntoskrnl_crt_ops(win_kernel_state& state, proc_module& mo
 		});
 
 	// strncpy pads to count with nulls and does not terminate on an exact fill; this does not.
+	// The result is a pointer into the caller's own string, so the search runs over the guest's
+	// bytes rather than a copy whose address would mean nothing to it.
+	state.redirect(mod, "strchr",
+		[](vcpu& cpu, const addr_t str, const std::int32_t c) -> addr_t
+		{
+			if (!str)
+				return 0;
+
+			auto& space = *cpu.curr_addr_space();
+			const auto wanted = static_cast<char>(c);
+
+			for (addr_t at = str; ; ++at)
+			{
+				const auto ch = space.read_mem<char>(at);
+
+				if (ch == wanted)
+					return at;
+
+				if (!ch)
+					return 0;
+			}
+		});
+
+	state.redirect(mod, "strnlen",
+		[](vcpu& cpu, const addr_t str, const std::uint64_t max_count) -> std::uint64_t
+		{
+			if (!str || !max_count)
+				return 0;
+
+			auto& space = *cpu.curr_addr_space();
+			std::uint64_t n = 0;
+
+			while (n < max_count && space.read_mem<char>(str + n))
+				++n;
+
+			THREAD_LOG_INFO("strnlen(0x{:X}, {}) -> {}", str, max_count, n);
+
+			return n;
+		});
+
+	// The _s forms differ from the plain ones by refusing rather than overrunning, and by
+	// returning an errno_t instead of the destination.
+	state.redirect(mod, "strcpy_s",
+		[](vcpu& cpu, const addr_t destination, const std::uint64_t size,
+			std::string source) -> std::int32_t
+		{
+			if (!destination || !size)
+				return crt_einval;
+
+			if (source.size() + 1 > size)
+			{
+				cpu.curr_addr_space()->write_mem<char>(destination, '\0');
+				return crt_erange;
+			}
+
+			cpu.curr_addr_space()->write_mem(destination, source.c_str(), source.size() + 1);
+
+			THREAD_LOG_INFO("strcpy_s(0x{:X}, {}, '{}') -> 0", destination, size, source);
+
+			return 0;
+		});
+
+	state.redirect(mod, "strncpy_s",
+		[](vcpu& cpu, const addr_t destination, const std::uint64_t size,
+			std::string source, const std::uint64_t count) -> std::int32_t
+		{
+			if (!destination || !size)
+				return crt_einval;
+
+			// _TRUNCATE asks for as much as fits, with room kept for the terminator.
+			constexpr auto truncate = ~std::uint64_t{ 0 };
+			const auto wanted = count == truncate ? source.size() : std::min(count, source.size());
+			const auto room = size - 1;
+
+			if (wanted > room && count != truncate)
+			{
+				cpu.curr_addr_space()->write_mem<char>(destination, '\0');
+				return crt_erange;
+			}
+
+			const auto n = std::min(wanted, room);
+			std::string out(source, 0, n);
+			out.push_back('\0');
+
+			cpu.curr_addr_space()->write_mem(destination, out.data(), out.size());
+
+			THREAD_LOG_INFO("strncpy_s(0x{:X}, {}, '{}', {}) -> {}",
+				destination, size, source, count, n < wanted ? crt_erange : 0);
+
+			return n < wanted ? crt_erange : 0;
+		});
+
 	state.redirect(mod, "strncpy",
 		[](vcpu& cpu, const addr_t destination, std::string source,
 			const std::uint64_t count) -> addr_t
@@ -262,6 +354,20 @@ void modules::register_ntoskrnl_crt_ops(win_kernel_state& state, proc_module& mo
 		return -1;
 	};
 
+	state.redirect(mod, "_snprintf_s",
+		[write_counted](vcpu& cpu, const addr_t destination, const std::uint64_t size_in_bytes,
+			const std::uint64_t max_count, std::string format) -> std::int32_t
+		{
+			auto& space = *cpu.curr_addr_space();
+			const auto text = guest::vsprintf(space, format, varargs(cpu, 4));
+			const auto written = write_counted(space, destination, size_in_bytes, max_count, text);
+
+			THREAD_LOG_INFO("_snprintf_s(dest=0x{:X}, {}, {}) -> '{}' ({})",
+				destination, size_in_bytes, max_count, text, written);
+
+			return written;
+		});
+
 	state.redirect(mod, "_vsnprintf_s",
 		[write_counted](vcpu& cpu, const addr_t destination, const std::uint64_t size_in_bytes,
 			const std::uint64_t max_count, std::string format, const addr_t arg_list) -> std::int32_t
@@ -291,6 +397,47 @@ void modules::register_ntoskrnl_crt_ops(win_kernel_state& state, proc_module& mo
 		});
 
 	// A merge sort: std::sort runs off the end on a comparator that is not a strict weak ordering.
+	// The comparator is guest code, so the search calls back into the guest for every probe,
+	// exactly as qsort does.
+	state.redirect(mod, "bsearch",
+		[st](vcpu& cpu, const addr_t key, const addr_t base, const std::uint64_t count,
+			const std::uint64_t width, const addr_t comparator) -> addr_t
+		{
+			if (!key || !base || !width || !comparator || !count)
+				return 0;
+
+			std::uint64_t low = 0;
+			std::uint64_t high = count;
+
+			while (low < high)
+			{
+				const auto mid = low + (high - low) / 2;
+				const auto at = base + mid * width;
+
+				const std::uint64_t args[] = { key, at };
+				const auto order = static_cast<std::int32_t>(
+					st->calls.call(cpu, comparator, args));
+
+				if (order == 0)
+				{
+					THREAD_LOG_INFO("bsearch(key=0x{:X}, base=0x{:X}, count={}, width={}) "
+						"-> 0x{:X}", key, base, count, width, at);
+
+					return at;
+				}
+
+				if (order < 0)
+					high = mid;
+				else
+					low = mid + 1;
+			}
+
+			THREAD_LOG_INFO("bsearch(key=0x{:X}, base=0x{:X}, count={}, width={}) -> not found",
+				key, base, count, width);
+
+			return 0;
+		});
+
 	state.redirect(mod, "qsort",
 		[st](vcpu& cpu, const addr_t base, const std::uint64_t count,
 			const std::uint64_t width, const addr_t comparator)
