@@ -11,7 +11,6 @@
 
 namespace
 {
-
 // A type the kernel does not store, so the layout is declared here; only its head is filled in.
 #pragma pack(push, 8)
 struct policy_info_t
@@ -47,12 +46,21 @@ void modules::register_ci(win_kernel_state& state, proc_module& mod)
 	auto* st = &state;
 
 	state.redirect(mod, "CiCheckSignedFile",
-		[](vcpu& cpu, const addr_t digest, const std::uint32_t digest_size,
+		[](vcpu&, const addr_t digest, const std::uint32_t digest_size,
 			const std::uint32_t digest_identifier, const addr_t win_certificate,
 			const std::uint32_t certificate_size, emu_object<policy_info_t> policy_info,
 			const addr_t signing_time, emu_object<void> signer_digest,
 			emu_object<std::uint32_t> signer_digest_size) -> NTSTATUS
 		{
+			// Logged before anything is written back: an output pointer that cannot be written
+			// is worth seeing with the call that carried it.
+			THREAD_LOG_WARN("CiCheckSignedFile(digest=0x{:X}/{}, identifier={}, certificate="
+				"0x{:X}/{}, signing_time=0x{:X}, signer_digest=0x{:X}): nothing here holds a "
+				"certificate to check a chain against",
+				digest, digest_size, digest_identifier, win_certificate, certificate_size,
+				signing_time, signer_digest.address());
+
+			// Both outputs are optional and a caller that does not want them passes null.
 			if (policy_info)
 			{
 				policy_info_t info{};
@@ -62,12 +70,6 @@ void modules::register_ci(win_kernel_state& state, proc_module& mod)
 
 			if (signer_digest_size)
 				signer_digest_size.write(0);
-
-			THREAD_LOG_WARN("CiCheckSignedFile(digest=0x{:X}/{}, identifier={}, certificate="
-				"0x{:X}/{}, signing_time=0x{:X}, signer_digest=0x{:X}): nothing here holds a "
-				"certificate to check a chain against",
-				digest, digest_size, digest_identifier, win_certificate, certificate_size,
-				signing_time, signer_digest.address());
 
 			return STATUS_INVALID_IMAGE_HASH;
 		});
