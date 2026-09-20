@@ -60,6 +60,11 @@ constexpr std::uint32_t thermal_eax = 0x77;
 constexpr std::uint32_t thermal_ebx = 2;
 constexpr std::uint32_t thermal_ecx = 9;
 
+constexpr std::uint32_t addr_width_leaf = 0x80000008;
+
+// 48 linear bits, 46 physical -- what the part this model names actually reports.
+constexpr std::uint32_t addr_width_eax = (48u << 8) | 46u;
+
 constexpr std::uint32_t thermal_leaf   = 0x6;
 constexpr std::uint32_t tsc_ratio_leaf = 0x15;
 constexpr std::uint32_t frequency_leaf = 0x16;
@@ -181,6 +186,20 @@ bool cpu_identity::on_cpuid(vcpu& cpu)
 	if (first_leaf(leaf))
 		LOG_INFO("cpu {}: cpuid leaf 0x{:X}, subleaf 0x{:X}",
 			cpu.id(), leaf, reg32(cpu, x86::rcx));
+
+	// The model this emulator names is a 13900K, and that part is answered by the cpu model.
+	// The address width is not: tcg reports 40 physical bits for every model, where the part
+	// it claims to be has 46. A guest that reads the brand and then the width sees a cpu that
+	// does not exist -- and the width is also what a page table walker masks a pfn with.
+	if (leaf == addr_width_leaf)
+	{
+		cpu.reg(x86::rax, static_cast<std::uint64_t>(addr_width_eax));
+		cpu.reg(x86::rbx, std::uint64_t{ 0 });
+		cpu.reg(x86::rcx, std::uint64_t{ 0 });
+		cpu.reg(x86::rdx, std::uint64_t{ 0 });
+
+		return true;
+	}
 
 	const bool model_leaf = leaf == thermal_leaf || leaf == tsc_ratio_leaf
 		|| leaf == frequency_leaf;
