@@ -76,6 +76,8 @@ cmake --preset arm64 && cmake --build --preset arm64
 
 ## Running
 
+Place the images you want to emulate in their `fs` folder. This folder must be in the same directory as the emulator is executed in (the x86-64 folder is fs_x86_64 and the ARM folder is fs_arm64).
+
 ```
 usage: kernemul [image...]
 
