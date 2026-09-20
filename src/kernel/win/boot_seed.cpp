@@ -99,8 +99,10 @@ void win::seed_filesystem(win_kernel_state& state)
 	}
 
 	// A raw disk is a device rather than a file on a real system, but nothing here registers
-	// one, and a driver that opens PhysicalDrive0 only needs the open to succeed.
-	for (int i = 0; i < 5; ++i)
+	// one, so the open lands on a file and the io layer answers the storage controls itself.
+	// A driver that walks the drives opens them until one fails, so the ones past the first
+	// are here to be found rather than to be described.
+	for (int i = 0; i <= 5; ++i)
 		static_cast<void>(fs.create("physicaldrive" + std::to_string(i)));
 
 	LOG_INFO("filesystem: seeded boot directories and devices");
