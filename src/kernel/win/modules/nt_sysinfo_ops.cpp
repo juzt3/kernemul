@@ -31,6 +31,7 @@ enum system_information_class : std::uint32_t
 	system_code_integrity_information     = 0x67,
 
 	system_logical_processor_and_group_information = 107,
+	system_shadow_stack_information = 183,
 
 	// Nothing is emulated here, so this is the basic information verbatim.
 	system_emulation_basic_information = 62,
@@ -402,10 +403,12 @@ void modules::register_ntoskrnl_sysinfo_ops(win_kernel_state& state, proc_module
 			system_basic_information_t info{};
 			info.timer_resolution = clock_increment_100ns;
 			info.page_size = page;
-			info.number_of_physical_pages = static_cast<std::uint32_t>(range.second / page);
+			// The size the guest is told everywhere else, not the part of it that happens to
+			// be backed: the two disagreeing is something no machine reports.
+			info.number_of_physical_pages = static_cast<std::uint32_t>(emulated_physical_pages);
 			info.lowest_physical_page_number = static_cast<std::uint32_t>(range.first / page);
-			info.highest_physical_page_number =
-				static_cast<std::uint32_t>((range.first + range.second) / page);
+			info.highest_physical_page_number = static_cast<std::uint32_t>(
+				range.first / page + emulated_physical_pages);
 			info.allocation_granularity = allocation_granularity;
 			info.active_processors_affinity_mask = cpus >= 64
 				? ~std::uint64_t{0} : (std::uint64_t{1} << cpus) - 1;
@@ -662,18 +665,20 @@ void modules::register_ntoskrnl_sysinfo_ops(win_kernel_state& state, proc_module
 			return STATUS_SUCCESS;
 		}
 
-		// { ULONG Length, ULONG CodeIntegrityOptions }. Enabled, and enforced by the hypervisor:
-		// a driver that finds code integrity off concludes the machine is already compromised.
+		// { ULONG Length, ULONG CodeIntegrityOptions }. Code integrity is on -- a driver that
+		// finds it off concludes the machine is already compromised -- but not the hypervisor
+		// enforced kind: claiming that promises W^X over kernel memory, and a driver is free to
+		// read the page tables and see whether the promise holds. Plenty of real machines run
+		// exactly this way, so it is the honest answer rather than a weaker one.
 		case system_code_integrity_information:
 		{
 			constexpr std::uint32_t option_enabled = 0x01;
-			constexpr std::uint32_t option_hvci_kmci_enabled = 0x400;
 
 			struct
 			{
 				std::uint32_t length;
 				std::uint32_t options;
-			} info{ sizeof(info), option_enabled | option_hvci_kmci_enabled };
+			} info{ sizeof(info), option_enabled };
 
 			if (return_length)
 				return_length.write(sizeof(info));
@@ -685,6 +690,27 @@ void modules::register_ntoskrnl_sysinfo_ops(win_kernel_state& state, proc_module
 
 			THREAD_LOG_INFO("NtQuerySystemInformation(SystemCodeIntegrityInformation): "
 				"enabled, options 0x{:X}", info.options);
+
+			return STATUS_SUCCESS;
+		}
+
+		// Whether the machine has hardware enforced stack protection. The cpu this emulator
+		// presents does not report CET in its feature leaves, so the answer that agrees with
+		// it is that there is none -- a machine, just not one with shadow stacks.
+		case system_shadow_stack_information:
+		{
+			constexpr std::uint32_t no_shadow_stack_support = 0;
+
+			if (return_length)
+				return_length.write(sizeof(no_shadow_stack_support));
+
+			if (length < sizeof(no_shadow_stack_support))
+				return STATUS_INFO_LENGTH_MISMATCH;
+
+			space.write_mem(system_information, no_shadow_stack_support);
+
+			THREAD_LOG_INFO("NtQuerySystemInformation(SystemShadowStackInformation): the cpu "
+				"reports no CET, so nothing here is shadow stack protected");
 
 			return STATUS_SUCCESS;
 		}
