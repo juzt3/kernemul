@@ -1,4 +1,5 @@
 #include "nt_misc_ops.hpp"
+#include "../dispatcher.hpp"
 #include "../win_kernel.hpp"
 #include "../driver.hpp"
 #include "../pool.hpp"
@@ -56,6 +57,13 @@ constexpr std::uint32_t dump_signature = 0x45474150;   // 'PAGE'
 constexpr std::uint32_t dump_valid_dump = 0x34365544;  // 'DU64'
 constexpr std::uint32_t dump_end_signature = 0x444D5054;
 constexpr std::uint32_t dump_buffer_size = 0x40000;
+constexpr std::uint32_t dump_free_build = 0xF;
+
+// The triage half of the dump starts at 0x2000; these two name the copy of KdDebuggerDataBlock
+// the rest of the buffer carries, which is where a consumer reads PteBase from.
+constexpr std::size_t triage_debugger_data_off  = 0x2070;
+constexpr std::size_t triage_debugger_data_size = 0x2074;
+constexpr std::size_t dump_debugger_data_off    = 0x3000;
 constexpr std::size_t dump_context_off = 840;
 constexpr std::size_t dump_context_pc_off = 3856;
 
@@ -93,6 +101,92 @@ constexpr std::uint32_t image_verification_subtype(const image_verification_type
 void modules::register_ntoskrnl_misc_ops(win_kernel_state& state, proc_module& mod)
 {
 	auto* st = &state;
+
+	// A bugcheck is the end of the machine, so it is the end of the guest here.
+	state.redirect(mod, "KeBugCheckEx",
+		[](vcpu& cpu, const std::uint32_t code, const std::uint64_t p1, const std::uint64_t p2,
+			const std::uint64_t p3, const std::uint64_t p4)
+		{
+			THREAD_LOG_ERR("KeBugCheckEx(0x{:X}, 0x{:X}, 0x{:X}, 0x{:X}, 0x{:X}): the guest "
+				"stopped the machine", code, p1, p2, p3, p4);
+
+			if (const auto t = cpu.thread())
+				t->finish();
+
+			cpu.stop();
+		});
+
+	// Everything here runs in the kernel, so no caller ever came from user mode.
+	state.redirect(mod, "ExGetPreviousMode", [](vcpu&) -> std::uint8_t
+	{
+		THREAD_LOG_INFO("ExGetPreviousMode() -> KernelMode");
+		return 0;
+	});
+
+	state.redirect(mod, "KeInitializeMutant",
+		[](vcpu&, emu_object<_KMUTANT> mutant, const std::uint8_t initial_owner)
+		{
+			if (!mutant)
+				return;
+
+			win::init_dispatcher(mutant, win::mutant_object, initial_owner ? 0 : 1);
+
+			THREAD_LOG_INFO("KeInitializeMutant(mutant=0x{:X}, owned={})",
+				mutant.address(), initial_owner != 0);
+		});
+
+	state.redirect(mod, "KeInitializeApc",
+		[](vcpu&, emu_object<_KAPC> apc, const addr_t thread, const std::uint32_t environment,
+			const addr_t kernel_routine, const addr_t rundown_routine,
+			const addr_t normal_routine, const std::uint8_t mode, const addr_t context)
+		{
+			if (!apc)
+				return;
+
+			auto entry = apc.read();
+			entry.Thread = guest_ptr<_KTHREAD>(thread);
+			entry.KernelRoutine = guest_ptr<void>(kernel_routine);
+			entry.RundownRoutine = guest_ptr<void>(rundown_routine);
+			entry.NormalRoutine = guest_ptr<void>(normal_routine);
+			entry.NormalContext = guest_ptr<void>(context);
+			entry.ApcStateIndex = static_cast<char>(environment);
+			entry.ApcMode = static_cast<char>(mode);
+			apc.write(entry);
+
+			THREAD_LOG_INFO("KeInitializeApc(apc=0x{:X}, thread=0x{:X}, env={}, kernel=0x{:X}, "
+				"normal=0x{:X}, mode={})",
+				apc.address(), thread, environment, kernel_routine, normal_routine, mode);
+		});
+
+	// Nothing here delivers an apc at a thread's next alertable wait, so the routine runs on
+	// a thread of its own -- late rather than never, which is what a caller waiting on its
+	// result can actually make progress against.
+	state.redirect(mod, "KeInsertQueueApc",
+		[st](vcpu& cpu, emu_object<_KAPC> apc, const addr_t system_argument1,
+			const addr_t system_argument2, const std::uint32_t increment) -> bool
+		{
+			if (!apc)
+				return false;
+
+			const auto entry = apc.read();
+			const auto normal = guest_va(entry.NormalRoutine);
+			const auto context = guest_va(entry.NormalContext);
+
+			if (!normal)
+			{
+				THREAD_LOG_WARN("KeInsertQueueApc: 0x{:X} has no normal routine", apc.address());
+				return true;
+			}
+
+			const std::uint64_t args[] = { context, system_argument1, system_argument2 };
+			const auto t = st->sys_proc->create_thread(cpu, normal, args);
+
+			THREAD_LOG_INFO("KeInsertQueueApc(apc=0x{:X}, 0x{:X}, 0x{:X}, increment={}): "
+				"routine 0x{:X} runs as tid={}",
+				apc.address(), system_argument1, system_argument2, increment, normal, t->id());
+
+			return true;
+		});
 
 	state.redirect(mod, "KeRegisterBugCheckReasonCallback",
 		[](vcpu& cpu, emu_object<void> callback_record, const addr_t callback_routine,
@@ -823,6 +917,7 @@ void modules::register_ntoskrnl_misc_ops(win_kernel_state& state, proc_module& m
 
 			put32(0, dump_signature);
 			put32(4, dump_valid_dump);
+			put32(8, dump_free_build);
 			put32(12, st->nt_build_number);
 
 			const auto owner = thread
@@ -847,13 +942,26 @@ void modules::register_ntoskrnl_misc_ops(win_kernel_state& state, proc_module& m
 			put64(40, st->active_process_list.address());
 
 			put32(48, win_target::image_machine);
-			put32(52, 1);
+			put32(52, static_cast<std::uint32_t>(cpu.emu()->cpus().size()));
 
 			put32(56, bugcheck_code);
 			put64(64, p1);
 			put64(72, p2);
 			put64(80, p3);
 			put64(88, p4);
+
+			// Where a driver goes for PteBase rather than probing pml4 slots for the self map.
+			// The header names the live block; the triage half carries a copy, and a consumer
+			// reads DebuggerDataOffset to find it.
+			if (const auto kdbg = m->find_symbol("KdDebuggerDataBlock"))
+			{
+				put64(128, *kdbg);
+
+				space.read_mem(*kdbg, buf + dump_debugger_data_off, kdbg_block_size);
+
+				put32(triage_debugger_data_off, dump_debugger_data_off);
+				put32(triage_debugger_data_size, kdbg_block_size);
+			}
 
 			if (context)
 			{
