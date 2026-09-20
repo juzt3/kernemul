@@ -396,19 +396,18 @@ void modules::register_ntoskrnl_sysinfo_ops(win_kernel_state& state, proc_module
 			if (length < sizeof(system_basic_information_t))
 				return STATUS_INFO_LENGTH_MISMATCH;
 
-			const auto range = space.mmu_->phys_range();
 			const auto page = static_cast<std::uint32_t>(space.mmu_->page_size());
 			const auto cpus = cpu.emu()->cpus().size();
 
 			system_basic_information_t info{};
 			info.timer_resolution = clock_increment_100ns;
 			info.page_size = page;
-			// The size the guest is told everywhere else, not the part of it that happens to
-			// be backed: the two disagreeing is something no machine reports.
+			// The declared memory map, not the part of it that happens to be backed. The
+			// highest number is inclusive, as NT's is: a driver walks up to and including that
+			// frame, and the pfn database is exactly long enough to be indexed by it.
 			info.number_of_physical_pages = static_cast<std::uint32_t>(emulated_physical_pages);
-			info.lowest_physical_page_number = static_cast<std::uint32_t>(range.first / page);
-			info.highest_physical_page_number = static_cast<std::uint32_t>(
-				range.first / page + emulated_physical_pages);
+			info.lowest_physical_page_number = static_cast<std::uint32_t>(lowest_physical_page);
+			info.highest_physical_page_number = static_cast<std::uint32_t>(highest_physical_page);
 			info.allocation_granularity = allocation_granularity;
 			info.active_processors_affinity_mask = cpus >= 64
 				? ~std::uint64_t{0} : (std::uint64_t{1} << cpus) - 1;

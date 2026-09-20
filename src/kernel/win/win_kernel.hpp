@@ -85,6 +85,11 @@ struct win_kernel_state : kernel_state
 		processes[sys_proc->id()] = sys_proc;
 		auto& space = *emu->default_addr_space();
 
+		// First, before a single image maps. From here the mmu writes a pfn entry for every
+		// page it maps and every table that maps it, so the database is never behind and
+		// nothing has to go back over what already exists.
+		modules::init_pfn_database(space);
+
 		// The host tree is laid out as the guest's drive, so a file sits where the guest names it.
 		fs.load_dir(target::guest_fs_dir, root_dir_narrow);
 
@@ -355,7 +360,8 @@ struct win_kernel_state : kernel_state
 
 		const auto drv = make_default_driver_object({
 			.driver_name = win::init_unicode_string(space,
-				std::u16string(driver_name_prefix) + std::u16string(service_name)),
+				std::u16string(driver_name_prefix) + std::u16string(service_name),
+				prot_rw | prot_supervisor),
 			.driver_start = mod.addr,
 			.driver_size = mod.size,
 			.driver_section = ldr_entry(mod.addr),
@@ -371,7 +377,8 @@ struct win_kernel_state : kernel_state
 		const std::u16string reg_path_str =
 			std::u16string(driver_services_key) + std::u16string(service_name);
 
-		auto reg_path = win::allocate_unicode_string(space, reg_path_str, "RegistryPath");
+		auto reg_path = win::allocate_unicode_string(space, reg_path_str, "RegistryPath",
+			prot_rw | prot_supervisor);
 		reg_path.monitor();
 
 		// DriverEntry is handed this path, so the key behind it has to exist -- otherwise the
@@ -496,29 +503,9 @@ struct win_kernel_state : kernel_state
 		return cpu_id < per_cpu_.size() ? &per_cpu_[cpu_id] : nullptr;
 	}
 
-	std::shared_ptr<process> create_process(const std::string_view name) override
-	{
-		std::unique_lock lock(proc_mtx_);
-		const auto id = objs.allocate_id();
-		auto& kspace = *emu_->default_addr_space();
-		const auto kusd_pa = *kspace.mmu_->virt_to_phys(kspace, kuser_shared_data_kernel_va);
-		auto proc = std::make_shared<win_user_proc>(id, emu_->mem()->create_addr_space(), objs, fs,
-			kusd_pa, name, emu_->cpus().size());
-		proc->set_emulator(emulator_);
-		processes[id] = proc;
-
-		if (active_process_list.address())
-		{
-			const auto eproc = insert_process(*emu_->default_addr_space(), id, name,
-				proc->peb().address());
-			proc->set_eprocess(eproc);
-		}
-
-		const auto console = open_console();
-		proc->set_std_handles(console, console, console);
-
-		return proc;
-	}
+	// Defined below, where windows_emulator -- which prepares the new address space -- is a
+	// complete type.
+	std::shared_ptr<process> create_process(std::string_view name) override;
 
 private:
 	windows_emulator* emulator_ = nullptr;
@@ -611,6 +598,11 @@ public:
 	win_kernel_state& kernel() { return kernel_; }
 
 	[[nodiscard]] win_per_cpu* per_cpu(const vcpu& cpu) { return kernel_.per_cpu(cpu.id()); }
+
+	// What a freshly created address space needs before anything is mapped into it. The self map
+	// is the one top-half slot that is not shared: it names the root it sits in, so a copy of
+	// the kernel's is a space claiming to be the kernel. Arches without one do nothing here.
+	virtual void prepare_addr_space(::addr_space&) {}
 
 	// Which register that is belongs to the arch: the GS base on x86-64, TPIDR_EL1 on ARM64.
 	virtual void set_pcr(vcpu&, addr_t) {}
@@ -919,3 +911,36 @@ public:
 private:
 	win_kernel_state kernel_;
 };
+
+inline std::shared_ptr<process> win_kernel_state::create_process(const std::string_view name)
+{
+	std::unique_lock lock(proc_mtx_);
+	const auto id = objs.allocate_id();
+	auto& kspace = *emu_->default_addr_space();
+	const auto kusd_pa = *kspace.mmu_->virt_to_phys(kspace, kuser_shared_data_kernel_va);
+	auto space = emu_->mem()->create_addr_space();
+
+	// A new space copies the kernel half wholesale, and the self map slot is in that half --
+	// so without this the space's own self map names the kernel's tables rather than its
+	// own, and a walk through it describes somebody else's page tables. It is the one
+	// top-half entry that is not meant to be shared.
+	if (emulator_)
+		emulator_->prepare_addr_space(*space);
+
+	auto proc = std::make_shared<win_user_proc>(id, std::move(space), objs, fs,
+		kusd_pa, name, emu_->cpus().size());
+	proc->set_emulator(emulator_);
+	processes[id] = proc;
+
+	if (active_process_list.address())
+	{
+		const auto eproc = insert_process(*emu_->default_addr_space(), id, name,
+			proc->peb().address());
+		proc->set_eprocess(eproc);
+	}
+
+	const auto console = open_console();
+	proc->set_std_handles(console, console, console);
+
+	return proc;
+}

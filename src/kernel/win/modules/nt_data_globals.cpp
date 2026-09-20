@@ -7,8 +7,10 @@
 #include "../../../util/log.hpp"
 
 #include <cstddef>
+#include <utility>
 #include <cstdint>
 #include <string_view>
+#include <vector>
 #include <type_traits>
 
 // ntoskrnl's own initialisers never ran, so every global it would have filled in at boot still
@@ -86,31 +88,120 @@ addr_t init_list_head(addr_space& space, const proc_module& mod, const std::stri
 	return va;
 }
 
-// A driver walking 0..NumberOfPhysicalPages must not walk off the end, so the array is sized
-// from the same constant the guest is told. A zeroed _MMPFN is a coherent lie -- page not
-// valid, refcount zero, on no list -- which is the point.
-void init_pfn_database(addr_space& space, const proc_module& mod)
+// KdDebuggerDataBlock is where a driver looks for what ntoskrnl never exports, PteBase above
+// all: it names the self map, and a driver that cannot read it goes hunting for the self map by
+// probing pml4 slots instead. The image already carries the block with every pointer relocated;
+// what it does not carry is the header KdInitSystem stamps at boot, so only that is written
+// here. Offsets are the published KDDEBUGGER_DATA64 layout, which the public pdb does not
+// describe, and the size is the one ntoskrnl's own initialiser stores.
+void init_debugger_data(addr_space& space, const proc_module& mod)
 {
-	constexpr auto bytes = emulated_physical_pages * sizeof(_MMPFN);
+	constexpr std::uint32_t kdbg_owner_tag = 0x4742444B;
 
-	const auto base = space.alloc(bytes, prot_rw | prot_supervisor);
+	constexpr std::size_t off_owner_tag = 0x10;
+	constexpr std::size_t off_size = 0x14;
+	constexpr std::size_t off_kern_base = 0x18;
+	constexpr std::size_t off_pte_base = 0x360;
 
-	// Never publish a pointer that was not actually mapped. A bogus non-null one faults at a
-	// plausible-looking kernel address and reads as a guest bug; null faults at 0 and is
-	// recognisable on sight.
-	if (!base)
+	const auto block = mod.find_symbol("KdDebuggerDataBlock");
+
+	if (!block || !mod.contains_addr(*block) || !mod.contains_addr(*block + kdbg_block_size - 1))
 	{
-		LOG_ERR("no room for a {} byte pfn database, so MmPfnDatabase stays null", bytes);
+		LOG_INFO("no KdDebuggerDataBlock in {}, so a driver that wants PteBase has to hunt "
+			"for the self map", mod.name);
 		return;
 	}
 
-	if (!write_global<addr_t>(space, mod, "MmPfnDatabase", base, false))
+	space.write_mem<std::uint32_t>(*block + off_owner_tag, kdbg_owner_tag);
+	space.write_mem<std::uint32_t>(*block + off_size, kdbg_block_size);
+	space.write_mem<addr_t>(*block + off_kern_base, mod.addr);
+
+	// The image's copy names the slot the build defaults to; the mmu decides the real one.
+	if constexpr (win_target::pte_base)
+		space.write_mem<addr_t>(*block + off_pte_base, win_target::pte_base);
+
+	// The block is the only entry on the list ntoskrnl walks to find it.
+	if (const auto head = mod.find_symbol("KdpDebuggerDataListHead");
+		head && mod.contains_addr(*head))
+	{
+		space.write_mem(*head, guest_links(*block, *block));
+		space.write_mem(*block, guest_links(*head, *head));
+	}
+	else
+	{
+		space.write_mem(*block, guest_links(*block, *block));
+	}
+
+	LOG_INFO("{}!KdDebuggerDataBlock at 0x{:X}: PteBase 0x{:X}, KernBase 0x{:X}",
+		mod.name, *block, win_target::pte_base, mod.addr);
+}
+
+// NT gives the database a pml4 slot of its own and starts it at the slot boundary, so the entry
+// for a frame is at a known offset from a 512gb aligned base. A driver that goes looking for the
+// database rather than trusting the exported pointer relies on that, and a base bumped along with
+// everything else in the kernel range does not have it.
+constexpr addr_t pfn_database_base = 0xFFFFFA8000000000;
+
+// The same array's physical base. Entries are written physically, not virtually, because they
+// are written from inside the mmu while it holds its own lock -- which a virtual write would
+// deadlock against. map_virt_phys is handed one contiguous run, so an entry is a multiply away.
+addr_t pfn_database_phys = 0;
+
+// The self map address of the entry that maps `va` at `level`: level 0 is the page's own pte,
+// level 1 the pte of that pte, and so on up to the root. Pure arithmetic -- it reads no tables,
+// so unlike a walk it does not care whether the self map has been installed yet.
+[[maybe_unused]] addr_t pte_at_level(addr_t va, const unsigned level)
+{
+	for (unsigned i = 0; i <= level; ++i)
+		va = win_target::pte_base + ((va / 0x1000) & 0xFFFFFFFFFull) * 8;
+
+	return va;
+}
+
+// A frame the page tables hand out has an entry here describing it. A frame whose entry is blank
+// is one the tables claim without the memory manager knowing, which is what a driver looking for
+// tampered tables is looking for.
+//
+// Everything an entry holds is either a literal or already in the mmu's hand at the moment of
+// mapping: the frame is the index, the virtual address gives PteAddress by arithmetic, and the
+// table the entry sits in is PteFrame. Nothing is looked up, remembered, or walked.
+void describe_frame(mmu& m, const addr_t pa, const addr_t va, const addr_t table_pa,
+	const unsigned level)
+{
+	const auto page = m.page_size();
+	const auto pfn = pa / page;
+
+	if (pfn < lowest_physical_page || pfn > highest_physical_page)
 		return;
 
-	const auto read_back = space.read_mem<addr_t>(*mod.find_symbol("MmPfnDatabase"));
+	_MMPFN entry{};
+	entry.u2.ShareCount = 1;
+	entry.u3.ReferenceCount = 1;
+	entry.u3.e1.PageLocation = 6;   // ActiveAndValid
+	entry.u4.PfnExists = 1;
+	entry.u4.ResidentPage = 1;
+	entry.u4.PteFrame = table_pa / page;
 
-	LOG_INFO("pfn database: {} entries of {} bytes at 0x{:X} (read back 0x{:X})",
-		emulated_physical_pages, sizeof(_MMPFN), base, read_back);
+	// Only an arch with a recursive self map can name the pte that maps a frame. ARM64 has
+	// none, and real ARM64 Windows publishes no such fact about its own tables either.
+	if constexpr (win_target::pte_base)
+		entry.PteAddress = reinterpret_cast<_MMPTE*>(
+			static_cast<std::uintptr_t>(pte_at_level(va, level)));
+
+	m.write_phys(pfn_database_phys + pfn * sizeof(_MMPFN), entry);
+}
+
+// A frame nothing maps any more. Zeroed reads as PageLocation 0 (ZeroedPageList), no references
+// and PfnExists clear -- a coherent "this frame is free", which beats an entry still claiming to
+// be valid while the pte it names reads zero.
+void forget_frame(mmu& m, const addr_t pa)
+{
+	const auto pfn = pa / m.page_size();
+
+	if (pfn < lowest_physical_page || pfn > highest_physical_page)
+		return;
+
+	m.write_phys(pfn_database_phys + pfn * sizeof(_MMPFN), _MMPFN{});
 }
 
 // Ob creates one _OBJECT_TYPE per kind of object it manages and publishes a pointer to each in
@@ -132,7 +223,7 @@ addr_t init_object_type(addr_space& space, const proc_module& mod, const std::st
 	}
 
 	_OBJECT_TYPE type{};
-	type.Name = win::init_unicode_string(space, name);
+	type.Name = win::init_unicode_string(space, name, prot_rw | prot_supervisor);
 
 	space.write_mem(addr, type);
 
@@ -149,6 +240,37 @@ addr_t init_object_type(addr_space& space, const proc_module& mod, const std::st
 	return addr;
 }
 
+}
+
+// Built before anything else maps, so every page the machine goes on to map describes itself on
+// the way in and nothing has to be swept up afterwards. The physical run is taken first, because
+// its base has to be known before the hook can be called with it -- the array's own pages are
+// mapped below and land in the database the same way everything else does.
+void modules::init_pfn_database(addr_space& space)
+{
+	constexpr auto bytes = pfn_database_entries * sizeof(_MMPFN);
+
+	static_assert(bytes == (highest_physical_page + 1) * sizeof(_MMPFN),
+		"the database is indexed by raw frame number, so it is as long as the highest frame");
+
+	auto& m = *space.mmu_;
+
+	pfn_database_phys = m.alloc_phys(bytes, prot_rw);
+
+	m.set_page_note([](mmu& mm, const addr_t pa, const addr_t va, const addr_t table_pa,
+		const unsigned level, const bool mapped)
+	{
+		if (mapped)
+			describe_frame(mm, pa, va, table_pa, level);
+		else
+			forget_frame(mm, pa);
+	});
+
+	m.map_virt_phys(space, pfn_database_base, pfn_database_phys, bytes,
+		prot_rw | prot_supervisor);
+
+	LOG_INFO("pfn database: {} entries of {} bytes at 0x{:X} (physical 0x{:X})",
+		pfn_database_entries, sizeof(_MMPFN), pfn_database_base, pfn_database_phys);
 }
 
 void modules::init_ntoskrnl_globals(win_kernel_state& state, proc_module& mod)
@@ -189,7 +311,17 @@ void modules::init_ntoskrnl_globals(win_kernel_state& state, proc_module& mod)
 	if constexpr (win_target::pte_base)
 		write_global<addr_t>(space, mod, "MmPteBase", win_target::pte_base, false);
 
-	init_pfn_database(space, mod);
+	// Never publish a pointer that was not actually mapped. A bogus non-null one faults at a
+	// plausible-looking kernel address and reads as a guest bug; null faults at 0 and is
+	// recognisable on sight.
+	if (pfn_database_phys && write_global<addr_t>(space, mod, "MmPfnDatabase",
+		pfn_database_base, false))
+	{
+		LOG_INFO("MmPfnDatabase reads back 0x{:X}",
+			space.read_mem<addr_t>(*mod.find_symbol("MmPfnDatabase")));
+	}
+
+	init_debugger_data(space, mod);
 
 	// The four ObGetObjectType can name, so that reading a type back gives the same pointer the
 	// global holds rather than null.
@@ -197,6 +329,7 @@ void modules::init_ntoskrnl_globals(win_kernel_state& state, proc_module& mod)
 	init_object_type(space, mod, "PsThreadType", u"Thread");
 	init_object_type(space, mod, "IoFileObjectType", u"File");
 	init_object_type(space, mod, "MmSectionObjectType", u"Section");
+	init_object_type(space, mod, "ExEventObjectType", u"Event");
 
 	// The mapped ntoskrnl is the authority on its own build, and NtBuildNumber is exported on
 	// both arches so this needs no pdb. The low 16 bits are the build; the rest are flags.

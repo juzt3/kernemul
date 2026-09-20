@@ -152,6 +152,17 @@ void mmu::map_page(addr_space& space, const addr_t va, const addr_t pa, const me
 		(pa & desc_addr_mask) | page_attrs(prot));
 
 	space.shadow[v.val] = pa;
+
+	// The page, then each table that maps it. A table is a frame like any other and nothing
+	// maps it at an ordinary address, so this is the only place it can be described from --
+	// and here it costs nothing, because the walk that mapped the page already found them all.
+	note_page(pa, v.val, l3,            0, true);
+	note_page(l3, v.val, l2,            1, true);
+	note_page(l2, v.val, l1,            2, true);
+	note_page(l1, v.val, space.ttbr_pa, 3, true);
+
+	// The root is reached through its own self map entry, so it is its own parent.
+	note_page(space.ttbr_pa, v.val, space.ttbr_pa, 4, true);
 }
 
 addr_t mmu::walk_to_l3(const addr_space& space, const addr_t va)
@@ -191,10 +202,20 @@ void mmu::unmap_page(addr_space& space, const addr_t va)
 {
 	const virt_addr v{ .val = page_align(va) };
 
+	// The pa it was mapped to is what names the frame to whoever consumes the event, so the
+	// entry is read before it goes.
+	if (const auto it = space.shadow.find(v.val); it != space.shadow.end())
+	{
+		const auto pa = it->second;
+		space.shadow.erase(it);
+
+		// Only the page. The tables it hung off are still tables, and still map whatever else
+		// was in them.
+		note_page(pa, v.val, 0, 0, false);
+	}
+
 	if (const addr_t l3 = walk_to_l3(space, va))
 		write_phys<std::uint64_t>(l3 + v.l3 * sizeof(std::uint64_t), 0);
-
-	space.shadow.erase(v.val);
 }
 
 void mmu::map_virt(::addr_space& space, const addr_t va, const std::size_t size, const mem_prot prot)

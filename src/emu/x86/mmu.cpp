@@ -190,11 +190,35 @@ void mmu::map_page(addr_space& space, addr_t va, addr_t pa, const mem_prot prot)
 	write_phys(pt + v.pt * sizeof(ia32::pte_64), entry);
 
 	space.shadow[v.val] = pa;
+
+	// The page, then each table that maps it. A table is a frame like any other and nothing
+	// maps it at an ordinary address, so this is the only place it can be described from --
+	// and here it costs nothing, because the walk that mapped the page already found them all.
+	note_page(pa,   v.val, pt,            0, true);
+	note_page(pt,   v.val, pd,            1, true);
+	note_page(pd,   v.val, pdpt,          2, true);
+	note_page(pdpt, v.val, space.pml4_pa, 3, true);
+
+	// The root is reached through its own self map entry, so it is its own parent.
+	note_page(space.pml4_pa, v.val, space.pml4_pa, 4, true);
 }
 
 void mmu::unmap_page(addr_space& space, addr_t va)
 {
 	virt_addr v{ .val = page_align(va) };
+
+	// Before the walk, not after it: the returns below give up on a page whose tables are
+	// already gone, and a shadow entry left behind for one is a translation copy_virt still
+	// goes through -- a read of memory the guest has given back.
+	if (const auto it = space.shadow.find(v.val); it != space.shadow.end())
+	{
+		const auto pa = it->second;
+		space.shadow.erase(it);
+
+		// Only the page. The tables it hung off are still tables, and still map whatever else
+		// was in them.
+		note_page(pa, v.val, 0, 0, false);
+	}
 
 	auto pml4e = read_phys<ia32::pt_entry_64>(space.pml4_pa + v.pml4 * sizeof(ia32::pt_entry_64));
 	if (!pml4e.present) return;
@@ -206,8 +230,6 @@ void mmu::unmap_page(addr_space& space, addr_t va)
 	if (!pde.present) return;
 
 	write_phys<std::uint64_t>(pfn_to_pa(pde.page_frame_number) + v.pt * sizeof(ia32::pte_64), 0);
-
-	space.shadow.erase(v.val);
 }
 
 void mmu::map_virt(::addr_space& space, addr_t va, std::size_t size, mem_prot prot)
