@@ -390,6 +390,78 @@ void modules::register_ntoskrnl_io_ops(win_kernel_state& state, proc_module& mod
 {
 	auto* st = &state;
 
+	// IO_WORKITEM is opaque to a driver, so the only thing it has to hold is what queueing
+	// needs: the object the routine is called with.
+	constexpr std::size_t io_work_item_size = 0x40;
+
+	state.redirect(mod, "IoSizeofWorkItem", [](vcpu&) -> std::uint32_t
+	{
+		return static_cast<std::uint32_t>(io_work_item_size);
+	});
+
+	state.redirect(mod, "IoAllocateWorkItem",
+		[st](vcpu& cpu, const addr_t device_object) -> addr_t
+		{
+			const auto item = st->pool.allocate(io_work_item_size, pool_tag("IoWi"), true);
+
+			if (!item)
+			{
+				THREAD_LOG_ERR("IoAllocateWorkItem: out of pool");
+				return 0;
+			}
+
+			cpu.curr_addr_space()->write_mem<addr_t>(item, device_object);
+
+			THREAD_LOG_INFO("IoAllocateWorkItem(device=0x{:X}) -> 0x{:X}", device_object, item);
+
+			return item;
+		});
+
+	state.redirect(mod, "IoFreeWorkItem", [st](vcpu&, const addr_t io_work_item)
+	{
+		if (io_work_item && !st->pool.free(io_work_item))
+			THREAD_LOG_ERR("IoFreeWorkItem: 0x{:X} was not allocated here", io_work_item);
+		else
+			THREAD_LOG_INFO("IoFreeWorkItem(0x{:X})", io_work_item);
+	});
+
+	state.redirect(mod, "IoInitializeWorkItem",
+		[](vcpu& cpu, const addr_t io_object, const addr_t io_work_item)
+		{
+			if (!io_work_item)
+				return;
+
+			cpu.curr_addr_space()->write_mem<addr_t>(io_work_item, io_object);
+
+			THREAD_LOG_INFO("IoInitializeWorkItem(object=0x{:X}, item=0x{:X})",
+				io_object, io_work_item);
+		});
+
+	state.redirect(mod, "IoUninitializeWorkItem", [](vcpu&, const addr_t io_work_item)
+	{
+		THREAD_LOG_INFO("IoUninitializeWorkItem(0x{:X})", io_work_item);
+	});
+
+	// No worker pool here, so the routine gets a thread of its own, as ExQueueWorkItem does.
+	state.redirect(mod, "IoQueueWorkItem",
+		[st](vcpu& cpu, const addr_t io_work_item, const addr_t worker_routine,
+			const std::uint32_t queue_type, const addr_t context)
+		{
+			if (!io_work_item || !worker_routine)
+			{
+				THREAD_LOG_ERR("IoQueueWorkItem: item 0x{:X} has no routine", io_work_item);
+				return;
+			}
+
+			const auto io_object = cpu.curr_addr_space()->read_mem<addr_t>(io_work_item);
+			const std::uint64_t args[] = { io_object, context };
+			const auto t = st->sys_proc->create_thread(cpu, worker_routine, args);
+
+			THREAD_LOG_INFO("IoQueueWorkItem(item=0x{:X}, queue={}): routine 0x{:X}(0x{:X}, "
+				"0x{:X}) runs as tid={}",
+				io_work_item, queue_type, worker_routine, io_object, context, t->id());
+		});
+
 	// The page frame array stays empty until something fills it, as in the real one.
 	state.redirect(mod, "IoAllocateMdl",
 		[st](vcpu& cpu, const addr_t virtual_address, const std::uint32_t length,
