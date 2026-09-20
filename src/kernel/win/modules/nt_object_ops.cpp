@@ -336,6 +336,27 @@ void modules::register_ntoskrnl_object_ops(win_kernel_state& state, proc_module&
 			return STATUS_SUCCESS;
 		});
 
+	// Nothing puts anything in a directory here, so an enumeration of one has nothing to
+	// return -- which is a result a caller handles, unlike a failure.
+	state.redirect_ntzw(mod, "QueryDirectoryObject",
+		[](vcpu&, const std::uint64_t directory_handle, const addr_t buffer,
+			const std::uint32_t length, const std::uint8_t return_single_entry,
+			const std::uint8_t restart_scan, emu_object<std::uint32_t> context,
+			emu_object<std::uint32_t> return_length) -> NTSTATUS
+		{
+			if (context)
+				context.write(0);
+
+			if (return_length)
+				return_length.write(0);
+
+			THREAD_LOG_WARN("NtQueryDirectoryObject(handle=0x{:X}, buffer=0x{:X}/{}, single={}, "
+				"restart={}): the directory is empty",
+				directory_handle, buffer, length, return_single_entry != 0, restart_scan != 0);
+
+			return STATUS_NO_MORE_ENTRIES;
+		});
+
 	state.redirect_ntzw(mod, "OpenSymbolicLinkObject",
 		[attribute_name, open_namespace_object](vcpu& cpu, emu_object<std::uint64_t> link_handle,
 			const std::uint32_t desired_access,
