@@ -1,5 +1,7 @@
 #include "mmu.hpp"
 #include "emu.hpp"
+#include <format>
+#include <stdexcept>
 
 void addr_space::read_mem(addr_t va, void* buf, std::size_t size)
 {
@@ -51,6 +53,17 @@ addr_t mmu::alloc_phys_locked(std::size_t size, mem_prot prot)
 	const std::size_t aligned = size_align(size);
 
 	const addr_t addr = phys_next_;
+
+	// A frame past the end is one the guest was never told it has: nothing in the pfn database
+	// describes it and MmGetPhysicalMemoryRanges does not cover it, so handing it out makes the
+	// emulator's own account of its memory false. Written as a subtraction from the end so the
+	// sum cannot wrap. Failing here is louder than the alternative, which is a driver reading a
+	// frame number the machine says does not exist.
+	if (aligned > phys_end - addr)
+		throw std::runtime_error(std::format(
+			"out of guest physical memory: 0x{:X} more bytes at 0x{:X}, which ends at 0x{:X}",
+			aligned, addr, phys_end));
+
 	phys_next_ += aligned;
 
 	emu_->map_phys_mem(addr, aligned);

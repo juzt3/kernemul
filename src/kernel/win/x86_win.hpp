@@ -57,9 +57,13 @@ public:
 	// 0xFFFFF68000000000 as an immediate, and a guest hunting for the slot walks all 512.
 	static constexpr std::size_t self_map_pml4_index = 0x1ED;
 
-	// Only the kernel root needs it: every later space copies the top half of this one, and the
-	// slot is in that half. Defined out of line because a page table entry is an ia32 type.
+	// Every space needs its own. A later space copies the top half of the kernel's and the slot
+	// is in that half, so the copy names the kernel's root -- which is the one thing a self map
+	// must never do, since a walk through it would then describe another space's page tables.
+	// Defined out of line because a page table entry is an ia32 type.
 	static void install_self_map(::addr_space& space);
+
+	void prepare_addr_space(::addr_space& space) override { install_self_map(space); }
 
 	// What rdmsr 0x1B reports, so it is the page a driver goes on to map.
 	static constexpr addr_t local_apic_phys = 0xFEE00000;

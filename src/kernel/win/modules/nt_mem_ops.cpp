@@ -486,14 +486,14 @@ void modules::register_ntoskrnl_mem_ops(win_kernel_state& state, proc_module& mo
 				memory_descriptor_list.address(), mdl.byte_count, pages, mdl.mapped_system_va);
 		});
 
-	// The physical memory handed out is one run: the mmu allocates by bumping a cursor.
+	// One run, and the whole of it: the declared memory map rather than the part a bumping
+	// cursor has reached. Both halves come from the one expression so they cannot disagree.
 	state.redirect(mod, "MmGetPhysicalMemoryRanges", [st](vcpu& cpu) -> addr_t
 	{
-		const auto range = cpu.curr_addr_space()->mmu_->phys_range();
-		const auto bytes = emulated_physical_pages * cpu.curr_addr_space()->mmu_->page_size();
+		const auto [base, bytes] = cpu.curr_addr_space()->mmu_->phys_range();
 
 		const _PHYSICAL_MEMORY_RANGE entries[2] = {
-			{ .BaseAddress = { .QuadPart = static_cast<long long>(range.first) },
+			{ .BaseAddress = { .QuadPart = static_cast<long long>(base) },
 			  .NumberOfBytes = { .QuadPart = static_cast<long long>(bytes) } },
 			{},
 		};
@@ -509,7 +509,7 @@ void modules::register_ntoskrnl_mem_ops(win_kernel_state& state, proc_module& mo
 		cpu.curr_addr_space()->write_mem(addr, entries, sizeof(entries));
 
 		THREAD_LOG_INFO("MmGetPhysicalMemoryRanges() -> 0x{:X}: 0x{:X}..0x{:X}",
-			addr, range.first, range.first + bytes);
+			addr, base, base + bytes);
 
 		return addr;
 	});

@@ -39,13 +39,30 @@ inline constexpr std::uint32_t kdbg_block_size = 0x3A0;
 constexpr std::uint64_t kuser_shared_data_user_va   = 0x7FFE0000;
 constexpr std::uint64_t kuser_shared_data_kernel_va  = 0xFFFFF78000000000;
 
-// How much physical memory the guest is told it has. The fake PFN database is sized from the
-// same number, so a driver that walks 0..NumberOfPhysicalPages cannot walk off the end of it,
-// and every page of that array is host memory the emulator commits up front -- at 0x30 bytes
-// an entry, 8gb of 4k pages costs about 96mb. It buys a machine a driver will run on: the
-// builds this pretends to be do not install on less than 4gb, so a smaller number here is one
-// a real one never reports.
-inline constexpr std::uint64_t emulated_physical_pages = 0x200000;
+// The memory map the guest is told about, stated once and derived from the one place that
+// decides it, because these reach the guest through unrelated calls -- the basic information
+// block, MmGetPhysicalMemoryRanges, the length of the pfn database -- and a machine whose
+// answers disagree with each other is not one anyone has.
+inline constexpr std::uint64_t guest_page_size = 0x1000;
+
+// Frames start high: there is no usable ram under 4gb on a machine with this much of it. See
+// mmu::phys_base for why.
+inline constexpr std::uint64_t lowest_physical_page = mmu::phys_base / guest_page_size;
+
+// How much ram there is, as a count of frames. 4gb -- the builds this pretends to be do not
+// install on less, so a smaller number here is one a real machine never reports.
+inline constexpr std::uint64_t emulated_physical_pages = mmu::phys_size / guest_page_size;
+
+// The last frame that exists, inclusive, which is what NT's HighestPhysicalPageNumber means. A
+// driver walks up to and including this one.
+inline constexpr std::uint64_t highest_physical_page =
+	lowest_physical_page + emulated_physical_pages - 1;
+
+// The database is indexed by raw frame number from zero, as NT's is, so it is as long as the
+// highest frame rather than as long as the count. The low half describes the hole under 4gb and
+// stays zero, which is what a hole's entries read as on a real machine anyway. Every page of it
+// is host memory committed up front: at 0x30 bytes an entry this is about 96mb.
+inline constexpr std::uint64_t pfn_database_entries = highest_physical_page + 1;
 
 // Only what an image whose NtBuildNumber cannot be read falls back to. The mapped ntoskrnl is
 // the authority on its own build; see win_kernel_state::nt_build_number.
