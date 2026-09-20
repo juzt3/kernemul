@@ -399,6 +399,18 @@ struct win_kernel_state : kernel_state
 				win_registry::normalize_path(reg_path_str) + "/instances"));
 		}
 
+		// A kernel driver lives in System32\drivers on a real machine, and one that verifies
+		// itself opens its own image back from there. Everything under the guest filesystem root
+		// is loaded at the root, so the image is reachable by its bare name and nowhere else --
+		// which is a path no driver looks in. The link costs nothing: both names reach the one
+		// file, so a driver that reads its image gets the bytes it was actually mapped from.
+		if (!fs.link(std::string(root_dir_narrow) + std::string(mod.name),
+			std::string(drivers_dir_narrow) + std::string(mod.name)))
+		{
+			LOG_WARN("{} is not in the guest filesystem root, so a driver that opens its own "
+				"image from System32\\drivers will not find it", mod.name);
+		}
+
 		LOG_INFO("driver object for {} at 0x{:X} (section=0x{:X}, registry path at 0x{:X})",
 			mod.name, obj.address(), ldr_entry(mod.addr), reg_path.address());
 
