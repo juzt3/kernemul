@@ -48,9 +48,10 @@ inline int compare_unicode(std::u16string_view a, std::u16string_view b,
 }
 
 template <typename Space>
-inline _UNICODE_STRING init_unicode_string(Space& space, std::u16string_view str)
+inline _UNICODE_STRING init_unicode_string(Space& space, std::u16string_view str,
+	const mem_prot prot = prot_rw)
 {
-	const addr_t buffer = guest::allocate_wstring(space, str);
+	const addr_t buffer = guest::allocate_wstring(space, str, true, prot);
 	const auto length = static_cast<unsigned short>(str.size() * sizeof(char16_t));
 	return _UNICODE_STRING{
 		.Length = length,
@@ -59,10 +60,11 @@ inline _UNICODE_STRING init_unicode_string(Space& space, std::u16string_view str
 	};
 }
 
-inline emu_object<_UNICODE_STRING> allocate_unicode_string(addr_space& space, std::u16string_view str, std::string name = {})
+inline emu_object<_UNICODE_STRING> allocate_unicode_string(addr_space& space,
+	std::u16string_view str, std::string name = {}, const mem_prot prot = prot_rw)
 {
-	const auto us = init_unicode_string(space, str);
-	auto obj = emu_object<_UNICODE_STRING>::allocate(space, std::move(name));
+	const auto us = init_unicode_string(space, str, prot);
+	auto obj = emu_object<_UNICODE_STRING>::allocate(space, std::move(name), false, prot);
 	obj.write(us);
 	return obj;
 }

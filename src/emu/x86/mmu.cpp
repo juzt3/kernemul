@@ -77,10 +77,20 @@ void mmu::init_vcpu(vcpu& cpu)
 	cr4_val.physical_address_extension = 1;
 	cr4_val.os_fxsave_fxrstor_support = 1;
 	cr4_val.os_xmm_exception_support = 1;
+	cr4_val.page_size_extensions = 1;
+	// Kernel leaf entries are marked global, which only means anything with this set.
+	cr4_val.page_global_enable = 1;
+	cr4_val.fsgsbase_enable = 1;
+	cr4_val.usermode_instruction_prevention = 1;
+	// A kernel that can execute or touch user pages is what an exploited one looks like, and
+	// nothing here runs user code in supervisor mode, so both stay on as they do on the real one.
+	cr4_val.smep_enable = 1;
+	cr4_val.smap_enable = 1;
 	cpu.reg(x86::cr4, cr4_val);
 
 	auto efer_val = cpu.reg<ia32::ia32_efer_register>(x86::efer);
 	efer_val.syscall_enable = 1;
+	efer_val.execute_disable_bit_enable = 1;
 	efer_val.ia32e_mode_enable = 1;
 	efer_val.ia32e_mode_active = 1;
 	cpu.reg(x86::efer, efer_val);
@@ -88,7 +98,12 @@ void mmu::init_vcpu(vcpu& cpu)
 	auto cr0_val = cpu.reg<ia32::cr0>(x86::cr0);
 	cr0_val.protection_enable = 1;
 	cr0_val.monitor_coprocessor = 1;
+	cr0_val.extension_type = 1;
 	cr0_val.numeric_error = 1;
+	// Without this a supervisor write ignores the read only bit, which is the state a kernel
+	// is left in to be patched -- never the state a running one is in.
+	cr0_val.write_protect = 1;
+	cr0_val.alignment_mask = 1;
 	cr0_val.paging_enable = 1;
 	cpu.reg(x86::cr0, cr0_val);
 }
@@ -113,37 +128,63 @@ void mmu::flush_all_tlb()
 	});
 }
 
-addr_t mmu::ensure_table(addr_t table_pa, std::size_t index)
+// `supervisor` is the U/S bit, so 1 means user reachable. The cpu takes the strictest bit on
+// the walk, which would let every level say user and the leaf decide -- but a guest reading the
+// tables sees what each level claims, and on NT a kernel range says supervisor at every level.
+addr_t mmu::ensure_table(const addr_t table_pa, const std::size_t index, const bool user)
 {
 	auto entry = read_phys<ia32::pt_entry_64>(table_pa + index * sizeof(ia32::pt_entry_64));
 
 	if (entry.present)
+	{
+		// A user page under a table made for a kernel one has to widen it.
+		if (user && !entry.supervisor)
+		{
+			entry.supervisor = 1;
+			write_phys(table_pa + index * sizeof(ia32::pt_entry_64), entry);
+		}
+
 		return pfn_to_pa(entry.page_frame_number);
+	}
 
 	addr_t child = alloc_phys_locked(page_size(), prot_rw);
 	entry.flags = 0;
 	entry.present = 1;
 	entry.write = 1;
-	entry.supervisor = 1;
+	entry.supervisor = user ? 1 : 0;
+	// The cpu sets this on every level it walks, so on a running machine an entry that leads
+	// anywhere has it. Most of what is mapped here is filled by writing physical memory, which
+	// the cpu never walks, and an untouched entry over live memory is not a state hardware
+	// leaves behind.
+	entry.accessed = 1;
 	entry.page_frame_number = child >> page_shift;
 	write_phys(table_pa + index * sizeof(ia32::pt_entry_64), entry);
 
 	return child;
 }
 
-void mmu::map_page(addr_space& space, addr_t va, addr_t pa, bool user)
+void mmu::map_page(addr_space& space, addr_t va, addr_t pa, const mem_prot prot)
 {
 	virt_addr v{ .val = page_align(va) };
 
-	addr_t pdpt = ensure_table(space.pml4_pa, v.pml4);
-	addr_t pd   = ensure_table(pdpt, v.pdpt);
-	addr_t pt   = ensure_table(pd, v.pd);
+	const bool user = !(prot & prot_supervisor);
+
+	addr_t pdpt = ensure_table(space.pml4_pa, v.pml4, user);
+	addr_t pd   = ensure_table(pdpt, v.pdpt, user);
+	addr_t pt   = ensure_table(pd, v.pd, user);
 
 	ia32::pte_64 entry{};
 	entry.present = 1;
-	entry.write = 1;
+	entry.write = (prot & prot_write) ? 1 : 0;
+	entry.execute_disable = (prot & prot_exec) ? 0 : 1;
+	entry.accessed = 1;
+	// A writable page the emulator has already filled has been written, whoever did the
+	// writing; hardware would have recorded that here.
+	entry.dirty = (prot & prot_write) ? 1 : 0;
 	if (user)
 		entry.supervisor = 1;
+	else
+		entry.global = 1;
 	entry.page_frame_number = pa >> page_shift;
 
 	write_phys(pt + v.pt * sizeof(ia32::pte_64), entry);
@@ -174,7 +215,6 @@ void mmu::map_virt(::addr_space& space, addr_t va, std::size_t size, mem_prot pr
 	auto& s = as_x86(space);
 	std::unique_lock lk(mtx_);
 
-	bool user = !(prot & prot_supervisor);
 	auto phys_prot = prot & ~prot_supervisor;
 
 	const addr_t start = page_align(va);
@@ -183,7 +223,7 @@ void mmu::map_virt(::addr_space& space, addr_t va, std::size_t size, mem_prot pr
 	const addr_t pa_block = alloc_phys_locked(aligned, phys_prot);
 
 	for (std::size_t off = 0; off < aligned; off += page_size())
-		map_page(s, start + off, pa_block + off, user);
+		map_page(s, start + off, pa_block + off, prot);
 
 	flush_all_tlb();
 }
@@ -193,13 +233,12 @@ void mmu::map_virt_phys(::addr_space& space, addr_t va, addr_t pa, std::size_t s
 	auto& s = as_x86(space);
 	std::unique_lock lk(mtx_);
 
-	const bool user = !(prot & prot_supervisor);
 	const addr_t start = page_align(va);
 	const addr_t pa_start = page_align(pa);
 	const std::size_t aligned = size_align(size);
 
 	for (std::size_t off = 0; off < aligned; off += page_size())
-		map_page(s, start + off, pa_start + off, user);
+		map_page(s, start + off, pa_start + off, prot);
 
 	flush_all_tlb();
 }
@@ -292,10 +331,17 @@ void mmu::prot_virt(::addr_space& space, addr_t va, std::size_t size, mem_prot p
 		ia32::pte_64 new_pte{};
 		new_pte.present = 1;
 		new_pte.page_frame_number = pte.page_frame_number;
+		// Reprotecting a page does not un-touch it.
+		new_pte.accessed = pte.accessed;
+		new_pte.dirty = pte.dirty;
 		if (prot & prot_write)
 			new_pte.write = 1;
+		if (!(prot & prot_exec))
+			new_pte.execute_disable = 1;
 		if (pte.supervisor)
 			new_pte.supervisor = 1;
+		else
+			new_pte.global = 1;
 
 		write_phys(pt_pa + v.pt * sizeof(ia32::pte_64), new_pte);
 	}
@@ -303,6 +349,9 @@ void mmu::prot_virt(::addr_space& space, addr_t va, std::size_t size, mem_prot p
 	flush_all_tlb();
 }
 
+// virt_addr ignores bits 63:48 on purpose: MiGetPteAddress masks a virtual address to 48 bits
+// before indexing, so NT answers for a non canonical address exactly as it does for its
+// canonical twin. The cpu still faults on dereferencing one -- this is the walk, not the load.
 std::optional<addr_t> mmu::translate_virt(const addr_space& s, const addr_t page)
 {
 	const virt_addr v{ .val = page };

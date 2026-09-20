@@ -45,7 +45,7 @@ public:
 
 	void begin_wait(wait_state w);
 
-	[[nodiscard]] bool is_waiting() const { return wait_.has_value(); }
+	[[nodiscard]] bool is_waiting() const override { return wait_.has_value(); }
 	[[nodiscard]] bool waiting_on(const addr_t object) const
 	{
 		return wait_ && std::ranges::find(wait_->objects, object) != wait_->objects.end();

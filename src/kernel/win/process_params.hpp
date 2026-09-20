@@ -9,6 +9,11 @@
 constexpr std::string_view  root_dir_narrow     = "C:\\";
 constexpr std::string_view  windows_dir_narrow  = "C:\\Windows";
 constexpr std::string_view  system32_dir_narrow = "C:\\Windows\\System32\\";
+
+// Where a kernel driver lives on a real machine, which is where one looks for its own image.
+constexpr std::string_view  drivers_dir_narrow  = "C:\\Windows\\System32\\drivers\\";
+
+// Where a kernel driver lives on a real machine, which is where one looks for its own image.
 constexpr std::u16string_view windows_dir  = u"C:\\Windows";
 constexpr std::u16string_view system32_dir = u"C:\\Windows\\System32\\";
 

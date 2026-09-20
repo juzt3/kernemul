@@ -38,6 +38,11 @@ length_mod parse_length_mod(std::basic_string_view<CharT> fmt, std::size_t& i)
 		{ i += 3; return length_mod::I64; }
 		if (i + 2 < fmt.size() && fmt[i + 1] == CharT('3') && fmt[i + 2] == CharT('2'))
 		{ i += 3; return length_mod::I32; }
+
+		// Bare I is the pointer sized one, which is what %Iu and %Id are written with. Left
+		// unconsumed it is not a length at all and the whole conversion prints literally.
+		++i;
+		return length_mod::z;
 	}
 	if (fmt[i] == CharT('z')) { ++i; return length_mod::z; }
 

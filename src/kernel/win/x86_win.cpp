@@ -21,6 +21,7 @@ void x86_win_emulator::install_self_map(::addr_space& space)
 	ia32::pt_entry_64 entry{};
 	entry.present = 1;
 	entry.write = 1;
+	entry.accessed = 1;
 	entry.page_frame_number = x86_space->pml4_pa >> 12;
 
 	space.mmu_->write_phys(
@@ -28,6 +29,7 @@ void x86_win_emulator::install_self_map(::addr_space& space)
 
 	LOG_INFO("self map at pml4[0x{:X}] -> page table root 0x{:X}",
 		self_map_pml4_index, x86_space->pml4_pa);
+
 }
 
 #endif

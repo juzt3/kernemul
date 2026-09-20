@@ -135,9 +135,10 @@ public:
 		}
 	}
 
-	static emu_object allocate(addr_space& space, std::string name = {}, bool monitored = false)
+	static emu_object allocate(addr_space& space, std::string name = {}, bool monitored = false,
+		mem_prot prot = prot_rw)
 	{
-		const auto addr = space.alloc(sizeof(T), prot_rw);
+		const auto addr = space.alloc(sizeof(T), prot);
 		return emu_object(space, addr, std::move(name), monitored);
 	}
 

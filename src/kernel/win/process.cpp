@@ -210,7 +210,7 @@ void win_kernel_proc::module_add_cb(proc_module& mod)
 	// a module by name, so without one it can only ever match on an address it already had.
 	const auto wide_name = widen_string(mod.name);
 
-	entry.BaseDllName = win::init_unicode_string(space, wide_name);
+	entry.BaseDllName = win::init_unicode_string(space, wide_name, prot_rw | prot_supervisor);
 
 	// What the kernel reports, which is never a drive letter: a driver goes under drivers\,
 	// everything else sits in system32 itself.
@@ -218,7 +218,7 @@ void win_kernel_proc::module_add_cb(proc_module& mod)
 		? u"\\SystemRoot\\System32\\drivers\\"
 		: u"\\SystemRoot\\System32\\";
 
-	entry.FullDllName = win::init_unicode_string(space, dir + wide_name);
+	entry.FullDllName = win::init_unicode_string(space, dir + wide_name, prot_rw | prot_supervisor);
 
 	std::scoped_lock lock(kernel_.list_mtx_);
 	const auto obj = kernel_.loaded_module_list.push_back(entry);

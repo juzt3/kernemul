@@ -123,10 +123,11 @@ inline void write_wstring_buffer(addr_space& space, addr_t addr, std::size_t buf
 }
 
 template <typename T, typename Space>
-addr_t allocate_basic_string(Space& space, std::basic_string_view<T> str, bool terminate = true)
+addr_t allocate_basic_string(Space& space, std::basic_string_view<T> str, bool terminate = true,
+	mem_prot prot = prot_rw)
 {
 	const std::size_t byte_size = str.size() * sizeof(T) + (terminate ? sizeof(T) : 0);
-	const auto addr = space.alloc(byte_size, prot_rw);
+	const auto addr = space.alloc(byte_size, prot);
 	space.write_mem(addr, str.data(), str.size() * sizeof(T));
 	if (terminate)
 	{
@@ -137,15 +138,17 @@ addr_t allocate_basic_string(Space& space, std::basic_string_view<T> str, bool t
 }
 
 template <typename Space>
-addr_t allocate_string(Space& space, std::string_view str, bool terminate = true)
+addr_t allocate_string(Space& space, std::string_view str, bool terminate = true,
+	mem_prot prot = prot_rw)
 {
-	return allocate_basic_string<char>(space, str, terminate);
+	return allocate_basic_string<char>(space, str, terminate, prot);
 }
 
 template <typename Space>
-addr_t allocate_wstring(Space& space, std::u16string_view str, bool terminate = true)
+addr_t allocate_wstring(Space& space, std::u16string_view str, bool terminate = true,
+	mem_prot prot = prot_rw)
 {
-	return allocate_basic_string<char16_t>(space, str, terminate);
+	return allocate_basic_string<char16_t>(space, str, terminate, prot);
 }
 
 }
