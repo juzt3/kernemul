@@ -5,34 +5,89 @@
 #include "../types.hpp"
 #include "../../../util/log.hpp"
 #include <string_view>
+#include <vector>
 
 namespace
 {
 
-// A fast mutex is free while bit 0 of Count is set, and the bits above it count the waiters.
+// A fast mutex is free while bit 0 of Count is set. Above it, ntoskrnl adds four per waiter, so
+// bits 2 and up are the waiter count -- see ExAcquireFastMutex, which loads 4 into the register
+// it adds, and KeReleaseGuardedMutex, which subtracts one increment per release.
 constexpr std::int32_t fm_lock_bit = 1;
+constexpr std::int32_t fm_waiter_increment = 4;
 
 std::int32_t mutex_count(const emu_object<_FAST_MUTEX>& mutex)
 {
 	return static_cast<std::int32_t>(mutex.field(&_FAST_MUTEX::Count).read());
 }
 
-void take_mutex(const emu_object<_FAST_MUTEX>& mutex, const std::string_view who)
+// True when the caller holds the mutex on return, false when it has been queued behind whoever
+// does. A contended acquire is not a failure and not an exception: ntoskrnl's own
+// ExAcquireFastMutex raises to APC_LEVEL, tries `lock btr` on the free bit, and on losing it
+// increments Contention and calls KeWaitForSingleObject on the mutex's own event with no
+// timeout. There is no status to hand back, so barging in was the only thing left to get wrong.
+bool take_mutex(vcpu& cpu, const emu_object<_FAST_MUTEX>& mutex, const std::string_view who)
 {
 	const auto count = mutex_count(mutex);
 
-	if (!(count & fm_lock_bit))
+	if (count & fm_lock_bit)
 	{
-		auto contention = mutex.field(&_FAST_MUTEX::Contention);
-		contention.write(contention.read() + 1);
-
-		THREAD_LOG_ERR("{}: 0x{:X} is already held and nothing here can wait",
-			who, mutex.address());
-
-		return;
+		mutex.field(&_FAST_MUTEX::Count).write(count & ~fm_lock_bit);
+		return true;
 	}
 
-	mutex.field(&_FAST_MUTEX::Count).write(count & ~fm_lock_bit);
+	// Every dispatcher object carries its own size, so a zero there is memory no initialiser has
+	// touched. A FAST_MUTEX in that state is not held -- it is not yet a mutex -- and its Count
+	// of zero only reads as ownership because bit 0 is the free bit. Waiting on it would be a
+	// wait on an event nobody can ever set, and barging in silently is how the contended case
+	// used to be wrong, so it is initialised here and taken, which is what the guest's own
+	// ExInitializeFastMutex would have left behind.
+	if (!mutex.field(&_FAST_MUTEX::Event).field(&_KEVENT::Header)
+		.field(&_DISPATCHER_HEADER::Size).read())
+	{
+		THREAD_LOG_WARN("{}: 0x{:X} was never initialised, so it is taken rather than waited on",
+			who, mutex.address());
+
+		win::init_dispatcher(mutex.field(&_FAST_MUTEX::Event),
+			win::event_synchronization_object, 0);
+
+		mutex.field(&_FAST_MUTEX::Contention).write(0);
+		mutex.field(&_FAST_MUTEX::Count).write(0);
+
+		return true;
+	}
+
+	auto contention = mutex.field(&_FAST_MUTEX::Contention);
+	contention.write(contention.read() + 1);
+
+	const auto t = std::dynamic_pointer_cast<win_thread>(cpu.thread());
+
+	if (!t)
+	{
+		// Nothing is running, so nothing can be made to wait, and no waiter is counted either --
+		// a count that names a thread which does not exist would be handed the mutex by the next
+		// release and never give it back. Barging in leaves a lock held twice; this leaves a
+		// guest that never comes back.
+		THREAD_LOG_ERR("{}: 0x{:X} is held and there is no thread to wait with",
+			who, mutex.address());
+
+		return true;
+	}
+
+	mutex.field(&_FAST_MUTEX::Count).write(count + fm_waiter_increment);
+
+	win_thread::wait_state w{};
+	w.objects = { mutex.field(&_FAST_MUTEX::Event).address() };
+
+	t->begin_wait(std::move(w));
+	t->try_satisfy(*cpu.curr_addr_space());
+
+	thread_scheduler::yield_current(cpu);
+
+	THREAD_LOG_INFO("{}: 0x{:X} is held, so this thread waits on its event",
+		who, mutex.address());
+
+	return false;
 }
 
 void own_mutex(const emu_object<_FAST_MUTEX>& mutex, vcpu& cpu)
@@ -43,7 +98,14 @@ void own_mutex(const emu_object<_FAST_MUTEX>& mutex, vcpu& cpu)
 	mutex.field(&_FAST_MUTEX::Owner).write(guest_ptr<void>(owner));
 }
 
-void give_mutex(const emu_object<_FAST_MUTEX>& mutex, const std::string_view who)
+// A release with waiters queued hands the mutex to one of them instead of marking it free: the
+// event is what wakes that thread, and it owns the mutex the moment it does, so the free bit is
+// never set in between. Only an uncontended release puts the bit back.
+//
+// Returns the event that now needs waking, or zero. Signalling a dispatcher object is only half
+// of waking a thread -- a wait is finished by whoever satisfies it, not by the thread noticing --
+// and the caller is the one holding the process to walk.
+addr_t give_mutex(const emu_object<_FAST_MUTEX>& mutex, const std::string_view who)
 {
 	const auto count = mutex_count(mutex);
 
@@ -52,10 +114,22 @@ void give_mutex(const emu_object<_FAST_MUTEX>& mutex, const std::string_view who
 	if (count & fm_lock_bit)
 	{
 		THREAD_LOG_ERR("{}: 0x{:X} was not held", who, mutex.address());
-		return;
+		return 0;
+	}
+
+	if (count >= fm_waiter_increment)
+	{
+		mutex.field(&_FAST_MUTEX::Count).write(count - fm_waiter_increment);
+		win::set_signal_state(mutex.field(&_FAST_MUTEX::Event), 1);
+
+		THREAD_LOG_INFO("{}: 0x{:X} handed to a waiter", who, mutex.address());
+
+		return mutex.field(&_FAST_MUTEX::Event).address();
 	}
 
 	mutex.field(&_FAST_MUTEX::Count).write(count | fm_lock_bit);
+
+	return 0;
 }
 
 // The linker folds ExAcquireFastMutex onto KeAcquireGuardedMutex on both, the release on x86-64.
@@ -88,12 +162,18 @@ void register_fast_mutexes(win_kernel_state& state, proc_module& mod)
 		auto* emulator = st->emulator();
 		const auto old_irql = emulator ? emulator->set_irql(cpu, apc_level) : passive_level;
 
-		take_mutex(mutex, "ExAcquireFastMutex");
+		const auto owned = take_mutex(cpu, mutex, "ExAcquireFastMutex");
+
+		// Recorded now even when the acquire blocked. A redirect that yields does not run again
+		// when its thread is rescheduled -- the call has already returned by then -- and the
+		// release that wakes this thread is the one handing it the mutex, so it owns it the
+		// moment it runs. With several waiters queued the last one in wins this field, which is
+		// the one place the simplification shows.
 		own_mutex(mutex, cpu);
 		mutex.field(&_FAST_MUTEX::OldIrql).write(old_irql);
 
-		THREAD_LOG_INFO("ExAcquireFastMutex(mutex=0x{:X}): old irql {}",
-			mutex.address(), old_irql);
+		THREAD_LOG_INFO("ExAcquireFastMutex(mutex=0x{:X}): old irql {}{}",
+			mutex.address(), old_irql, owned ? "" : ", once the waiter ahead releases it");
 	};
 
 	auto release = [st](vcpu& cpu, emu_object<_FAST_MUTEX> mutex)
@@ -104,7 +184,8 @@ void register_fast_mutexes(win_kernel_state& state, proc_module& mod)
 		const auto old_irql = static_cast<irql_t>(
 			mutex.field(&_FAST_MUTEX::OldIrql).read());
 
-		give_mutex(mutex, "ExReleaseFastMutex");
+		if (const auto wake = give_mutex(mutex, "ExReleaseFastMutex"))
+			st->sys_proc->wake_waiters(*cpu.curr_addr_space(), wake);
 
 		if (auto* emulator = st->emulator())
 			emulator->set_irql(cpu, old_irql);
@@ -155,19 +236,20 @@ void register_fast_mutexes(win_kernel_state& state, proc_module& mod)
 			if (!mutex)
 				return;
 
-			take_mutex(mutex, "ExAcquireFastMutexUnsafe");
+			take_mutex(cpu, mutex, "ExAcquireFastMutexUnsafe");
 			own_mutex(mutex, cpu);
 
 			THREAD_LOG_INFO("ExAcquireFastMutexUnsafe(mutex=0x{:X})", mutex.address());
 		});
 
 	state.redirect(mod, "ExReleaseFastMutexUnsafe",
-		[](vcpu&, emu_object<_FAST_MUTEX> mutex)
+		[st](vcpu& cpu, emu_object<_FAST_MUTEX> mutex)
 		{
 			if (!mutex)
 				return;
 
-			give_mutex(mutex, "ExReleaseFastMutexUnsafe");
+			if (const auto wake = give_mutex(mutex, "ExReleaseFastMutexUnsafe"))
+				st->sys_proc->wake_waiters(*cpu.curr_addr_space(), wake);
 
 			THREAD_LOG_INFO("ExReleaseFastMutexUnsafe(mutex=0x{:X})", mutex.address());
 		});
