@@ -34,7 +34,7 @@ public:
 
 	addr_t create_object(std::uint8_t type_index,
 		const void* body_data, std::size_t body_size,
-		std::shared_ptr<win_object> host = {}, mem_prot prot = prot_rw);
+		std::shared_ptr<win_object> host = {}, mem_prot prot = prot_rw | prot_supervisor);
 
 	void register_object(addr_t body_addr, std::shared_ptr<win_object> host);
 

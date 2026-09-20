@@ -42,8 +42,8 @@ namespace x86
 		// Unlocked -- see the definition.
 		std::optional<addr_t> translate_virt(const addr_space& space, addr_t page);
 
-		addr_t ensure_table(addr_t table_pa, std::size_t index);
-		void map_page(addr_space& space, addr_t va, addr_t pa, bool user = true);
+		addr_t ensure_table(addr_t table_pa, std::size_t index, bool user);
+		void map_page(addr_space& space, addr_t va, addr_t pa, mem_prot prot);
 		void unmap_page(addr_space& space, addr_t va);
 
 		void copy_virt(const addr_space& space, addr_t va, void* buf, std::size_t size, bool write);

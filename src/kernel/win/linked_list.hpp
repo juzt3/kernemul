@@ -34,7 +34,10 @@ public:
 	emu_object<T> push_back(const T& entry)
 	{
 		auto* const space_ = head_.space();
-		const auto entry_addr = space_->alloc(sizeof(T), prot_rw);
+
+		// EPROCESS, ETHREAD and the loaded module entries are kernel structures: a driver
+		// walking one of these lists on a real machine never lands on a user address.
+		const auto entry_addr = space_->alloc(sizeof(T), prot_rw | prot_supervisor);
 		return push_back(entry, entry_addr);
 	}
 

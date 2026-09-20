@@ -52,9 +52,10 @@ public:
 	using windows_emulator::windows_emulator;
 
 	// Windows points one pml4 slot back at the pml4, which is how a driver reads page tables as
-	// ordinary memory -- and how it recognises a machine it is running on. Guest code hunting
-	// for the slot walks all 512, so this has to be the one Windows itself uses.
-	static constexpr std::size_t self_map_pml4_index = 0x1E1;
+	// ordinary memory -- and how it recognises a machine it is running on. It has to be the slot
+	// the mapped ntoskrnl was built for: every inlined MiGetPteAddress in it carries
+	// 0xFFFFF68000000000 as an immediate, and a guest hunting for the slot walks all 512.
+	static constexpr std::size_t self_map_pml4_index = 0x1ED;
 
 	// Only the kernel root needs it: every later space copies the top half of this one, and the
 	// slot is in that half. Defined out of line because a page table entry is an ia32 type.
