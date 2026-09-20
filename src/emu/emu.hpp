@@ -204,7 +204,12 @@ public:
 		return cpu;
 	}
 
-	virtual hook_handle hook_mem(addr_t start_addr, addr_t end_addr, mem_prot prot, mem_hk_cb) = 0;
+	// `space` is the address space the range belongs to, for a backend that has to resolve the
+	// range as the hook goes in rather than as it fires. A watch put on a process while it is
+	// still being built belongs to a space no cpu has entered yet, so there is nothing to infer
+	// it from; leaving it null means the range is in whichever space the cpu is already in.
+	virtual hook_handle hook_mem(addr_t start_addr, addr_t end_addr, mem_prot prot, mem_hk_cb,
+		addr_space* space = nullptr) = 0;
 	virtual hook_handle hook_insn(addr_t start_addr, addr_t end_addr, hook_insn_t insn, insn_hk_cb) = 0;
 	virtual hook_handle hook_code(addr_t start_addr, addr_t end_addr, code_hk_cb) = 0;
 	virtual hook_handle hook_basic_block(addr_t start_addr, addr_t end_addr, code_hk_cb) = 0;

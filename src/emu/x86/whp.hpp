@@ -37,7 +37,8 @@ public:
 
 	~x86_whp_emu() override;
 
-	hook_handle hook_mem(addr_t start_addr, addr_t end_addr, mem_prot prot, mem_hk_cb) override;
+	hook_handle hook_mem(addr_t start_addr, addr_t end_addr, mem_prot prot, mem_hk_cb,
+		addr_space* space) override;
 	hook_handle hook_insn(addr_t start_addr, addr_t end_addr, hook_insn_t insn, insn_hk_cb) override;
 	hook_handle hook_code(addr_t start_addr, addr_t end_addr, code_hk_cb) override;
 	hook_handle hook_basic_block(addr_t start_addr, addr_t end_addr, code_hk_cb) override;
@@ -73,7 +74,8 @@ private:
 	};
 
 	// The physical runs a virtual range maps to, end exclusive; contiguous pages coalesce.
-	[[nodiscard]] std::vector<phys_run> phys_runs(addr_t start_addr, addr_t end_addr);
+	[[nodiscard]] std::vector<phys_run> phys_runs(addr_t start_addr, addr_t end_addr,
+		addr_space* named = nullptr);
 
 	hook_handle add_hook(std::unique_ptr<whp_hook> hook);
 

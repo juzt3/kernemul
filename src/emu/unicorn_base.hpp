@@ -219,7 +219,10 @@ public:
 			static_cast<unicorn_vcpu_base*>(cpu.get())->pending_pause_ = false;
 	}
 
-	hook_handle hook_mem(addr_t start_addr, addr_t end_addr, mem_prot prot, mem_hk_cb cb) override
+	// The range is handed to Unicorn as the virtual one it already is, so the space it belongs
+	// to says nothing this backend needs.
+	hook_handle hook_mem(addr_t start_addr, addr_t end_addr, mem_prot prot, mem_hk_cb cb,
+		addr_space*) override
 	{
 		return add_hook(start_addr, end_addr, prot_to_uc_hook(prot), 0, std::move(cb));
 	}

@@ -121,7 +121,7 @@ public:
 
 				LOG_INFO("0x{:X} accessed ({} '{}')+0x{:X} (type={})",
 					rip, typeid(T).name(), name, offset, static_cast<unsigned>(access));
-			});
+			}, space_);
 
 		return hook_;
 	}
@@ -188,7 +188,7 @@ inline emu_hook* monitor_range(addr_space& space, const addr_t addr, const std::
 				LOG_INFO("0x{:X} accessed {} (type={})", cpu.pc(),
 					sym ? *sym : std::format("'{}'+0x{:X}", name, accessed - base),
 					static_cast<unsigned>(access));
-			});
+			}, &space);
 	}
 	catch (const std::exception& e)
 	{
@@ -274,7 +274,7 @@ public:
 				LOG_INFO("0x{:X} accessed '{}'[{}]+0x{:X} (type={})",
 					cpu.pc(), name, offset / sizeof(T), offset % sizeof(T),
 					static_cast<unsigned>(access));
-			});
+			}, space_);
 
 		return hook_;
 	}

@@ -325,14 +325,21 @@ vcpu* x86_whp_emu::hook_cpu() const
 }
 
 std::vector<x86_whp_emu::phys_run> x86_whp_emu::phys_runs(const addr_t start_addr,
-	const addr_t end_addr)
+	const addr_t end_addr, addr_space* const named)
 {
 	if (start_addr > end_addr)
 		throw std::runtime_error("the whp backend needs a bounded hook range");
 
 	const auto cpu = hook_cpu();
-	const auto current = cpu ? cpu->curr_addr_space() : nullptr;
-	const auto fallback = default_addr_space();
+	const auto in_cpu = cpu ? cpu->curr_addr_space() : nullptr;
+	const auto shared = default_addr_space();
+
+	// The space the caller named, or the one the cpu is in when it named none. This backend
+	// hooks physical memory, so the range has to be translated as the hook is installed -- and
+	// a watch on a process still being built is installed before any cpu has entered it, so the
+	// cpu is still in the kernel's space, which does not map the page at all.
+	addr_space* const current = named ? named : in_cpu.get();
+	addr_space* const fallback = shared.get();
 
 	std::vector<phys_run> runs;
 
@@ -343,7 +350,7 @@ std::vector<x86_whp_emu::phys_run> x86_whp_emu::phys_runs(const addr_t start_add
 
 		auto page_pa = current ? mem_->virt_to_phys(*current, page) : std::nullopt;
 
-		if (!page_pa && current != fallback)
+		if (!page_pa && fallback && current != fallback)
 			page_pa = mem_->virt_to_phys(*fallback, page);
 
 		if (!page_pa)
@@ -375,7 +382,7 @@ emu::hook_handle x86_whp_emu::add_hook(std::unique_ptr<whp_hook> hook)
 }
 
 emu::hook_handle x86_whp_emu::hook_mem(const addr_t start_addr, const addr_t end_addr,
-	const mem_prot prot, mem_hk_cb cb)
+	const mem_prot prot, mem_hk_cb cb, addr_space* const space)
 {
 	auto hook = std::make_unique<whp_hook>();
 	hook->cb = std::move(cb);
@@ -386,7 +393,7 @@ emu::hook_handle x86_whp_emu::hook_mem(const addr_t start_addr, const addr_t end
 
 	auto& callback = std::get<mem_hk_cb>(hook->cb);
 
-	for (const auto& [begin, end] : phys_runs(start_addr, end_addr))
+	for (const auto& [begin, end] : phys_runs(start_addr, end_addr, space))
 	{
 		hook->native.push_back(hm_->hook_mem(to_hm_prot(prot),
 			[this, &callback](const hm::addr_t addr, const hm::mem_vmexit::access access)
