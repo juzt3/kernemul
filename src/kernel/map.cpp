@@ -168,6 +168,19 @@ std::shared_ptr<proc_module> krnl::map_img(process& proc, const std::string_view
 		space->write_mem(reloc_addr, val + delta);
 	}
 
+	// The header a guest reads has to name where the image actually landed: Windows rewrites
+	// ImageBase when it relocates a mapped image, so a loader looking at one finds its header
+	// already agreeing with its base and leaves the fixups alone. Left at the preferred base,
+	// the guest ntdll decides the process image is not at base and relocates it a second time
+	// -- every fixup takes the delta twice, which stays invisible while the loader works in
+	// rvas and surfaces at the first absolute pointer read back out of the image, the TLS
+	// directory, where LdrpAllocateTlsEntry writes the tls index through it.
+	const auto base_field_rva = static_cast<std::uint32_t>(
+		reinterpret_cast<const std::uint8_t*>(&img->nt_hdrs()->optional_hdr.image_base)
+			- img->as<const std::uint8_t*>());
+
+	space->write_mem<std::uint64_t>(addr + base_field_rva, addr);
+
 	LOG_INFO("mapped {} at 0x{:X}-0x{:X} (size 0x{:X}, entry 0x{:X})",
 		name, addr, addr + size, size, addr + img->entry_point());
 

@@ -606,10 +606,13 @@ void modules::register_ntoskrnl_task_ops(win_kernel_state& state, proc_module& m
 			const auto header =
 				emu_object<process_tls_information_t>(space, process_information).read();
 
-			if (header.operation != process_tls_replace_vector)
+			const bool by_index = header.operation == process_tls_replace_index;
+
+			if (!by_index && header.operation != process_tls_replace_vector)
 			{
 				THREAD_LOG_WARN("NtSetInformationProcess(ProcessTlsInformation): "
-					"operation {} is not the vector swap", header.operation);
+					"operation {} is neither the vector swap nor the index swap",
+					header.operation);
 				return STATUS_INVALID_PARAMETER;
 			}
 
@@ -627,9 +630,13 @@ void modules::register_ntoskrnl_task_ops(win_kernel_state& state, proc_module& m
 				return STATUS_INVALID_HANDLE;
 
 			std::uint32_t index = 0;
+			bool failed = false;
 
 			proc->for_each_thread([&](win_thread& other)
 			{
+				if (failed)
+					return;
+
 				if (index >= header.thread_data_count)
 					return;
 
@@ -644,15 +651,57 @@ void modules::register_ntoskrnl_task_ops(win_kernel_state& state, proc_module& m
 				auto data = entry.read();
 				auto slot = teb.field(&_TEB64::ThreadLocalStoragePointer);
 
-				data.old_tls_data = slot.read();
-				slot.write(data.new_tls_data);
+				if (!by_index)
+				{
+					data.old_tls_data = slot.read();
+					slot.write(data.new_tls_data);
+				}
+				else
+				{
+					// One slot of the vector rather than the vector itself: the loader hands
+					// out a new index for a module's tls and every thread's vector has to
+					// carry the block it names. A thread with no vector has no slot to put
+					// it in, so it is reported as having held nothing.
+					const auto vector = slot.read();
+					const auto at = vector + header.tls_index * sizeof(std::uint64_t);
+
+					data.old_tls_data = 0;
+
+					if (vector)
+					{
+						try
+						{
+							data.old_tls_data = space.read_mem<std::uint64_t>(at);
+							space.write_mem<std::uint64_t>(at, data.new_tls_data);
+						}
+						catch (const std::exception& e)
+						{
+							// The vector is the guest's own allocation and nothing here knows
+							// how long it is, so an index past the end is only visible as this.
+							THREAD_LOG_ERR("NtSetInformationProcess(ProcessTlsInformation): "
+								"tls slot {} of thread {} is at 0x{:X}, which is not there: {}",
+								header.tls_index, other.id(), at, e.what());
+
+							failed = true;
+							return;
+						}
+					}
+				}
 
 				entry.write(data);
 				++index;
 			});
 
-			THREAD_LOG_INFO("NtSetInformationProcess(ProcessTlsInformation): swapped the tls "
-				"vector of {} of {} thread(s)", index, header.thread_data_count);
+			if (failed)
+				return STATUS_ACCESS_VIOLATION;
+
+			if (by_index)
+				THREAD_LOG_INFO("NtSetInformationProcess(ProcessTlsInformation): put the new "
+					"tls block in slot {} of {} of {} thread(s)", header.tls_index, index,
+					header.thread_data_count);
+			else
+				THREAD_LOG_INFO("NtSetInformationProcess(ProcessTlsInformation): swapped the tls "
+					"vector of {} of {} thread(s)", index, header.thread_data_count);
 
 			return STATUS_SUCCESS;
 		}
