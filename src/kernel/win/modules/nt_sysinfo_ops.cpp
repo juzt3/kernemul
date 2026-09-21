@@ -345,6 +345,46 @@ void modules::register_ntoskrnl_sysinfo_ops(win_kernel_state& state, proc_module
 {
 	auto* st = &state;
 
+	// The counted module list of NtQuerySystemInformation(SystemModuleInformation), reached
+	// through the helper that backs it: a length that comes back with how many bytes a full
+	// answer needs, and a caller-size buffer that holds as many entries as fit in it.
+	state.redirect(mod, "RtlQueryModuleInformation",
+		[st](vcpu& cpu, emu_object<std::uint32_t> module_information_length,
+			const addr_t module_information, const std::uint32_t size_of_buffer) -> NTSTATUS
+		{
+			if (!module_information_length || !module_information)
+				return STATUS_INVALID_PARAMETER;
+
+			auto& space = *cpu.curr_addr_space();
+
+			const auto mods = collect_modules(*st);
+			const auto count = static_cast<std::uint32_t>(mods.size());
+			const auto required = module_list_header_size + count * module_entry_size;
+
+			module_information_length.write(required);
+
+			if (size_of_buffer < module_list_header_size)
+				return STATUS_INFO_LENGTH_MISMATCH;
+
+			const auto fits = std::min<std::uint32_t>(
+				(size_of_buffer - module_list_header_size) / module_entry_size, count);
+
+			std::vector<std::uint8_t> out(module_list_header_size + fits * module_entry_size, 0);
+
+			auto* const header = reinterpret_cast<rtl_process_modules_t*>(out.data());
+			header->number_of_modules = fits;
+
+			for (std::uint32_t i = 0; i < fits; ++i)
+				fill_module_entry(header->modules[i], mods[i], i);
+
+			space.write_mem(module_information, out.data(), out.size());
+
+			THREAD_LOG_INFO("RtlQueryModuleInformation: {} of {} module(s), required 0x{:X}, "
+				"buffer 0x{:X}", fits, count, required, size_of_buffer);
+
+			return fits == count ? STATUS_SUCCESS : STATUS_INFO_LENGTH_MISMATCH;
+		});
+
 	state.redirect_ntzw(mod, "QuerySystemTime",
 		[](vcpu&, emu_object<std::int64_t> system_time) -> NTSTATUS
 		{

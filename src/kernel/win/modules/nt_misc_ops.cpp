@@ -59,6 +59,63 @@ constexpr std::uint32_t dump_end_signature = 0x444D5054;
 constexpr std::uint32_t dump_buffer_size = 0x40000;
 constexpr std::uint32_t dump_free_build = 0xF;
 
+// IoCreateDevice and its secure sibling build the same object, so they share this. The secure
+// form only differs in the sddl it is handed and the descriptor it hands back, neither of which
+// changes what gets created.
+addr_t create_device_object(win_kernel_state& st, vcpu& cpu, const addr_t driver_object,
+	const std::uint32_t device_extension_size, const std::u16string name,
+	const std::uint32_t device_type, const std::uint32_t device_characteristics,
+	const bool exclusive)
+{
+	auto& space = *cpu.curr_addr_space();
+
+	// A driver casts the extension to its own structure, so align it to 8.
+	const auto extension_size = (device_extension_size + 7) & ~std::uint32_t{7};
+	const auto body_size = sizeof(_DEVICE_OBJECT) + extension_size;
+
+	auto host = std::make_shared<device_host>();
+	host->driver_object = driver_object;
+	host->name = narrow_wstring(name);
+
+	const std::vector<std::uint8_t> body(body_size, 0);
+	const auto addr = st.objs.create_object(0, body.data(), body.size(),
+		std::move(host), prot_rw | prot_supervisor);
+
+	if (!addr)
+	{
+		THREAD_LOG_ERR("IoCreateDevice: out of memory for {} bytes", body_size);
+		return 0;
+	}
+
+	_DEVICE_OBJECT device{};
+	device.Type = io_type_device;
+	device.Size = static_cast<unsigned short>(body_size);
+	device.ReferenceCount = 1;
+	device.DriverObject = guest_ptr<_DRIVER_OBJECT>(driver_object);
+	device.DeviceType = device_type;
+	device.Characteristics = device_characteristics;
+	device.StackSize = 1;
+
+	// The driver clears DO_DEVICE_INITIALIZING itself; one that forgets is a real bug.
+	device.Flags = do_device_initializing | (exclusive ? do_exclusive : 0);
+
+	if (device_extension_size)
+		device.DeviceExtension = guest_ptr<void>(addr + sizeof(_DEVICE_OBJECT));
+
+	auto head = emu_object<_DRIVER_OBJECT>(space, driver_object)
+		.field(&_DRIVER_OBJECT::DeviceObject);
+	device.NextDevice = head.read();
+
+	emu_object<_DEVICE_OBJECT>(space, addr).write(device);
+	head.write(guest_ptr<_DEVICE_OBJECT>(addr));
+
+	// An unnamed device is reachable only through a pointer the driver hands out; a
+	// named one is what NtCreateFile resolves, so only that one joins the namespace.
+	st.register_device(narrow_wstring(name), addr);
+
+	return addr;
+}
+
 // The triage half of the dump starts at 0x2000; these two name the copy of KdDebuggerDataBlock
 // the rest of the buffer carries, which is where a consumer reads PteBase from.
 constexpr std::size_t triage_debugger_data_off  = 0x2070;
@@ -403,55 +460,53 @@ void modules::register_ntoskrnl_misc_ops(win_kernel_state& state, proc_module& m
 			if (!driver_object || !device_object_out)
 				return STATUS_INVALID_PARAMETER;
 
-			auto& space = *cpu.curr_addr_space();
 			const auto name = win::read_unicode_string(device_name);
 
-			// A driver casts the extension to its own structure, so align it to 8.
-			const auto extension_size = (device_extension_size + 7) & ~std::uint32_t{7};
-			const auto body_size = sizeof(_DEVICE_OBJECT) + extension_size;
-
-			auto host = std::make_shared<device_host>();
-			host->driver_object = driver_object.address();
-			host->name = narrow_wstring(name);
-
-			const std::vector<std::uint8_t> body(body_size, 0);
-			const auto addr = st->objs.create_object(0, body.data(), body.size(),
-				std::move(host), prot_rw | prot_supervisor);
+			const auto addr = create_device_object(*st, cpu, driver_object.address(),
+				device_extension_size, name, device_type, device_characteristics, exclusive);
 
 			if (!addr)
-			{
-				THREAD_LOG_ERR("IoCreateDevice: out of memory for {} bytes", body_size);
 				return STATUS_INSUFFICIENT_RESOURCES;
-			}
 
-			_DEVICE_OBJECT device{};
-			device.Type = io_type_device;
-			device.Size = static_cast<unsigned short>(body_size);
-			device.ReferenceCount = 1;
-			device.DriverObject = guest_ptr<_DRIVER_OBJECT>(driver_object.address());
-			device.DeviceType = device_type;
-			device.Characteristics = device_characteristics;
-			device.StackSize = 1;
-
-			// The driver clears DO_DEVICE_INITIALIZING itself; one that forgets is a real bug.
-			device.Flags = do_device_initializing | (exclusive ? do_exclusive : 0);
-
-			if (device_extension_size)
-				device.DeviceExtension = guest_ptr<void>(addr + sizeof(_DEVICE_OBJECT));
-
-			auto head = driver_object.field(&_DRIVER_OBJECT::DeviceObject);
-			device.NextDevice = head.read();
-
-			emu_object<_DEVICE_OBJECT>(space, addr).write(device);
-			head.write(guest_ptr<_DEVICE_OBJECT>(addr));
 			device_object_out.write(addr);
-
-			// An unnamed device is reachable only through a pointer the driver hands out; a
-			// named one is what NtCreateFile resolves, so only that one joins the namespace.
-			st->register_device(narrow_wstring(name), addr);
 
 			THREAD_LOG_INFO("IoCreateDevice(driver=0x{:X}, extension_size=0x{:X}, name='{}', type=0x{:X}, characteristics=0x{:X}, exclusive={}) -> 0x{:X}",
 				driver_object.address(), device_extension_size, narrow_wstring(name),
+				device_type, device_characteristics, exclusive, addr);
+
+			return STATUS_SUCCESS;
+		});
+
+	state.redirect(mod, "IoCreateDeviceSecure",
+		[st](vcpu& cpu, emu_object<_DRIVER_OBJECT> driver_object,
+			const std::uint32_t device_extension_size,
+			emu_object<_UNICODE_STRING> device_name,
+			const std::uint32_t device_type, const std::uint32_t device_characteristics,
+			const bool exclusive, emu_object<_UNICODE_STRING> default_sddl,
+			emu_object<addr_t> device_security_descriptor,
+			emu_object<addr_t> device_object_out) -> NTSTATUS
+		{
+			if (!driver_object || !device_object_out)
+				return STATUS_INVALID_PARAMETER;
+
+			const auto name = win::read_unicode_string(device_name);
+			const auto sddl = narrow_wstring(win::read_unicode_string(default_sddl));
+
+			const auto addr = create_device_object(*st, cpu, driver_object.address(),
+				device_extension_size, name, device_type, device_characteristics, exclusive);
+
+			if (!addr)
+				return STATUS_INSUFFICIENT_RESOURCES;
+
+			// Nothing here composes a security descriptor, so the out slot answers none and a
+			// caller that asked for just the device still has it.
+			if (device_security_descriptor)
+				device_security_descriptor.write(0);
+
+			device_object_out.write(addr);
+
+			THREAD_LOG_INFO("IoCreateDeviceSecure(driver=0x{:X}, extension_size=0x{:X}, name='{}', sddl='{}', type=0x{:X}, characteristics=0x{:X}, exclusive={}) -> 0x{:X}",
+				driver_object.address(), device_extension_size, narrow_wstring(name), sddl,
 				device_type, device_characteristics, exclusive, addr);
 
 			return STATUS_SUCCESS;

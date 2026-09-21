@@ -8,6 +8,7 @@
 #include "../../../util/string.hpp"
 #include <chrono>
 #include <random>
+#include <atomic>
 
 namespace
 {
@@ -267,6 +268,63 @@ void modules::register_ntoskrnl_info_ops(win_kernel_state& state, proc_module& m
 			return STATUS_SUCCESS;
 		});
 
+	// Every out parameter is optional, and the version that answers is the shared one the
+	// rest of the emulated kernel already reports.
+	state.redirect(mod, "PsGetVersion",
+		[st](vcpu& cpu, emu_object<std::uint32_t> major_version,
+			emu_object<std::uint32_t> minor_version,
+			emu_object<std::uint32_t> build_number,
+			emu_object<_UNICODE_STRING> csd_version) -> NTSTATUS
+		{
+			auto& space = *cpu.curr_addr_space();
+
+			const auto shared = st->kuser_shared_data.read();
+
+			if (major_version)
+				major_version.write(shared.NtMajorVersion);
+
+			if (minor_version)
+				minor_version.write(shared.NtMinorVersion);
+
+			if (build_number)
+				build_number.write(shared.NtBuildNumber);
+
+			if (csd_version)
+			{
+				// No service pack; an empty counted string is what a current build answers.
+				_UNICODE_STRING out{};
+				out.Length = 0;
+				out.MaximumLength = 0;
+				out.Buffer = nullptr;
+				csd_version.write(out);
+			}
+
+			THREAD_LOG_INFO("PsGetVersion() -> {}.{}.{}", shared.NtMajorVersion,
+				shared.NtMinorVersion, shared.NtBuildNumber);
+
+			return STATUS_SUCCESS;
+		});
+
+	// The DDI version packs major, minor and build the same way NTDDI_VERSION does, and a caller
+	// asking for one is asking whether the running kernel is at least as new as that build.
+	state.redirect(mod, "RtlIsNtDdiVersionAvailable",
+		[st](vcpu&, const std::uint32_t version) -> std::uint8_t
+		{
+			const auto shared = st->kuser_shared_data.read();
+
+			const std::uint32_t current =
+				(static_cast<std::uint32_t>(shared.NtMajorVersion) << 24)
+				| (static_cast<std::uint32_t>(shared.NtMinorVersion) << 16)
+				| (static_cast<std::uint32_t>(shared.NtBuildNumber) & 0xFFFF);
+
+			const auto available = version <= current;
+
+			THREAD_LOG_INFO("RtlIsNtDdiVersionAvailable(0x{:X}) -> {} (current 0x{:X})",
+				version, available, current);
+
+			return available;
+		});
+
 	// Only ntoskrnl is mapped here, so a hal routine comes back null.
 	state.redirect(mod, "MmGetSystemRoutineAddress",
 		[m](vcpu& cpu, emu_object<_UNICODE_STRING> system_routine_name) -> addr_t
@@ -308,6 +366,43 @@ void modules::register_ntoskrnl_info_ops(win_kernel_state& state, proc_module& m
 			THREAD_LOG_INFO("RtlRandomEx(seed=0x{:X}) -> {}", seed.address(), value);
 
 			return value;
+		});
+
+	state.redirect(mod, "ExUuidCreate",
+		[](vcpu& cpu, const addr_t uuid_out) -> NTSTATUS
+		{
+			if (!uuid_out)
+				return STATUS_INVALID_PARAMETER;
+
+			auto& space = *cpu.curr_addr_space();
+
+			// A version 4 uuid: the clock is a steady count and a per-call sequence, and the node
+			// is the destination, so two calls never name the same uuid while remaining bookkeeping
+			// a guest can read back as itself.
+			static std::atomic<std::uint64_t> sequence{ 0 };
+
+			const auto now = static_cast<std::uint64_t>(
+				std::chrono::steady_clock::now().time_since_epoch().count());
+			const auto seq = sequence.fetch_add(1);
+
+			std::uint64_t words[2]{
+				now ^ seq,
+				seq * 0x9E3779B97F4A7C15ull ^ uuid_out,
+			};
+
+			auto* const bytes = reinterpret_cast<std::uint8_t*>(words);
+			bytes[6] = static_cast<std::uint8_t>((bytes[6] & 0x0F) | 0x40);
+			bytes[8] = static_cast<std::uint8_t>((bytes[8] & 0x3F) | 0x80);
+
+			space.write_mem(uuid_out, words);
+
+			THREAD_LOG_INFO("ExUuidCreate(0x{:X}) -> {:02X}{:02X}{:02X}{:02X}-{:02X}{:02X}-{:02X}{:02X}-"
+				"{:02X}{:02X}-{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}",
+				uuid_out, bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5],
+				bytes[6], bytes[7], bytes[8], bytes[9], bytes[10], bytes[11], bytes[12],
+				bytes[13], bytes[14], bytes[15]);
+
+			return STATUS_SUCCESS;
 		});
 
 	state.redirect(mod, "RtlTimeToTimeFields",
