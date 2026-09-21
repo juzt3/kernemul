@@ -25,6 +25,14 @@ void modules::register_ntoskrnl_crt_ops(win_kernel_state& state, proc_module& mo
 {
 	auto* st = &state;
 
+#if !defined(KERNEMUL_ARCH_ARM64)
+	// The compiler's stack probe, entered with the frame size in rax. It walks the pages it is
+	// about to cover and leaves rsp and rax for the caller's own `sub rsp, rax`, so with the
+	// stack already mapped here the walk has nothing to do and the call just returns.
+	state.redirect(mod, "_alloca_probe", [](vcpu&) {});
+	state.redirect(mod, "__chkstk", [](vcpu&) {});
+#endif
+
 	state.redirect(mod, "wcslen", [](vcpu&, std::u16string str) -> std::uint64_t
 	{
 		THREAD_LOG_INFO("wcslen('{}') -> {}", narrow_wstring(str), str.size());
