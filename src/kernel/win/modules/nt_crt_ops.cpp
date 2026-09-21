@@ -72,6 +72,45 @@ void modules::register_ntoskrnl_crt_ops(win_kernel_state& state, proc_module& mo
 			return r;
 		});
 
+	state.redirect(mod, "wcscmp",
+		[](vcpu&, std::u16string str1, std::u16string str2) -> std::int32_t
+		{
+			const auto r = str1.compare(str2);
+			THREAD_LOG_INFO("wcscmp('{}', '{}') -> {}", narrow_wstring(str1), narrow_wstring(str2), r);
+			return r;
+		});
+
+	state.redirect(mod, "wcsncmp",
+		[](vcpu&, std::u16string str1, std::u16string str2, const std::uint64_t count) -> std::int32_t
+		{
+			// Counted wide compares stop at count, and a shorter string is compared through its
+			// terminator so that it orders before a longer one, which is what the CRT does.
+			const auto n = std::min<std::size_t>(count, std::min(str1.size(), str2.size()) + 1);
+			const auto r = str1.compare(0, n, str2, 0, n);
+			THREAD_LOG_INFO("wcsncmp('{}', '{}', {}) -> {}",
+				narrow_wstring(str1), narrow_wstring(str2), count, r);
+			return r;
+		});
+
+	state.redirect(mod, "_wcsicmp",
+		[](vcpu&, std::u16string str1, std::u16string str2) -> std::int32_t
+		{
+			const auto r = compare_ascii_nocase<char16_t>(str1, str2);
+			THREAD_LOG_INFO("_wcsicmp('{}', '{}') -> {}",
+				narrow_wstring(str1), narrow_wstring(str2), r);
+			return r;
+		});
+
+	state.redirect(mod, "_wcsnicmp",
+		[](vcpu&, std::u16string str1, std::u16string str2, const std::uint64_t count) -> std::int32_t
+		{
+			const auto r = compare_ascii_nocase(str1.c_str(), str2.c_str(),
+				std::min<std::size_t>(count, std::min(str1.size(), str2.size()) + 1));
+			THREAD_LOG_INFO("_wcsnicmp('{}', '{}', {}) -> {}",
+				narrow_wstring(str1), narrow_wstring(str2), count, r);
+			return r;
+		});
+
 	// strncpy pads to count with nulls and does not terminate on an exact fill; this does not.
 	// The result is a pointer into the caller's own string, so the search runs over the guest's
 	// bytes rather than a copy whose address would mean nothing to it.

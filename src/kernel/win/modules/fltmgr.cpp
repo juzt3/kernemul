@@ -64,6 +64,7 @@ addr_t create_opaque(win_kernel_state& state, const std::size_t size,
 void modules::register_fltmgr(win_kernel_state& state, proc_module& mod)
 {
 	auto* st = &state;
+	auto* m = &mod;
 
 	auto push_lock = [](vcpu&, const addr_t push_lock_address)
 	{
@@ -288,6 +289,26 @@ void modules::register_fltmgr(win_kernel_state& state, proc_module& mod)
 			}
 
 			THREAD_LOG_INFO("FltReleaseFileNameInformation(0x{:X})", file_name_information);
+		});
+
+	state.redirect(mod, "FltGetRoutineAddress",
+		[m](vcpu&, emu_object<_UNICODE_STRING> routine_name) -> addr_t
+		{
+			const auto name = narrow_wstring(win::read_unicode_string(routine_name));
+
+			if (name.empty())
+				return 0;
+
+			// The names asked for are routines the filter manager exports, so the export table
+			// answers: one with no handler here still resolves to its mapped code.
+			const auto addr = m->find_export(name);
+
+			if (!addr)
+				THREAD_LOG_WARN("FltGetRoutineAddress: '{}' is not exported by {}", name, m->name);
+
+			THREAD_LOG_INFO("FltGetRoutineAddress('{}') -> 0x{:X}", name, addr.value_or(0));
+
+			return addr.value_or(0);
 		});
 
 	state.redirect(mod, "FltParseFileNameInformation",
