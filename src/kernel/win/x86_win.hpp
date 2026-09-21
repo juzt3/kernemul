@@ -90,6 +90,12 @@ public:
 
 			const auto tables = x86_win_seg::init_vcpu(*cpu, *nt);
 
+			// A driver reads IA32_LSTAR to find the syscall entry, and answering zero points it at
+			// nothing: the entry its kernel would have put there is named by its own symbols, so
+			// that is what the register is given.
+			if (const auto syscall_entry = nt->find_symbol("KiSystemCall64"))
+				cpu->reg(x86::lstar, *syscall_entry);
+
 			// After the tables: the KPCR carries the pointers the guest reads back out of it.
 			const auto& pcpu = kernel().init_per_cpu(*cpu);
 			const auto& kpcr = pcpu.object();

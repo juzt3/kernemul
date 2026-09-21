@@ -108,6 +108,26 @@ struct win_kernel_state : kernel_state
 				sys_proc->module_add_cb(*ntoskrnl);
 			}
 
+			// The kernel fills these in as it boots, so a driver that reads one -- looking up the
+			// service table behind the syscall entry -- finds what the kernel would have left there
+			// instead of a null table base. The table and its length are both the image's own.
+			if (const auto service_table = ntoskrnl->find_symbol("KiServiceTable"))
+			{
+				const auto limit = ntoskrnl->find_symbol("KiServiceLimit");
+				const auto services = limit ? space.read_mem<std::uint32_t>(*limit) : 0u;
+
+				for (const auto name : { "KeServiceDescriptorTable", "KeServiceDescriptorTableShadow" })
+				{
+					const auto desc = ntoskrnl->find_symbol(name);
+
+					if (!desc)
+						continue;
+
+					space.write_mem<addr_t>(*desc, *service_table);
+					space.write_mem<std::uint32_t>(*desc + 0x10, services);
+				}
+			}
+
 			map_redirect_module("fltmgr.sys", modules::register_fltmgr);
 			map_redirect_module("cng.sys", modules::register_cng);
 			map_redirect_module("ci.dll", modules::register_ci);

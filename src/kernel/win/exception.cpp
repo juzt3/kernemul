@@ -6,7 +6,38 @@
 #include "../../emu/emu.hpp"
 #include "../../util/log.hpp"
 
-namespace win {
+namespace win
+{
+
+namespace
+{
+
+// A /GS function names the compiler's own __GSHandlerCheck as its personality routine. It
+// validates the stack cookie the prologue stored on the frame and then continues the search.
+// The cookie is one the emulator may have rebuilt rather than had the prologue write -- an
+// obfuscated function can be entered past its prologue -- so the check can only ever fail here,
+// and failing it bugchecks the guest. Skipping it is what a passing check would have done.
+bool is_gs_handler(addr_space& space, const addr_t handler)
+{
+	static constexpr std::uint8_t gs_stub[] = {
+		0x48, 0x83, 0xEC, 0x28, 0x4D, 0x8B, 0x41, 0x38,
+		0x48, 0x8B, 0xCA, 0x49, 0x8B, 0xD1, 0xE8,
+	};
+
+	if (!handler)
+		return false;
+
+	for (std::size_t i = 0; i < sizeof(gs_stub); ++i)
+	{
+		if (space.read_mem<std::uint8_t>(handler + i) != gs_stub[i])
+			return false;
+	}
+
+	return true;
+}
+
+}
+
 
 std::uint32_t exception_to_status(const cpu_exception ex)
 {
@@ -143,6 +174,12 @@ bool win_exception::handle(vcpu& cpu, const cpu_exception ex)
 		if (!result.handler)
 			continue;
 
+		if (is_gs_handler(space, result.handler))
+		{
+			LOG_INFO("  frame[{}]: GS handler at 0x{:X} skipped", depth, result.handler);
+			continue;
+		}
+
 		auto* emulator = kernel_.emulator();
 
 		if (!emulator)
@@ -195,6 +232,15 @@ bool win_exception::handle(vcpu& cpu, const cpu_exception ex)
 
 		cpu.set_pc(saved_pc);
 		cpu.set_sp(saved_sp);
+	}
+
+	// A trap-flag step no frame claimed is one the kernel would clear and resume past: there is
+	// no debugger here for it to be reported to. Resuming leaves a probe that only wants to see
+	// whether one is attached from stopping the machine.
+	if (ex == cpu_exception::debug)
+	{
+		LOG_INFO("debug trap at 0x{:X} unclaimed: cleared and resumed", original_pc);
+		return true;
 	}
 
 	LOG_ERR("unhandled exception code=0x{:X} at 0x{:X}", code, original_pc);

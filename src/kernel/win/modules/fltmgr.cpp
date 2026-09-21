@@ -8,6 +8,7 @@
 #include "../../../util/log.hpp"
 #include "../../../util/string.hpp"
 #include <string_view>
+#include <exception>
 
 namespace
 {
@@ -292,9 +293,30 @@ void modules::register_fltmgr(win_kernel_state& state, proc_module& mod)
 		});
 
 	state.redirect(mod, "FltGetRoutineAddress",
-		[m](vcpu&, emu_object<_UNICODE_STRING> routine_name) -> addr_t
+		[m](vcpu& cpu, const addr_t routine_name) -> addr_t
 		{
-			const auto name = narrow_wstring(win::read_unicode_string(routine_name));
+			if (!routine_name)
+				return 0;
+
+			auto& space = *cpu.curr_addr_space();
+
+			// The filter manager takes a counted wide name. A caller that hands over a plain ansi
+			// name instead is answered rather than faulted on: reading its first bytes as a counted
+			// string would follow a length no such caller wrote and run off the mapped memory.
+			std::string name;
+
+			try
+			{
+				name = narrow_wstring(win::read_unicode_string(
+					emu_object<_UNICODE_STRING>(space, routine_name)));
+			}
+			catch (const std::exception&)
+			{
+				name.clear();
+			}
+
+			if (name.empty())
+				name = guest::read_string(space, routine_name);
 
 			if (name.empty())
 				return 0;
