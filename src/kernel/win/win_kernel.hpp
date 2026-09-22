@@ -771,8 +771,13 @@ struct win_kernel_state : kernel_state
 			.driver_init = mod.entry_point,
 		});
 
+		// The type a walk over \Driver reports for it is the driver object's own type, so the
+		// object carries a host that names it.
+		auto host = std::make_shared<driver_object_host>();
+		host->name = narrow_wstring(std::u16string(service_name));
+
 		const auto body = objs.create_object(0, &drv, sizeof(drv),
-			{}, prot_rw | prot_supervisor);
+			std::move(host), prot_rw | prot_supervisor);
 
 		emu_object<_DRIVER_OBJECT> obj(space, body,
 			std::format("DRIVER_OBJECT[{}]", mod.name), true);

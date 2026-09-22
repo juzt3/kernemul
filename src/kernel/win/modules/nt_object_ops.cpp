@@ -478,75 +478,91 @@ void modules::register_ntoskrnl_object_ops(win_kernel_state& state, proc_module&
 
 			auto& space = *cpu.curr_addr_space();
 
-			std::vector<std::uint8_t> out;
-			addr_t next = index;
+			// The layout is the one the kernel builds: an array of OBJECT_DIRECTORY_INFORMATION with
+			// a zeroed terminator after the last entry, and every name and type string in one run
+			// after the array, the structures' buffers pointing into it. A caller walks the array
+			// by its fixed size and stops on the zeroed entry, so the strings must not sit between
+			// the structures -- a walk that steps by the structure size would then read a
+			// structure out of the middle of a string.
 			constexpr auto header = sizeof(object_directory_information_t);
 
-			while (next < children.size())
+			struct directory_entry
 			{
-				const auto& child = children[next];
-				const auto wide_name = widen_string(child);
-				const auto wide_type = std::u16string(type_of(prefix + child));
+				std::u16string name;
+				std::u16string type;
+			};
 
-				const auto name_bytes = static_cast<std::uint16_t>(wide_name.size() * 2);
-				const auto type_bytes = static_cast<std::uint16_t>(wide_type.size() * 2);
-				const auto entry_size = header + name_bytes + 2 + type_bytes + 2;
+			std::vector<directory_entry> chosen;
+			std::size_t total = header;
 
-				if (out.size() + entry_size > length)
+			for (std::size_t i = index; i < children.size(); ++i)
+			{
+				directory_entry entry{};
+				entry.name = widen_string(children[i]);
+				entry.type = std::u16string(type_of(prefix + children[i]));
+
+				const auto add = header + entry.name.size() * 2 + 2 + entry.type.size() * 2 + 2;
+
+				if (total + add > length)
 					break;
 
-				const auto at = out.size();
-				out.resize(at + entry_size, 0);
-
-				auto* const info = reinterpret_cast<object_directory_information_t*>(
-					out.data() + at);
-
-				const auto name_at = buffer + at + header;
-				const auto type_at = name_at + name_bytes + 2;
-
-				_UNICODE_STRING name_us{};
-				name_us.Length = name_bytes;
-				name_us.MaximumLength = static_cast<std::uint16_t>(name_bytes + 2);
-				name_us.Buffer = guest_ptr<char16_t>(name_at);
-
-				_UNICODE_STRING type_us{};
-				type_us.Length = type_bytes;
-				type_us.MaximumLength = static_cast<std::uint16_t>(type_bytes + 2);
-				type_us.Buffer = guest_ptr<char16_t>(type_at);
-
-				info->name = name_us;
-				info->type_name = type_us;
-
-				std::memcpy(out.data() + at + header, wide_name.data(), name_bytes);
-				std::memcpy(out.data() + at + header + name_bytes + 2, wide_type.data(),
-					type_bytes);
-
-				++next;
+				chosen.push_back(std::move(entry));
+				total += add;
 
 				if (return_single_entry)
 					break;
 			}
 
-			const auto written = static_cast<std::uint32_t>(out.size());
+			const auto next = index + static_cast<std::uint32_t>(chosen.size());
+			const auto more = next < children.size();
+
+			if (total > length)
+				return STATUS_BUFFER_TOO_SMALL;
+
+			std::vector<std::uint8_t> out(total, 0);
+
+			auto string_at = header * (chosen.size() + 1);
+
+			for (std::size_t i = 0; i < chosen.size(); ++i)
+			{
+				const auto& entry = chosen[i];
+				auto* const info = reinterpret_cast<object_directory_information_t*>(
+					out.data() + i * header);
+
+				const auto name_bytes = static_cast<std::uint16_t>(entry.name.size() * 2);
+				const auto type_bytes = static_cast<std::uint16_t>(entry.type.size() * 2);
+
+				info->name.Length = name_bytes;
+				info->name.MaximumLength = static_cast<std::uint16_t>(name_bytes + 2);
+				info->name.Buffer = guest_ptr<char16_t>(buffer + string_at);
+
+				std::memcpy(out.data() + string_at, entry.name.data(), name_bytes);
+				string_at += name_bytes + 2;
+
+				info->type_name.Length = type_bytes;
+				info->type_name.MaximumLength = static_cast<std::uint16_t>(type_bytes + 2);
+				info->type_name.Buffer = guest_ptr<char16_t>(buffer + string_at);
+
+				std::memcpy(out.data() + string_at, entry.type.data(), type_bytes);
+				string_at += type_bytes + 2;
+			}
 
 			if (return_length)
-				return_length.write(written);
+				return_length.write(static_cast<std::uint32_t>(out.size()));
 
 			if (context)
-				context.write(static_cast<std::uint32_t>(next));
+				context.write(next);
 
-			if (!out.empty())
-				space.write_mem(buffer, out.data(), out.size());
+			space.write_mem(buffer, out.data(), out.size());
 
 			THREAD_LOG_INFO("NtQueryDirectoryObject('{}', buffer={}/{}, single={}): {} of {} "
 				"entry(s)", host->name, buffer, length, return_single_entry != 0,
-				next - index, children.size());
+				chosen.size(), children.size());
 
-			if (out.empty())
-				return index < children.size() && length < header
-					? STATUS_BUFFER_TOO_SMALL : STATUS_NO_MORE_ENTRIES;
+			if (chosen.empty() && index >= children.size())
+				return STATUS_NO_MORE_ENTRIES;
 
-			return next < children.size() ? STATUS_MORE_ENTRIES : STATUS_SUCCESS;
+			return more ? STATUS_MORE_ENTRIES : STATUS_SUCCESS;
 		});
 
 	state.redirect_ntzw(mod, "OpenSymbolicLinkObject",
