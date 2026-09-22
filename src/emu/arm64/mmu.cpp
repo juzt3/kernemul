@@ -278,11 +278,17 @@ void mmu::copy_virt(const addr_space& space, const addr_t va, void* buf, const s
 		const std::size_t page_off = cur_va - page;
 		const std::size_t chunk = std::min(size - done, page_size() - page_off);
 
-		const auto it = space.shadow.find(page);
+		// The page tables are what the guest's own cpu walks, so they decide where the byte is.
+		// The shadow map records what this emulator mapped and can lag behind a table the guest
+		// has since changed; taking it first would put the write into the frame the page used to
+		// have, and the guest, reading through its own table, would find the bytes zeroed.
+		auto frame = translate_virt(space, page);
 
-		const auto frame = it != space.shadow.end()
-			? std::optional<addr_t>(it->second)
-			: translate_virt(space, page);
+		if (!frame)
+		{
+			if (const auto it = space.shadow.find(page); it != space.shadow.end())
+				frame = it->second;
+		}
 
 		if (!frame)
 			throw std::runtime_error("unmapped virtual address");
@@ -347,13 +353,14 @@ std::optional<addr_t> mmu::virt_to_phys(const ::addr_space& space, const addr_t 
 	std::shared_lock lk(mtx_);
 
 	const addr_t page = page_align(va);
-	const auto it = s.shadow.find(page);
 
-	if (it != s.shadow.end())
-		return it->second + (va - page);
-
+	// Same order as copy_virt: the table the guest walks decides, and the shadow map only
+	// stands in when the walk finds nothing.
 	if (const auto pa = translate_virt(s, page))
 		return *pa + (va - page);
+
+	if (const auto it = s.shadow.find(page); it != s.shadow.end())
+		return it->second + (va - page);
 
 	return std::nullopt;
 }
