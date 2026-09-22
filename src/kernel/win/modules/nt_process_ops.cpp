@@ -9,11 +9,72 @@
 #include "../../../util/log.hpp"
 #include <algorithm>
 #include <memory>
+#include <mutex>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace
 {
+
+// A driver that looks every id up walks a range of them, and logging every miss produces the
+// same line as many times as the range is long. Consecutive misses by one thread with a fixed
+// step are one run, counted and printed as a span when the run breaks.
+struct lookup_miss
+{
+	std::uint32_t tid = 0;
+	std::uint64_t first = 0;
+	std::uint64_t last = 0;
+	std::uint64_t step = 0;
+	std::size_t count = 0;
+};
+
+std::mutex lookup_miss_mtx;
+std::unordered_map<std::uint32_t, lookup_miss> lookup_misses;
+
+void report_lookup_miss(const std::string_view who, const lookup_miss& miss,
+	const std::uint32_t tid)
+{
+	if (miss.count > 1)
+	{
+		THREAD_LOG_WARN("{}: {} missing, {} through {} (tid={})",
+			who, miss.count, miss.first, miss.last, tid);
+	}
+	else
+	{
+		THREAD_LOG_WARN("{}: no such id {} (tid={})", who, miss.first, tid);
+	}
+}
+
+// Extends the run when the id continues it, otherwise flushes the previous run and starts a
+// new one. Called with the map lock held.
+void note_lookup_miss(const std::string_view who, vcpu& cpu, const std::uint64_t id)
+{
+	const auto tid = cpu.thread() ? cpu.thread()->id() : 0u;
+
+	auto& miss = lookup_misses[tid];
+
+	const bool extends = miss.tid == tid && miss.count
+		&& id > miss.last
+		&& (miss.step ? (id - miss.last == miss.step) : true);
+
+	if (extends)
+	{
+		miss.step = miss.count == 1 ? id - miss.last : miss.step;
+		miss.last = id;
+		++miss.count;
+		return;
+	}
+
+	if (miss.tid != 0)
+		report_lookup_miss(who, miss, tid);
+
+	miss = lookup_miss{ tid, id, id, 0, 1 };
+
+	// A single miss is logged as the run it is; a longer one only when it ends.
+	if (miss.count == 1)
+		report_lookup_miss(who, miss, tid);
+}
 
 NTSTATUS add_notify(std::vector<addr_t>& routines, const std::size_t limit,
 	const std::string_view who, const addr_t routine)
@@ -222,7 +283,7 @@ void modules::register_ntoskrnl_process_ops(win_kernel_state& state, proc_module
 		});
 
 	state.redirect(mod, "PsLookupThreadByThreadId",
-		[st](vcpu&, const std::uint64_t thread_id, emu_object<addr_t> thread_out) -> NTSTATUS
+		[st](vcpu& cpu, const std::uint64_t thread_id, emu_object<addr_t> thread_out) -> NTSTATUS
 		{
 			const auto t = std::dynamic_pointer_cast<win_thread>(
 				st->find_thread(static_cast<process::thread_id_type>(thread_id)));
@@ -231,7 +292,9 @@ void modules::register_ntoskrnl_process_ops(win_kernel_state& state, proc_module
 
 			if (!ethread)
 			{
-				THREAD_LOG_WARN("PsLookupThreadByThreadId: no thread {}", thread_id);
+				std::lock_guard lock(lookup_miss_mtx);
+				note_lookup_miss("PsLookupThreadByThreadId", cpu, thread_id);
+
 				return STATUS_INVALID_CID;
 			}
 

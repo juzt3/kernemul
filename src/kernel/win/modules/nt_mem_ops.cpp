@@ -12,6 +12,8 @@
 #include <span>
 #include <array>
 #include <cstring>
+#include <unordered_map>
+#include <mutex>
 #include <vector>
 #include <string_view>
 
@@ -20,6 +22,30 @@ namespace
 
 constexpr std::uint32_t mm_copy_memory_physical = 0x1;
 constexpr std::uint32_t mm_copy_memory_virtual = 0x2;
+
+// A driver probing a region of kernel for hooks walks it byte by byte, and logging that probes a
+// hundred times under one repeated line. Consecutive probes by one thread with the same answer
+// are one run, entered once and tallied, with the run printed when it breaks.
+struct is_valid_scan
+{
+	std::uint32_t tid = 0;
+	addr_t first = 0;
+	addr_t last = 0;
+	bool valid = false;
+	std::size_t count = 0;
+};
+
+std::mutex is_valid_scan_mtx;
+std::unordered_map<std::uint32_t, is_valid_scan> is_valid_scans;
+
+void report_is_valid_scan(const is_valid_scan& scan, const std::uint32_t tid)
+{
+	if (scan.count <= 1)
+		return;
+
+	THREAD_LOG_INFO("MmIsAddressValid: 0x{:X}-0x{:X} -> {} ({} calls, tid={})",
+		scan.first, scan.last, scan.valid, scan.count, tid);
+}
 
 // There is one kind of memory behind every mapping here, so the type only reaches the log.
 std::string_view caching_type_name(const std::uint32_t type)
@@ -50,7 +76,32 @@ void modules::register_ntoskrnl_mem_ops(win_kernel_state& state, proc_module& mo
 			auto& space = *cpu.curr_addr_space();
 			const bool valid = space.mmu_->virt_to_phys(space, virtual_address).has_value();
 
-			THREAD_LOG_INFO("MmIsAddressValid(0x{:X}) -> {}", virtual_address, valid);
+			const auto tid = cpu.thread() ? cpu.thread()->id() : 0u;
+
+			std::lock_guard lock(is_valid_scan_mtx);
+
+			auto& scan = is_valid_scans[tid];
+
+			if (scan.tid == tid && scan.count && virtual_address == scan.last + 1
+				&& valid == scan.valid)
+			{
+				scan.last = virtual_address;
+				++scan.count;
+
+				// A very long run still says it is alive every so often rather than going quiet.
+				if ((scan.count % 256) == 0)
+					THREAD_LOG_INFO("MmIsAddressValid: 0x{:X}-0x{:X} -> {} ({} calls)",
+						scan.first, scan.last, scan.valid, scan.count);
+			}
+			else
+			{
+				if (scan.tid != 0)
+					report_is_valid_scan(scan, tid);
+
+				scan = is_valid_scan{ tid, virtual_address, virtual_address, valid, 1 };
+
+				THREAD_LOG_INFO("MmIsAddressValid(0x{:X}) -> {}", virtual_address, valid);
+			}
 
 			return valid;
 		});

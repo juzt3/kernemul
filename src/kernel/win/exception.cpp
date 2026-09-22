@@ -175,9 +175,55 @@ bool win_exception::handle(vcpu& cpu, const cpu_exception ex)
 		if (!result.handler)
 			continue;
 
+		// A /GS function's handler only validates the stack cookie the prologue saved and then passes
+		// the search on, so this is that check: the stored value at the frame displacement the
+		// unwind data carries is compared with the cookie the image's load config says is in
+		// use. On a real machine the handler is entered to make the same comparison.
 		if (is_gs_handler(space, result.handler))
 		{
-			LOG_INFO("  frame[{}]: GS handler at 0x{:X} skipped", depth, result.handler);
+			bool passed = false;
+
+			if (const auto* const pe = mod->pe())
+			{
+				if (const auto* const lc = pe->load_config(); lc && lc->security_cookie)
+				{
+					const auto cookie_addr =
+						mod->addr + (lc->security_cookie - pe->base_addr());
+					const auto expected = space.read_mem<std::uint64_t>(cookie_addr);
+
+					if (result.handler_data)
+					{
+						const auto data = space.read_mem<std::uint32_t>(result.handler_data);
+
+						// Encoded as a frame displacement: a set low bit means the cookie sits
+						// above the frame, otherwise below it.
+						const addr_t candidates[] = {
+							result.establisher_frame - data,
+							result.establisher_frame + (data & ~1u),
+						};
+
+						for (const auto gs : candidates)
+						{
+							if (gs && space.read_mem<std::uint64_t>(gs) == expected)
+							{
+								passed = true;
+								break;
+							}
+						}
+					}
+				}
+			}
+
+			if (passed)
+			{
+				LOG_INFO("  frame[{}]: GS check passed at 0x{:X}", depth, result.handler);
+			}
+			else
+			{
+				LOG_ERR("  frame[{}]: GS cookie mismatch at 0x{:X}; the walk moves on, where a "
+					"real machine would fault on the check", depth, result.handler);
+			}
+
 			continue;
 		}
 
