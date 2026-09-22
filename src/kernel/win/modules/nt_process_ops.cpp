@@ -350,6 +350,74 @@ void modules::register_ntoskrnl_process_ops(win_kernel_state& state, proc_module
 				st->objs.dereference_object(primary_token);
 		});
 
+	// Suspending a process suspends every thread in it, and resuming lifts one level from each,
+	// which is what the pair is for.
+	auto suspend_process = [st](vcpu& cpu, emu_object<_EPROCESS> process) -> NTSTATUS
+	{
+		const auto target = process_or_current(*st, cpu, process);
+
+		if (!target)
+			return STATUS_INVALID_PARAMETER;
+
+		const auto proc = st->process_from_eprocess(target.address());
+
+		if (!proc)
+		{
+			THREAD_LOG_WARN("PsSuspendProcess: 0x{:X} is not a process", target.address());
+			return STATUS_INVALID_PARAMETER;
+		}
+
+		std::size_t count = 0;
+
+		for (const auto& t : proc->threads())
+		{
+			if (auto wt = std::dynamic_pointer_cast<win_thread>(t))
+			{
+				wt->suspend();
+				++count;
+			}
+		}
+
+		THREAD_LOG_INFO("PsSuspendProcess(0x{:X}): {} thread(s) suspended",
+			target.address(), count);
+
+		return STATUS_SUCCESS;
+	};
+
+	state.redirect(mod, "PsSuspendProcess", suspend_process);
+	state.redirect(mod, "PsResumeProcess",
+		[st](vcpu& cpu, emu_object<_EPROCESS> process) -> NTSTATUS
+		{
+			const auto target = process_or_current(*st, cpu, process);
+
+			if (!target)
+				return STATUS_INVALID_PARAMETER;
+
+			const auto proc = st->process_from_eprocess(target.address());
+
+			if (!proc)
+			{
+				THREAD_LOG_WARN("PsResumeProcess: 0x{:X} is not a process", target.address());
+				return STATUS_INVALID_PARAMETER;
+			}
+
+			std::size_t count = 0;
+
+			for (const auto& t : proc->threads())
+			{
+				if (auto wt = std::dynamic_pointer_cast<win_thread>(t))
+				{
+					wt->resume();
+					++count;
+				}
+			}
+
+			THREAD_LOG_INFO("PsResumeProcess(0x{:X}): {} thread(s) resumed",
+				target.address(), count);
+
+			return STATUS_SUCCESS;
+		});
+
 	// Nothing here sections an image in, and the out parameter is left untouched on failure.
 	state.redirect(mod, "PsReferenceProcessFilePointer",
 		[](vcpu&, emu_object<_EPROCESS> process,

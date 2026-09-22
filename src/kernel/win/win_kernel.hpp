@@ -751,6 +751,24 @@ struct win_kernel_state : kernel_state
 		}
 	}
 
+	// The process behind an EPROCESS a caller passed: a driver names a process by its object
+	// rather than by an id.
+	std::shared_ptr<windows_process> process_from_eprocess(const addr_t eprocess)
+	{
+		std::shared_lock lock(proc_mtx_);
+
+		for (const auto& [id, proc] : processes)
+		{
+			if (auto wp = std::dynamic_pointer_cast<windows_process>(proc);
+				wp && wp->eprocess().address() == eprocess)
+			{
+				return wp;
+			}
+		}
+
+		return nullptr;
+	}
+
 	struct driver_entry_args
 	{
 		emu_object<_DRIVER_OBJECT> driver_object;

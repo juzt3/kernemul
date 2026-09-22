@@ -616,8 +616,18 @@ void modules::register_ntoskrnl_vm_ops(win_kernel_state& state, proc_module& mod
 			return STATUS_SUCCESS;
 		}
 
-		// Anything else the namespace holds and that is a section opens by its name, which is
-		// how \Device\PhysicalMemory resolves.
+		// Physical memory is a section on a real machine, but one with a segment behind it. A probe
+		// that opens it reads fields that cannot be faked here, so it is refused the way it is
+		// refused without the lock memory privilege rather than answered with an empty object.
+		if (object_namespace_key(name) == "/device/physicalmemory")
+		{
+			THREAD_LOG_INFO("NtOpenSection('{}', access=0x{:X}): privilege not held",
+				name, desired_access);
+
+			return STATUS_PRIVILEGE_NOT_HELD;
+		}
+
+		// Anything else the namespace holds and that is a section opens by its name.
 		if (const auto addr = st->objs.lookup_named_object(object_namespace_key(name)))
 		{
 			if (st->objs.get_object<section_host>(addr))

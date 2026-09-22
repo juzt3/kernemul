@@ -169,6 +169,20 @@ public:
 	virtual void terminate_thread(thread_id_type id);
 	[[nodiscard]] std::shared_ptr<thread> find_thread(thread_id_type id) const;
 
+	// Every thread in the process, for an operation that applies to all of them at once.
+	[[nodiscard]] std::vector<std::shared_ptr<thread>> threads() const
+	{
+		std::shared_lock lock(thread_mtx_);
+
+		std::vector<std::shared_ptr<thread>> out;
+		out.reserve(threads_.size());
+
+		for (const auto& [id, t] : threads_)
+			out.push_back(t);
+
+		return out;
+	}
+
 	static thread_id_type alloc_thread_id() { return next_thread_id_++; }
 
 protected:
