@@ -7,15 +7,25 @@
 #include "../types.hpp"
 #include "../../../util/string.hpp"
 #include "../../../util/log.hpp"
+#include <algorithm>
 #include <array>
+#include <cstring>
 #include <string>
+#include <vector>
 
 namespace
 {
 
 constexpr std::size_t namespace_object_body_size = 0x10;
 
-struct directory_host final : win_object {};
+// OBJECT_DIRECTORY_INFORMATION, whose counted strings point back into the same buffer.
+#pragma pack(push, 8)
+struct object_directory_information_t
+{
+	_UNICODE_STRING name;
+	_UNICODE_STRING type_name;
+};
+#pragma pack(pop)
 
 // WDK types the kernel does not store, so not in the PDB; both are the same on each architecture.
 #pragma pack(push, 8)
@@ -142,9 +152,10 @@ void modules::register_ntoskrnl_object_ops(win_kernel_state& state, proc_module&
 
 	state.redirect_ntzw(mod, "Close", close_fn);
 
-	// Nothing here opens a handle down the path that would notify one, so a filter sees no traffic.
+	// A registration is kept and honoured: the pre callback runs on every handle open of an object
+	// of the type it named, and the access it returns is the access the handle is made with.
 	state.redirect(mod, "ObRegisterCallbacks",
-		[&objs = state.objs](vcpu& cpu, emu_object<void> callback_registration,
+		[st = &state](vcpu& cpu, emu_object<void> callback_registration,
 			emu_object<addr_t> registration_handle) -> NTSTATUS
 		{
 			if (!callback_registration || !registration_handle)
@@ -159,8 +170,17 @@ void modules::register_ntoskrnl_object_ops(win_kernel_state& state, proc_module&
 				emu_object<_UNICODE_STRING>(space, registration.address()
 					+ offsetof(ob_callback_registration_t, altitude))));
 
-			THREAD_LOG_INFO("ObRegisterCallbacks(version={}, altitude='{}', {} operation(s))",
-				reg.version, altitude, reg.operation_count);
+			const std::uint8_t body[sizeof(addr_t)] = {};
+			const auto handle = st->objs.create_object(0, body, sizeof(body), {},
+				prot_rw | prot_supervisor);
+
+			if (!handle)
+				return STATUS_INSUFFICIENT_RESOURCES;
+
+			registration_handle.write(handle);
+
+			THREAD_LOG_INFO("ObRegisterCallbacks(version={}, altitude='{}', {} operation(s)) "
+				"-> 0x{:X}", reg.version, altitude, reg.operation_count, handle);
 
 			for (std::uint16_t i = 0; i < reg.operation_count; ++i)
 			{
@@ -170,33 +190,48 @@ void modules::register_ntoskrnl_object_ops(win_kernel_state& state, proc_module&
 				const auto entry = op.read();
 				const auto type = space.read_mem<addr_t>(entry.object_type);
 
+				ob_registration stored{};
+				stored.registration = handle;
+				stored.object_type = type;
+				stored.operations = entry.operations;
+				stored.pre = entry.pre_operation;
+				stored.post = entry.post_operation;
+				stored.context = reg.registration_context;
+
+				{
+					std::scoped_lock lock(st->ob_mtx_);
+					st->ob_registrations.push_back(stored);
+				}
+
 				THREAD_LOG_INFO("  operation[{}]: type=0x{:X} (at 0x{:X}), operations=0x{:X}, "
-					"pre=0x{:X}, post=0x{:X}",
-					i, type, entry.object_type, entry.operations,
+					"pre=0x{:X}, post=0x{:X}", i, type, entry.object_type, entry.operations,
 					entry.pre_operation, entry.post_operation);
 			}
-
-			const auto count = reg.operation_count;
-
-			const std::uint8_t body[sizeof(addr_t)] = {};
-			const auto handle = objs.create_object(0, body, sizeof(body), {},
-				prot_rw | prot_supervisor);
-
-			if (!handle)
-				return STATUS_INSUFFICIENT_RESOURCES;
-
-			registration_handle.write(handle);
-
-			THREAD_LOG_WARN("ObRegisterCallbacks(0x{:X}, {} operation(s)) -> 0x{:X}: nothing here "
-				"notifies an object callback", callback_registration.address(), count, handle);
 
 			return STATUS_SUCCESS;
 		});
 
-	state.redirect(mod, "ObUnRegisterCallbacks", [](vcpu&, const addr_t registration_handle)
-	{
-		THREAD_LOG_INFO("ObUnRegisterCallbacks(0x{:X})", registration_handle);
-	});
+	state.redirect(mod, "ObUnRegisterCallbacks",
+		[st = &state](vcpu&, const addr_t registration_handle)
+		{
+			std::size_t removed = 0;
+
+			{
+				std::scoped_lock lock(st->ob_mtx_);
+
+				std::erase_if(st->ob_registrations, [&](const ob_registration& r)
+				{
+					if (r.registration != registration_handle)
+						return false;
+
+					++removed;
+					return true;
+				});
+			}
+
+			THREAD_LOG_INFO("ObUnRegisterCallbacks(0x{:X}): {} operation(s) dropped",
+				registration_handle, removed);
+		});
 
 	// Nothing here builds a type index table, so the kind comes from the host object instead.
 	state.redirect(mod, "ObGetObjectType",
@@ -234,7 +269,7 @@ void modules::register_ntoskrnl_object_ops(win_kernel_state& state, proc_module&
 		});
 
 	state.redirect(mod, "ObOpenObjectByPointer",
-		[st = &state](vcpu&, const addr_t object, const std::uint32_t handle_attributes,
+		[st = &state](vcpu& cpu, const addr_t object, const std::uint32_t handle_attributes,
 			const addr_t passed_access_state, const std::uint32_t desired_access,
 			const addr_t object_type, const std::uint8_t access_mode,
 			emu_object<std::uint64_t> handle) -> NTSTATUS
@@ -242,8 +277,25 @@ void modules::register_ntoskrnl_object_ops(win_kernel_state& state, proc_module&
 			if (!handle)
 				return STATUS_INVALID_PARAMETER;
 
+			auto access = desired_access;
+			addr_t type = 0;
+
+			if (st->objs.get_object<thread_object>(object))
+				type = st->object_type_pointer("PsThreadType");
+
+			if (type)
+			{
+				access = st->ob_pre_handle(cpu, object, type, ob_operation_handle_create, access);
+
+				if (!access)
+					return STATUS_ACCESS_DENIED;
+			}
+
 			st->objs.reference_object(object);
-			const auto value = st->sys_proc->handle_table().create_handle(object, desired_access);
+			const auto value = st->sys_proc->handle_table().create_handle(object, access);
+
+			if (type)
+				st->ob_post_handle(cpu, object, type, ob_operation_handle_create, STATUS_SUCCESS, access);
 
 			handle.write(value);
 
@@ -298,7 +350,9 @@ void modules::register_ntoskrnl_object_ops(win_kernel_state& state, proc_module&
 	auto open_namespace_object = [st = &state](std::shared_ptr<win_object> host,
 		const std::string& name, const std::uint32_t desired_access) -> std::uint64_t
 	{
-		if (const auto existing = st->objs.lookup_named_object(name))
+		const auto key = object_namespace_key(name);
+
+		if (const auto existing = st->objs.lookup_named_object(key))
 			return st->sys_proc->handle_table().create_handle(existing, desired_access);
 
 		const std::array<std::uint8_t, namespace_object_body_size> body{};
@@ -308,10 +362,42 @@ void modules::register_ntoskrnl_object_ops(win_kernel_state& state, proc_module&
 		if (!addr)
 			return 0;
 
-		st->objs.register_named_object(name, addr);
+		st->objs.register_named_object(key, addr);
 
 		return st->sys_proc->handle_table().create_handle(addr, desired_access);
 	};
+
+	// A name resolved against the namespace, which is how a walk over \Driver opens what it
+	// found there.
+	state.redirect(mod, "ObOpenObjectByName",
+		[st = &state, attribute_name](vcpu& cpu, emu_object<_OBJECT_ATTRIBUTES> object_attributes,
+			const addr_t object_type, [[maybe_unused]] const std::uint8_t access_mode,
+			[[maybe_unused]] const addr_t passed_access_state,
+			const std::uint32_t desired_access, [[maybe_unused]] const addr_t parse_context,
+			emu_object<std::uint64_t> handle) -> NTSTATUS
+		{
+			if (!object_attributes || !handle)
+				return STATUS_INVALID_PARAMETER;
+
+			const auto name = attribute_name(cpu, object_attributes);
+			const auto addr = st->objs.lookup_named_object(object_namespace_key(name));
+
+			if (!addr)
+			{
+				THREAD_LOG_WARN("ObOpenObjectByName('{}'): nothing by that name", name);
+				return STATUS_OBJECT_NAME_NOT_FOUND;
+			}
+
+			st->objs.reference_object(addr);
+			const auto value = st->sys_proc->handle_table().create_handle(addr, desired_access);
+
+			handle.write(value);
+
+			THREAD_LOG_INFO("ObOpenObjectByName('{}', type=0x{:X}, access=0x{:X}) -> handle=0x{:X}",
+				name, object_type, desired_access, value);
+
+			return STATUS_SUCCESS;
+		});
 
 	state.redirect_ntzw(mod, "OpenDirectoryObject",
 		[attribute_name, open_namespace_object](vcpu& cpu,
@@ -322,39 +408,145 @@ void modules::register_ntoskrnl_object_ops(win_kernel_state& state, proc_module&
 				return STATUS_INVALID_PARAMETER;
 
 			const auto name = attribute_name(cpu, object_attributes);
-			const auto handle = open_namespace_object(std::make_shared<directory_host>(),
-				name, desired_access);
+
+			auto host = std::make_shared<directory_host>();
+			host->name = name;
+
+			const auto handle = open_namespace_object(std::move(host), name, desired_access);
 
 			if (!handle)
 				return STATUS_INSUFFICIENT_RESOURCES;
 
 			directory_handle.write(handle);
 
-			THREAD_LOG_WARN("NtOpenDirectoryObject('{}') -> handle=0x{:X}: the directory is "
-				"empty, because nothing here puts anything in one", name, handle);
+			THREAD_LOG_INFO("NtOpenDirectoryObject('{}') -> handle=0x{:X}", name, handle);
 
 			return STATUS_SUCCESS;
 		});
 
-	// Nothing puts anything in a directory here, so an enumeration of one has nothing to
-	// return -- which is a result a caller handles, unlike a failure.
+	// A directory is enumerated from what is actually registered under it, so a walk over one
+	// sees the objects that exist rather than an empty answer.
 	state.redirect_ntzw(mod, "QueryDirectoryObject",
-		[](vcpu&, const std::uint64_t directory_handle, const addr_t buffer,
+		[st = &state](vcpu& cpu, const std::uint64_t directory_handle, const addr_t buffer,
 			const std::uint32_t length, const std::uint8_t return_single_entry,
 			const std::uint8_t restart_scan, emu_object<std::uint32_t> context,
 			emu_object<std::uint32_t> return_length) -> NTSTATUS
 		{
-			if (context)
-				context.write(0);
+			const auto host =
+				st->sys_proc->handle_table().get_object<directory_host>(directory_handle);
+
+			if (!host)
+			{
+				THREAD_LOG_WARN("NtQueryDirectoryObject: handle 0x{:X} is not a directory",
+					directory_handle);
+				return STATUS_INVALID_HANDLE;
+			}
+
+			const auto prefix = object_namespace_key(host->name) + "/";
+			const auto children = st->objs.child_names(prefix);
+
+			std::uint32_t index = 0;
+
+			if (!restart_scan && context)
+				index = context.read();
+
+			if (index > children.size())
+				index = static_cast<std::uint32_t>(children.size());
+
+			const auto type_of = [st](const std::string_view name) -> std::u16string_view
+			{
+				const auto addr = st->objs.lookup_named_object(name);
+
+				if (!addr)
+					return u"Unknown";
+
+				if (st->objs.get_object<directory_host>(addr))
+					return u"Directory";
+				if (st->objs.get_object<driver_object_host>(addr))
+					return u"Driver";
+				if (st->objs.get_object<section_host>(addr))
+					return u"Section";
+				if (st->objs.get_object<symbolic_link_host>(addr))
+					return u"SymbolicLink";
+				if (st->objs.get_object<file_host>(addr))
+					return u"File";
+				if (st->objs.get_object<device_host>(addr))
+					return u"Device";
+
+				return u"Unknown";
+			};
+
+			auto& space = *cpu.curr_addr_space();
+
+			std::vector<std::uint8_t> out;
+			addr_t next = index;
+			constexpr auto header = sizeof(object_directory_information_t);
+
+			while (next < children.size())
+			{
+				const auto& child = children[next];
+				const auto wide_name = widen_string(child);
+				const auto wide_type = std::u16string(type_of(prefix + child));
+
+				const auto name_bytes = static_cast<std::uint16_t>(wide_name.size() * 2);
+				const auto type_bytes = static_cast<std::uint16_t>(wide_type.size() * 2);
+				const auto entry_size = header + name_bytes + 2 + type_bytes + 2;
+
+				if (out.size() + entry_size > length)
+					break;
+
+				const auto at = out.size();
+				out.resize(at + entry_size, 0);
+
+				auto* const info = reinterpret_cast<object_directory_information_t*>(
+					out.data() + at);
+
+				const auto name_at = buffer + at + header;
+				const auto type_at = name_at + name_bytes + 2;
+
+				_UNICODE_STRING name_us{};
+				name_us.Length = name_bytes;
+				name_us.MaximumLength = static_cast<std::uint16_t>(name_bytes + 2);
+				name_us.Buffer = guest_ptr<char16_t>(name_at);
+
+				_UNICODE_STRING type_us{};
+				type_us.Length = type_bytes;
+				type_us.MaximumLength = static_cast<std::uint16_t>(type_bytes + 2);
+				type_us.Buffer = guest_ptr<char16_t>(type_at);
+
+				info->name = name_us;
+				info->type_name = type_us;
+
+				std::memcpy(out.data() + at + header, wide_name.data(), name_bytes);
+				std::memcpy(out.data() + at + header + name_bytes + 2, wide_type.data(),
+					type_bytes);
+
+				++next;
+
+				if (return_single_entry)
+					break;
+			}
+
+			const auto written = static_cast<std::uint32_t>(out.size());
 
 			if (return_length)
-				return_length.write(0);
+				return_length.write(written);
 
-			THREAD_LOG_WARN("NtQueryDirectoryObject(handle=0x{:X}, buffer=0x{:X}/{}, single={}, "
-				"restart={}): the directory is empty",
-				directory_handle, buffer, length, return_single_entry != 0, restart_scan != 0);
+			if (context)
+				context.write(static_cast<std::uint32_t>(next));
 
-			return STATUS_NO_MORE_ENTRIES;
+			if (!out.empty())
+				space.write_mem(buffer, out.data(), out.size());
+
+			THREAD_LOG_INFO("NtQueryDirectoryObject('{}', buffer={}/{}, single={}): {} of {} "
+				"entry(s)", host->name, buffer, length, return_single_entry != 0,
+				next - index, children.size());
+
+			if (out.empty())
+				return index < children.size() && length < header
+					? STATUS_BUFFER_TOO_SMALL : STATUS_NO_MORE_ENTRIES;
+
+			return next < children.size() ? STATUS_MORE_ENTRIES : STATUS_SUCCESS;
 		});
 
 	state.redirect_ntzw(mod, "OpenSymbolicLinkObject",

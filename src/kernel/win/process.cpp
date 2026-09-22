@@ -3,6 +3,7 @@
 #include "win_kernel.hpp"
 #include "../thread_scheduler.hpp"
 #include "../../util/log.hpp"
+#include <array>
 
 win_kernel_proc::win_kernel_proc(id_type id, win_kernel_state& kernel, std::shared_ptr<struct addr_space> space)
 	:	windows_process(id, std::move(space), kernel.objs, kernel.fs), kernel_(kernel) {}
@@ -42,6 +43,10 @@ std::shared_ptr<thread> windows_process::create_suspended_thread(vcpu& cpu,
 
 	// On the queue, but no cpu takes it until it is started.
 	scheduler_->enqueue(cpu, t, args);
+
+	if (emulator_)
+		emulator_->kernel().notify_thread_create(cpu, id_, t->id(), true);
+
 	return t;
 }
 
@@ -68,6 +73,10 @@ std::shared_ptr<thread> win_user_proc::create_suspended_thread(vcpu& cpu,
 	}
 
 	scheduler_->enqueue(cpu, t, args);
+
+	if (emulator_)
+		emulator_->kernel().notify_thread_create(cpu, id_, t->id(), true);
+
 	return t;
 }
 

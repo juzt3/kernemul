@@ -222,6 +222,14 @@ struct kernel_state
 		return true;
 	}
 
+	// The same, for a handler written inline. Some names a version of the kernel does not have
+	// at all, and binding one that is not there is nothing to report.
+	template <typename F>
+	bool try_redirect(proc_module& mod, const std::string_view name, F&& fn)
+	{
+		return try_redirect(mod, name, make_redirect(emu_->call_conv(), std::forward<F>(fn)));
+	}
+
 	void redirect(proc_module& mod, const std::string_view name, redirect_fn fn)
 	{
 		if (!try_redirect(mod, name, std::move(fn)))

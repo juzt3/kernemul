@@ -7,32 +7,21 @@
 #include "../status.hpp"
 #include "../types.hpp"
 #include "../../../util/log.hpp"
+#include <algorithm>
 #include <memory>
-#include <set>
 #include <string_view>
+#include <vector>
 
 namespace
 {
 
-struct notify_routines
-{
-	std::set<addr_t> process;
-	std::set<addr_t> thread;
-	std::set<addr_t> image;
-};
-
-// What NT's fixed-size tables hold, and what a driver past the limit is told.
-constexpr std::size_t max_process_notify_routines = 64;
-constexpr std::size_t max_thread_notify_routines = 64;
-constexpr std::size_t max_image_notify_routines = 8;
-
-NTSTATUS add_notify(std::set<addr_t>& routines, const std::size_t limit,
+NTSTATUS add_notify(std::vector<addr_t>& routines, const std::size_t limit,
 	const std::string_view who, const addr_t routine)
 {
 	if (!routine)
 		return STATUS_INVALID_PARAMETER;
 
-	if (routines.contains(routine))
+	if (std::ranges::find(routines, routine) != routines.end())
 	{
 		THREAD_LOG_WARN("{}: 0x{:X} is already registered", who, routine);
 		return STATUS_INVALID_PARAMETER;
@@ -44,20 +33,24 @@ NTSTATUS add_notify(std::set<addr_t>& routines, const std::size_t limit,
 		return STATUS_INSUFFICIENT_RESOURCES;
 	}
 
-	routines.insert(routine);
+	routines.push_back(routine);
 
-	THREAD_LOG_WARN("{}(0x{:X}): registered, but nothing here will call it", who, routine);
+	THREAD_LOG_INFO("{}(0x{:X}): registered", who, routine);
 
 	return STATUS_SUCCESS;
 }
 
-NTSTATUS remove_notify(std::set<addr_t>& routines, const std::string_view who, const addr_t routine)
+NTSTATUS remove_notify(std::vector<addr_t>& routines, const std::string_view who, const addr_t routine)
 {
-	if (!routines.erase(routine))
+	const auto it = std::ranges::find(routines, routine);
+
+	if (it == routines.end())
 	{
 		THREAD_LOG_WARN("{}: 0x{:X} was not registered", who, routine);
 		return STATUS_PROCEDURE_NOT_FOUND;
 	}
+
+	routines.erase(it);
 
 	THREAD_LOG_INFO("{}(0x{:X}): removed", who, routine);
 
@@ -82,7 +75,7 @@ emu_object<_EPROCESS> process_or_current(win_kernel_state& state, vcpu& cpu,
 void modules::register_ntoskrnl_process_ops(win_kernel_state& state, proc_module& mod)
 {
 	auto* st = &state;
-	auto notify = std::make_shared<notify_routines>();
+	auto* notify = state.notify_routines.get();
 
 	// The image name is fifteen bytes inside the EPROCESS, so the pointer is into the caller's own.
 	state.redirect(mod, "PsGetProcessImageFileName",
@@ -377,13 +370,14 @@ void modules::register_ntoskrnl_process_ops(win_kernel_state& state, proc_module
 			return STATUS_UNSUCCESSFUL;
 		});
 
-	// The tables are kept so a remove and a duplicate answer correctly; no notification comes.
+	// The tables are kept so a remove and a duplicate answer correctly, and the events that
+	// follow are delivered through them.
 	state.redirect(mod, "PsSetCreateProcessNotifyRoutine",
 		[notify](vcpu&, const addr_t notify_routine, const std::uint8_t remove) -> NTSTATUS
 		{
 			return remove
 				? remove_notify(notify->process, "PsSetCreateProcessNotifyRoutine", notify_routine)
-				: add_notify(notify->process, max_process_notify_routines,
+				: add_notify(notify->process, win_notify_routines::process_limit,
 					"PsSetCreateProcessNotifyRoutine", notify_routine);
 		});
 
@@ -391,15 +385,15 @@ void modules::register_ntoskrnl_process_ops(win_kernel_state& state, proc_module
 		[notify](vcpu&, const addr_t notify_routine, const std::uint8_t remove) -> NTSTATUS
 		{
 			return remove
-				? remove_notify(notify->process, "PsSetCreateProcessNotifyRoutineEx", notify_routine)
-				: add_notify(notify->process, max_process_notify_routines,
+				? remove_notify(notify->process_ex, "PsSetCreateProcessNotifyRoutineEx", notify_routine)
+				: add_notify(notify->process_ex, win_notify_routines::process_limit,
 					"PsSetCreateProcessNotifyRoutineEx", notify_routine);
 		});
 
 	state.redirect(mod, "PsSetCreateThreadNotifyRoutine",
 		[notify](vcpu&, const addr_t notify_routine) -> NTSTATUS
 		{
-			return add_notify(notify->thread, max_thread_notify_routines,
+			return add_notify(notify->thread, win_notify_routines::thread_limit,
 				"PsSetCreateThreadNotifyRoutine", notify_routine);
 		});
 
@@ -412,7 +406,7 @@ void modules::register_ntoskrnl_process_ops(win_kernel_state& state, proc_module
 	state.redirect(mod, "PsSetLoadImageNotifyRoutine",
 		[notify](vcpu&, const addr_t notify_routine) -> NTSTATUS
 		{
-			return add_notify(notify->image, max_image_notify_routines,
+			return add_notify(notify->image, win_notify_routines::image_limit,
 				"PsSetLoadImageNotifyRoutine", notify_routine);
 		});
 

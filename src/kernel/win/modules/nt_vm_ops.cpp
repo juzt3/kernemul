@@ -616,6 +616,25 @@ void modules::register_ntoskrnl_vm_ops(win_kernel_state& state, proc_module& mod
 			return STATUS_SUCCESS;
 		}
 
+		// Anything else the namespace holds and that is a section opens by its name, which is
+		// how \Device\PhysicalMemory resolves.
+		if (const auto addr = st->objs.lookup_named_object(object_namespace_key(name)))
+		{
+			if (st->objs.get_object<section_host>(addr))
+			{
+				const auto handle =
+					st->sys_proc->handle_table().create_handle(addr, desired_access);
+
+				if (section_handle)
+					section_handle.write(handle);
+
+				THREAD_LOG_INFO("NtOpenSection('{}') -> handle=0x{:X} (named section)",
+					name, handle);
+
+				return STATUS_SUCCESS;
+			}
+		}
+
 		THREAD_LOG_WARN("NtOpenSection('{}', access=0x{:X}): nothing here gives a section "
 			"that name", name, desired_access);
 
@@ -767,6 +786,19 @@ void modules::register_ntoskrnl_vm_ops(win_kernel_state& state, proc_module& mod
 				view_size.write(size);
 
 			st->views[base] = size;
+
+			// A driver watching image loads is told here, once the image is really in the space
+			// rather than when its section was made.
+			if (host->is_image)
+			{
+				const auto t = cpu.thread();
+				const auto pid = t && t->proc() ? t->proc()->id() : 0u;
+				const auto slash = host->path.find_last_of("\\/");
+				const auto label = slash == std::string::npos
+					? host->path : host->path.substr(slash + 1);
+
+				st->notify_image_load(cpu, base, size, label, pid);
+			}
 
 			const bool rebased = preferred && base != preferred;
 

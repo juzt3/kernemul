@@ -31,7 +31,9 @@ void modules::register_ntoskrnl_irql_ops(win_kernel_state& state, proc_module& m
 		return current(*st, cpu);
 	});
 
-	state.redirect(mod, "KeRaiseIrql",
+	// Not every kernel version exports these under these names: x64 has only the 'Kf' fastcall
+	// spellings for raise/lower, so each is bound when it is there and skipped when it is not.
+	state.try_redirect(mod, "KeRaiseIrql",
 		[st](vcpu& cpu, const irql_t new_irql, emu_object<irql_t> old_irql_out)
 		{
 			const auto old = raise_to(*st, cpu, new_irql);
@@ -50,7 +52,7 @@ void modules::register_ntoskrnl_irql_ops(win_kernel_state& state, proc_module& m
 		raise_to(*st, cpu, new_irql);
 	});
 
-	state.redirect(mod, "KfLowerIrql", [st](vcpu& cpu, const irql_t new_irql)
+	state.try_redirect(mod, "KfLowerIrql", [st](vcpu& cpu, const irql_t new_irql)
 	{
 		raise_to(*st, cpu, new_irql);
 	});
@@ -60,7 +62,7 @@ void modules::register_ntoskrnl_irql_ops(win_kernel_state& state, proc_module& m
 		return raise_to(*st, cpu, dispatch_level);
 	});
 
-	state.redirect(mod, "KeRaiseIrqlToSynchLevel", [st](vcpu& cpu) -> irql_t
+	state.try_redirect(mod, "KeRaiseIrqlToSynchLevel", [st](vcpu& cpu) -> irql_t
 	{
 		return raise_to(*st, cpu, dispatch_level);
 	});

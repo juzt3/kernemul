@@ -9,14 +9,24 @@
 #include "../../../util/string.hpp"
 #include <string_view>
 #include <exception>
+#include <cstdint>
+#include <vector>
 
 namespace
 {
+
+struct filter_operation
+{
+	std::uint8_t major = 0;
+	addr_t pre = 0;
+	addr_t post = 0;
+};
 
 struct filter_host final : win_object
 {
 	addr_t driver_object = 0;
 	bool filtering = false;
+	std::vector<filter_operation> operations;
 };
 
 struct port_host final : win_object
@@ -83,13 +93,46 @@ void modules::register_fltmgr(win_kernel_state& state, proc_module& mod)
 			if (!ret_filter || !registration)
 				return STATUS_INVALID_PARAMETER;
 
-			// Only the counts are read out of FLT_REGISTRATION; the callback table is the filter's.
+			// Only the counts are read out of FLT_REGISTRATION, plus the operation table: the rest of the
+			// callbacks are the filter's.
 			auto& space = *cpu.curr_addr_space();
-			const auto size = space.read_mem<std::uint16_t>(registration.address());
-			const auto version = space.read_mem<std::uint16_t>(registration.address() + 2);
+			const auto base = registration.address();
+			const auto size = space.read_mem<std::uint16_t>(base);
+			const auto version = space.read_mem<std::uint16_t>(base + 2);
+
+			// FLT_REGISTRATION: Size, Version, Flags, ContextRegistration, OperationRegistration.
+			const auto operation_registration = space.read_mem<addr_t>(base + 0x10);
 
 			auto host = std::make_shared<filter_host>();
 			host->driver_object = driver_object;
+
+			if (operation_registration)
+			{
+				// FLT_OPERATION_REGISTRATION is 0x20 bytes and ends at MajorFunction 0xFF.
+				constexpr std::size_t operation_size = 0x20;
+				constexpr std::uint8_t operation_end = 0xFF;
+
+				for (std::size_t i = 0; i < 64; ++i)
+				{
+					const auto at = operation_registration + i * operation_size;
+					const auto major = space.read_mem<std::uint8_t>(at);
+
+					if (major == operation_end)
+						break;
+
+					filter_operation op{};
+					op.major = major;
+					op.pre = space.read_mem<addr_t>(at + 0x08);
+					op.post = space.read_mem<addr_t>(at + 0x10);
+
+					THREAD_LOG_INFO("  operation[{}]: major={} pre=0x{:X} post=0x{:X}",
+						i, major, op.pre, op.post);
+
+					host->operations.push_back(op);
+				}
+			}
+
+			const auto operation_count = host->operations.size();
 
 			const auto addr = create_opaque(*st, filter_body_size, std::move(host));
 
@@ -99,8 +142,8 @@ void modules::register_fltmgr(win_kernel_state& state, proc_module& mod)
 			ret_filter.write(addr);
 
 			THREAD_LOG_INFO("FltRegisterFilter(driver=0x{:X}, registration=0x{:X}, size={}, "
-				"version={}) -> filter=0x{:X}",
-				driver_object, registration.address(), size, version, addr);
+				"version={}, {} operation(s)) -> filter=0x{:X}",
+				driver_object, registration.address(), size, version, operation_count, addr);
 
 			return STATUS_SUCCESS;
 		});
@@ -117,8 +160,10 @@ void modules::register_fltmgr(win_kernel_state& state, proc_module& mod)
 
 		host->filtering = true;
 
-		THREAD_LOG_WARN("FltStartFiltering(0x{:X}): the filter is attached, and nothing here "
-			"sends it an operation to filter", filter);
+		const auto operations = host->operations.size();
+
+		THREAD_LOG_INFO("FltStartFiltering(0x{:X}): attached, {} operation(s) registered",
+			filter, operations);
 
 		return STATUS_SUCCESS;
 	});

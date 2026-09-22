@@ -1,5 +1,6 @@
 #include "exception.hpp"
 #include "win_kernel.hpp"
+#include "thread.hpp"
 #include "unwind/unwind.hpp"
 #include "../process.hpp"
 #include "../../sym/symbol.hpp"
@@ -234,12 +235,28 @@ bool win_exception::handle(vcpu& cpu, const cpu_exception ex)
 		cpu.set_sp(saved_sp);
 	}
 
-	// A trap-flag step no frame claimed is one the kernel would clear and resume past: there is
-	// no debugger here for it to be reported to. Resuming leaves a probe that only wants to see
-	// whether one is attached from stopping the machine.
+	// A trap-flag step no frame claimed. On a real machine with no debugger attached a user-mode
+	// single step is a second-chance exception the process does not survive, while a kernel-mode
+	// one is the kernel stepping its own code and is taken and resumed. Clearing and resuming a
+	// user step is what leaves a probe alive that a real machine would have ended.
 	if (ex == cpu_exception::debug)
 	{
-		LOG_INFO("debug trap at 0x{:X} unclaimed: cleared and resumed", original_pc);
+		const bool user = dynamic_cast<win_user_proc*>(&proc) != nullptr;
+		const auto win_t = t ? std::dynamic_pointer_cast<win_thread>(t) : nullptr;
+
+		if (user && win_t)
+		{
+			LOG_WARN("debug trap at 0x{:X} unclaimed: thread {} ends with STATUS_SINGLE_STEP",
+				original_pc, win_t->id());
+
+			win_t->set_exit_status(status_single_step);
+			win_t->finish();
+			cpu.stop();
+
+			return true;
+		}
+
+		LOG_INFO("debug trap at 0x{:X} unclaimed in kernel mode: cleared and resumed", original_pc);
 		return true;
 	}
 

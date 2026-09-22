@@ -1,8 +1,11 @@
 #include "boot_seed.hpp"
 #include "win_kernel.hpp"
 #include "process_params.hpp"
+#include "../../emu/mmu.hpp"
 #include "../../util/log.hpp"
 
+#include <array>
+#include <cstring>
 #include <string>
 
 // Nothing in the emulator itself reads the registry -- it exists purely as a guest visible store
@@ -106,4 +109,47 @@ void win::seed_filesystem(win_kernel_state& state)
 		static_cast<void>(fs.create("physicaldrive" + std::to_string(i)));
 
 	LOG_INFO("filesystem: seeded boot directories and devices");
+}
+
+void win_kernel_state::seed_object_namespace()
+{
+	// PhysicalMemory is a section rather than a file: a driver opens it to read physical pages.
+	// On a real machine the name resolves and the open then turns on access, so it resolves here
+	// too -- an absent name is the tell, not a refused one. Its size is the memory this machine
+	// reports everywhere else, so the two cannot disagree.
+	{
+		constexpr std::uint64_t machine_ram = mmu::phys_size;
+
+		auto host = std::make_shared<section_host>();
+		host->path = "\\Device\\PhysicalMemory";
+		host->size = machine_ram;
+
+		const auto size = static_cast<std::int64_t>(machine_ram);
+
+		std::array<std::uint8_t, section_body_size> body{};
+		std::memcpy(body.data() + section_body_size_offset, &size, sizeof(size));
+
+		const auto addr = objs.create_object(0, body.data(), body.size(), std::move(host),
+			prot_rw | prot_supervisor);
+
+		if (addr)
+			objs.register_named_object(object_namespace_key("\\Device\\PhysicalMemory"), addr);
+	}
+
+	// The filesystems a real machine has mounted, so a walk over \FileSystem finds them rather
+	// than an empty list.
+	for (const std::string_view name : {
+		"\\FileSystem\\Ntfs", "\\FileSystem\\FastFat", "\\FileSystem\\Npfs",
+		"\\FileSystem\\Msfs", "\\FileSystem\\FltMgr",
+	})
+	{
+		const std::array<std::uint8_t, 0x10> body{};
+		const auto addr = objs.create_object(0, body.data(), body.size(),
+			std::make_shared<directory_host>(), prot_rw | prot_supervisor);
+
+		if (addr)
+			objs.register_named_object(object_namespace_key(name), addr);
+	}
+
+	LOG_INFO("object namespace: seeded \\Device\\PhysicalMemory and \\FileSystem");
 }

@@ -95,45 +95,64 @@ static addr_t init_idt(vcpu& cpu, const proc_module& ntoskrnl)
 	const addr_t idt_va = space->alloc(idt_size, prot_rw | prot_supervisor);
 
 	std::array<addr_t, idt_entries> handlers{};
-	std::size_t resolved = 0;
 
 	for (const auto& [vector, name] : ki_vectors)
 	{
 		if (const auto addr = ntoskrnl.find_symbol(name))
-		{
 			handlers[vector] = *addr;
-			++resolved;
-		}
 	}
 
-	// whp loads this table on the real cpu, so a vector the guest raises is actually taken. The
-	// ones with no handler here get a stub that returns rather than an address nothing implements.
-	constexpr std::uint8_t iretq[] = { 0x48, 0xCF };
+	// Every vector the kernel does not name gets a stub of its own rather than one shared
+	// address. A table read back then holds 256 different handlers, each a few bytes into a
+	// neighbouring run -- which is the shape a real one has, where the reserved vectors are all
+	// served by a block of stubs that differ only in where they sit.
+	constexpr std::size_t stub_stride = 16;
+	const addr_t stubs = space->alloc(idt_entries * stub_stride, prot_rx | prot_supervisor);
 
-	const addr_t stub = space->alloc(sizeof(iretq), prot_rx | prot_supervisor);
-	space->write_mem(stub, iretq, sizeof(iretq));
+	std::array<std::uint8_t, stub_stride> stub{};
+	stub[0] = 0x48; // iretq
+	stub[1] = 0xCF;
+
+	for (std::size_t i = 2; i < stub_stride; ++i)
+		stub[i] = 0x90; // nop
+
+	for (std::size_t i = 0; i < idt_entries; ++i)
+		space->write_mem(stubs + i * stub_stride, stub.data(), stub.size());
+
+	// int3, into and the two debug-service vectors are the ones a user can reach directly, so
+	// their gates carry ring 3 in the privilege field and the rest carry ring 0.
+	const auto user_callable = [](const std::size_t vector)
+	{
+		return vector == 3 || vector == 4 || vector == 45 || vector == 46;
+	};
+
+	std::size_t named = 0;
 
 	for (std::size_t i = 0; i < idt_entries; ++i)
 	{
-		const auto handler = handlers[i] ? handlers[i] : stub;
+		const auto handler = handlers[i] ? handlers[i] : stubs + i * stub_stride;
 
 		ia32::segment_descriptor_interrupt_gate_64 gate{};
 		gate.offset_low    = static_cast<std::uint16_t>(handler);
 		gate.segment_selector = kernel_cs;
 		gate.type          = SEGMENT_DESCRIPTOR_TYPE_INTERRUPT_GATE;
 		gate.present       = 1;
+		gate.descriptor_privilege_level = user_callable(i) ? 3 : 0;
 		gate.offset_middle = static_cast<std::uint16_t>(handler >> 16);
 		gate.offset_high   = static_cast<std::uint32_t>(handler >> 32);
 
 		space->write_mem(idt_va + i * sizeof(gate), gate);
+
+		if (handlers[i])
+			++named;
 	}
 
 	cpu.reg(x86::idtr, x86::seg_reg{ 0, idt_va, static_cast<std::uint32_t>(idt_size - 1), 0 });
 
 	monitor_range(*space, idt_va, idt_size, "IDT");
 
-	LOG_INFO("IDT at 0x{:X}: {} of {} vectors have their own handler, the rest return at 0x{:X}",
-		idt_va, resolved, std::size(ki_vectors), stub);
+	LOG_INFO("IDT at 0x{:X}: {} named of 256 vectors, the other {} at their own stub from 0x{:X}",
+		idt_va, named, idt_entries - named, stubs);
 
 	return idt_va;
 }

@@ -1153,21 +1153,116 @@ void modules::register_ntoskrnl_misc_ops(win_kernel_state& state, proc_module& m
 		});
 
 	state.redirect_ntzw(mod, "QueryWnfStateData",
-		[](vcpu&, const addr_t state_name, const addr_t type_id,
+		[st](vcpu& cpu, const addr_t state_name, const addr_t type_id,
 			const addr_t explicit_scope, emu_object<std::uint32_t> change_stamp,
 			const addr_t buffer, emu_object<std::uint32_t> buffer_size) -> NTSTATUS
 		{
-			if (change_stamp)
-				change_stamp.write(0);
+			auto& space = *cpu.curr_addr_space();
+
+			const auto name = state_name ? space.read_mem<std::uint64_t>(state_name) : 0;
+
+			std::vector<std::uint8_t> data;
+			std::uint32_t stamp = 0;
+
+			{
+				std::scoped_lock lock(st->wnf_mtx_);
+
+				const auto it = st->wnf_states.find(name);
+
+				if (it != st->wnf_states.end())
+				{
+					data = it->second.data;
+					stamp = it->second.stamp;
+				}
+			}
+
+			if (data.empty())
+			{
+				if (change_stamp)
+					change_stamp.write(0);
+
+				if (buffer_size)
+					buffer_size.write(0);
+
+				THREAD_LOG_WARN("NtQueryWnfStateData(name=0x{:X}, type=0x{:X}, scope=0x{:X}): "
+					"nothing here publishes that state name",
+					name, type_id, explicit_scope);
+
+				return STATUS_OBJECT_NAME_NOT_FOUND;
+			}
+
+			const auto available = buffer_size ? buffer_size.read() : 0;
+			const auto copied = std::min<std::uint32_t>(available, data.size());
+
+			if (buffer && copied)
+				space.write_mem(buffer, data.data(), copied);
 
 			if (buffer_size)
-				buffer_size.write(0);
+				buffer_size.write(static_cast<std::uint32_t>(data.size()));
 
-			THREAD_LOG_WARN("NtQueryWnfStateData(name=0x{:X}, type=0x{:X}, scope=0x{:X}, "
-				"buffer=0x{:X}): nothing here publishes a state name",
-				state_name, type_id, explicit_scope, buffer);
+			if (change_stamp)
+				change_stamp.write(stamp);
 
-			return STATUS_OBJECT_NAME_NOT_FOUND;
+			THREAD_LOG_INFO("NtQueryWnfStateData(name=0x{:X}) -> {} byte(s), stamp={}",
+				name, data.size(), stamp);
+
+			return STATUS_SUCCESS;
+		});
+
+	// A state name is only a name until something writes it, so what is written is kept and
+	// handed back to whoever asks for it.
+	state.redirect_ntzw(mod, "UpdateWnfStateData",
+		[st](vcpu& cpu, const addr_t state_name, const addr_t buffer, const std::uint32_t length,
+			const addr_t type_id, const addr_t explicit_scope,
+			const std::uint32_t matching_change_stamp, const std::uint8_t check_stamp) -> NTSTATUS
+		{
+			if (!state_name)
+				return STATUS_INVALID_PARAMETER;
+
+			auto& space = *cpu.curr_addr_space();
+			const auto name = space.read_mem<std::uint64_t>(state_name);
+
+			std::vector<std::uint8_t> data(length);
+
+			if (buffer && length)
+				space.read_mem(buffer, data.data(), length);
+
+			std::uint32_t stamp = 0;
+
+			{
+				std::scoped_lock lock(st->wnf_mtx_);
+				stamp = ++st->wnf_stamp_;
+				st->wnf_states[name] = { std::move(data), stamp };
+			}
+
+			THREAD_LOG_INFO("NtUpdateWnfStateData(name=0x{:X}, {} byte(s), type=0x{:X}, "
+				"scope=0x{:X}, matching={}, check={}) -> stamp={}",
+				name, length, type_id, explicit_scope, matching_change_stamp, check_stamp != 0,
+				stamp);
+
+			return STATUS_SUCCESS;
+		});
+
+	state.redirect_ntzw(mod, "DeleteWnfStateData",
+		[st](vcpu& cpu, const addr_t state_name, const addr_t explicit_scope) -> NTSTATUS
+		{
+			if (!state_name)
+				return STATUS_INVALID_PARAMETER;
+
+			auto& space = *cpu.curr_addr_space();
+			const auto name = space.read_mem<std::uint64_t>(state_name);
+
+			std::size_t removed = 0;
+
+			{
+				std::scoped_lock lock(st->wnf_mtx_);
+				removed = st->wnf_states.erase(name);
+			}
+
+			THREAD_LOG_INFO("NtDeleteWnfStateData(name=0x{:X}, scope=0x{:X}): {} state(s) gone",
+				name, explicit_scope, removed);
+
+			return removed ? STATUS_SUCCESS : STATUS_OBJECT_NAME_NOT_FOUND;
 		});
 
 	state.redirect_ntzw(mod, "QuerySecurityAttributesToken",

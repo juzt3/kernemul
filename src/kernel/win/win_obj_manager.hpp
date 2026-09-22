@@ -9,6 +9,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <vector>
 
 struct win_object
 {
@@ -42,6 +43,10 @@ public:
 	void register_named_object(std::string name, addr_t body_addr);
 
 	[[nodiscard]] addr_t lookup_named_object(std::string_view name) const;
+
+	// The names that sit directly under a directory, one per name, so an enumeration of a
+	// directory reflects what was actually registered in it rather than an empty answer.
+	[[nodiscard]] std::vector<std::string> child_names(std::string_view prefix) const;
 
 	// The name goes, the object stays: whoever still holds a handle to it keeps working.
 	void unregister_named_object(std::string_view name);

@@ -1,4 +1,6 @@
 #include "win_obj_manager.hpp"
+#include <algorithm>
+#include <ranges>
 
 win_obj_manager::win_obj_manager(addr_space& space)
 	:	space_(space) {}
@@ -47,6 +49,32 @@ addr_t win_obj_manager::lookup_named_object(const std::string_view name) const
 	std::scoped_lock lock(mtx_);
 	const auto it = named_.find(name);
 	return it != named_.end() ? it->second : 0;
+}
+
+std::vector<std::string> win_obj_manager::child_names(const std::string_view prefix) const
+{
+	std::vector<std::string> names;
+
+	{
+		std::scoped_lock lock(mtx_);
+
+		for (const auto& [name, _] : named_)
+		{
+			if (!name.starts_with(prefix))
+				continue;
+
+			const auto leaf = name.substr(prefix.size());
+			const auto slash = leaf.find('/');
+			const auto child = leaf.substr(0, slash);
+
+			if (!child.empty() && std::ranges::find(names, child) == names.end())
+				names.push_back(child);
+		}
+	}
+
+	std::ranges::sort(names);
+
+	return names;
 }
 
 void win_obj_manager::unregister_named_object(const std::string_view name)

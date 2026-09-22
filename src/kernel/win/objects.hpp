@@ -42,6 +42,19 @@ struct symbolic_link_host final : win_object
 	std::string target;
 };
 
+// A namespace directory. It carries its own name so a walk over it can find what is under it.
+struct directory_host final : win_object
+{
+	std::string name;
+};
+
+// A loaded kernel driver as the object manager names it under \Driver.
+struct driver_object_host final : win_object
+{
+	addr_t driver_object = 0;
+	std::string name;
+};
+
 // Object manager names are compared the way the guest writes them, which is neither consistently
 // cased nor consistently prefixed: \??\X, \DosDevices\X and \GLOBAL??\X all reach the same link.
 // win_filesystem::normalize already folds exactly that, so the device namespace is keyed through

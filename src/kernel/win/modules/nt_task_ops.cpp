@@ -258,8 +258,17 @@ void modules::register_ntoskrnl_task_ops(win_kernel_state& state, proc_module& m
 			return STATUS_NO_MEMORY;
 		}
 
-		const auto handle = st->sys_proc->handle_table().create_handle(ethread, desired_access);
+		const auto type = st->object_type_pointer("PsThreadType");
+		const auto access = st->ob_pre_handle(cpu, ethread, type,
+			ob_operation_handle_create, desired_access);
+
+		if (!access)
+			return STATUS_ACCESS_DENIED;
+
+		const auto handle = st->sys_proc->handle_table().create_handle(ethread, access);
 		thread_handle.write(handle);
+
+		st->ob_post_handle(cpu, ethread, type, ob_operation_handle_create, STATUS_SUCCESS, access);
 
 		// What the caller asked to be told about the thread it just made: kernel32 reads the
 		// thread id it returns out of the client id it asks for here.
@@ -273,7 +282,7 @@ void modules::register_ntoskrnl_task_ops(win_kernel_state& state, proc_module& m
 		return STATUS_SUCCESS;
 	};
 
-	auto open_thread = [st](vcpu&, emu_object<std::uint64_t> thread_handle,
+	auto open_thread = [st](vcpu& cpu, emu_object<std::uint64_t> thread_handle,
 		const std::uint32_t desired_access,
 		[[maybe_unused]] emu_object<_OBJECT_ATTRIBUTES> object_attributes,
 		emu_object<_CLIENT_ID> client_id) -> NTSTATUS
@@ -303,9 +312,19 @@ void modules::register_ntoskrnl_task_ops(win_kernel_state& state, proc_module& m
 		}
 
 		st->objs.reference_object(ethread);
-		const auto handle = st->sys_proc->handle_table().create_handle(ethread, desired_access);
+
+		const auto type = st->object_type_pointer("PsThreadType");
+		const auto access = st->ob_pre_handle(cpu, ethread, type,
+			ob_operation_handle_create, desired_access);
+
+		if (!access)
+			return STATUS_ACCESS_DENIED;
+
+		const auto handle = st->sys_proc->handle_table().create_handle(ethread, access);
 
 		thread_handle.write(handle);
+
+		st->ob_post_handle(cpu, ethread, type, ob_operation_handle_create, STATUS_SUCCESS, access);
 
 		THREAD_LOG_INFO("NtOpenThread(tid={}) -> handle=0x{:X}", tid, handle);
 

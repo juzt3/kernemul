@@ -31,7 +31,13 @@ enum system_information_class : std::uint32_t
 	system_code_integrity_information     = 0x67,
 
 	system_logical_processor_and_group_information = 107,
-	system_shadow_stack_information = 183,
+	system_secure_boot_information = 145,
+	system_flush_information = 192,
+	system_hypervisor_shared_page_information = 197,
+	system_shadow_stack_information = 221,
+
+	// Where the kernel half of the address space begins, which is a fixed x64 boundary.
+	system_range_start_information = 50,
 
 	// Nothing is emulated here, so this is the basic information verbatim.
 	system_emulation_basic_information = 62,
@@ -767,6 +773,71 @@ void modules::register_ntoskrnl_sysinfo_ops(win_kernel_state& state, proc_module
 			return STATUS_NOT_IMPLEMENTED;
 		}
 
+		// No hypervisor is present, so there is no shared page to name. That is the answer this
+		// class exists to give, and it agrees with the cpuid this cpu reports.
+		case system_hypervisor_shared_page_information:
+		{
+			if (return_length)
+				return_length.write(0);
+
+			THREAD_LOG_INFO("NtQuerySystemInformation(SystemHypervisorSharedPageInformation): "
+				"no hypervisor, so there is no shared page");
+
+			return STATUS_NOT_SUPPORTED;
+		}
+
+		// { BOOLEAN SecureBootEnabled, BOOLEAN SecureBootSetupMode }: there is no UEFI state
+		// here, which the firmware variable query agrees with.
+		case system_secure_boot_information:
+		{
+			constexpr std::uint8_t info[] = { 0, 0 };
+
+			if (return_length)
+				return_length.write(sizeof(info));
+
+			if (length < sizeof(info))
+				return STATUS_INFO_LENGTH_MISMATCH;
+
+			space.write_mem(system_information, info, sizeof(info));
+
+			THREAD_LOG_INFO("NtQuerySystemInformation(SystemSecureBootInformation): secure "
+				"boot off");
+
+			return STATUS_SUCCESS;
+		}
+
+		// { PVOID SystemRangeStart }: the first address of the kernel half. It is a fixed x64
+		// boundary, not something the machine chooses, so it is the same on every machine.
+		case system_range_start_information:
+		{
+			constexpr addr_t system_range_start = 0xFFFF800000000000;
+
+			if (return_length)
+				return_length.write(sizeof(system_range_start));
+
+			if (length < sizeof(system_range_start))
+				return STATUS_INFO_LENGTH_MISMATCH;
+
+			space.write_mem(system_information, system_range_start);
+
+			THREAD_LOG_INFO("NtQuerySystemInformation(SystemRangeStartInformation) -> 0x{:X}",
+				system_range_start);
+
+			return STATUS_SUCCESS;
+		}
+
+		// Flushing the file cache is a set operation, so there is no query answer to give.
+		case system_flush_information:
+		{
+			if (return_length)
+				return_length.write(0);
+
+			THREAD_LOG_INFO("NtQuerySystemInformation(SystemFlushInformation): flush is a set "
+				"operation");
+
+			return STATUS_INVALID_INFO_CLASS;
+		}
+
 		default:
 			THREAD_LOG_WARN("NtQuerySystemInformation: unhandled class {}",
 				system_information_class);
@@ -959,7 +1030,7 @@ void modules::register_ntoskrnl_sysinfo_ops(win_kernel_state& state, proc_module
 	});
 
 	state.redirect_ntzw(mod, "DuplicateObject",
-		[st](vcpu&, const std::uint64_t source_process_handle,
+		[st](vcpu& cpu, const std::uint64_t source_process_handle,
 			const std::uint64_t source_handle, const std::uint64_t target_process_handle,
 			emu_object<std::uint64_t> target_handle, const std::uint32_t desired_access,
 			const std::uint32_t handle_attributes, const std::uint32_t options) -> NTSTATUS
@@ -981,10 +1052,33 @@ void modules::register_ntoskrnl_sysinfo_ops(win_kernel_state& state, proc_module
 			if (!entry)
 				return STATUS_INVALID_HANDLE;
 
-			const auto access = (options & duplicate_same_access) ? entry->access : desired_access;
+			auto access = (options & duplicate_same_access) ? entry->access : desired_access;
+
+			// A duplicated thread handle goes through the same pre callback an open does.
+			addr_t object_type = 0;
+
+			if (st->objs.get_object<thread_object>(entry->body_addr))
+				object_type = st->object_type_pointer("PsThreadType");
+
+			if (object_type)
+			{
+				const auto allowed = st->ob_pre_handle(cpu, entry->body_addr, object_type,
+					ob_operation_handle_duplicate, access);
+
+				if (!allowed)
+					return STATUS_ACCESS_DENIED;
+
+				access = allowed;
+			}
 
 			st->objs.reference_object(entry->body_addr);
 			const auto duplicate = handles.create_handle(entry->body_addr, access);
+
+			if (object_type)
+			{
+				st->ob_post_handle(cpu, entry->body_addr, object_type,
+					ob_operation_handle_duplicate, STATUS_SUCCESS, access);
+			}
 
 			if (target_handle)
 				target_handle.write(duplicate);

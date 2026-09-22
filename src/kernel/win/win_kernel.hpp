@@ -35,6 +35,109 @@
 #include <string>
 #include <unordered_map>
 
+// The fixed tables the kernel keeps registered notify routines in, one set per event. A driver
+// that registers one expects to be called for every process, thread and image from then on.
+struct win_notify_routines
+{
+	std::vector<addr_t> process;
+	std::vector<addr_t> process_ex;
+	std::vector<addr_t> thread;
+	std::vector<addr_t> image;
+
+	static constexpr std::size_t process_limit = 64;
+	static constexpr std::size_t thread_limit = 64;
+	static constexpr std::size_t image_limit = 8;
+};
+
+#pragma pack(push, 8)
+
+// WDK structs the generated type set does not carry. The layout is the x64 one the kernel calls
+// a notify routine with.
+struct image_info_t
+{
+	std::uint32_t properties;
+	std::uint32_t padding;
+	addr_t        image_address;
+	std::uint64_t image_size;
+};
+
+struct ps_create_notify_info_t
+{
+	std::uint64_t size;
+	std::uint32_t flags;
+	std::uint32_t padding;
+	addr_t        parent_process_id;
+	addr_t        creating_process_id;
+	addr_t        creating_thread_id;
+	addr_t        file_object;
+	addr_t        image_file_name;
+	addr_t        command_line;
+	std::int32_t  creation_status;
+	std::uint32_t padding2;
+};
+
+#pragma pack(pop)
+
+// IMAGE_INFO.Properties: SystemModeImage is bit 8.
+inline constexpr std::uint32_t image_system_mode_image = 1u << 8;
+
+// OB_OPERATION bits.
+inline constexpr std::uint32_t ob_operation_handle_create = 0x1;
+inline constexpr std::uint32_t ob_operation_handle_duplicate = 0x2;
+
+// One ObRegisterCallbacks entry: the object type it watches, the handle operations it asked to
+// see, and its two callbacks. The access a pre callback hands back is the access the handle is
+// built with, which is how a driver strips rights off an open on someone else's object.
+struct ob_registration
+{
+	addr_t        registration = 0;
+	addr_t        object_type = 0;
+	std::uint32_t operations = 0;
+	addr_t        pre = 0;
+	addr_t        post = 0;
+	addr_t        context = 0;
+};
+
+#pragma pack(push, 8)
+struct ob_pre_operation_information_t
+{
+	std::uint32_t flags;
+	std::uint32_t padding;
+	addr_t        object;
+	addr_t        object_type;
+	addr_t        call_context;
+	addr_t        parameters;
+};
+
+// The create and duplicate parameter blocks share a head; duplicate carries two more pointers,
+// so one buffer covers both.
+struct ob_pre_handle_parameters_t
+{
+	std::uint32_t desired_access;
+	std::uint32_t original_desired_access;
+	addr_t        source_process;
+	addr_t        target_process;
+};
+
+struct ob_post_operation_information_t
+{
+	std::uint32_t operation;
+	std::uint32_t flags;
+	addr_t        object;
+	addr_t        object_type;
+	addr_t        call_context;
+	std::int32_t  return_status;
+	std::uint32_t padding;
+	addr_t        parameters;
+};
+
+struct ob_post_handle_parameters_t
+{
+	std::uint32_t granted_access;
+	std::uint32_t padding;
+};
+#pragma pack(pop)
+
 struct win_kernel_state : kernel_state
 {
 	win_obj_manager objs;
@@ -42,6 +145,21 @@ struct win_kernel_state : kernel_state
 	win_registry reg;
 	win_filesystem fs;
 	std::shared_ptr<win_kernel_proc> sys_proc;
+	std::shared_ptr<win_notify_routines> notify_routines = std::make_shared<win_notify_routines>();
+
+	std::vector<ob_registration> ob_registrations;
+	std::mutex ob_mtx_;
+
+	// WNF state: what a writer published under a state name, and the stamp it published with.
+	struct wnf_state
+	{
+		std::vector<std::uint8_t> data;
+		std::uint32_t stamp = 0;
+	};
+
+	std::unordered_map<std::uint64_t, wnf_state> wnf_states;
+	std::mutex wnf_mtx_;
+	std::uint32_t wnf_stamp_ = 0;
 	loaded_module_list_t loaded_module_list;
 	active_process_list_t active_process_list;
 	emu_object<_KUSER_SHARED_DATA> kuser_shared_data;
@@ -171,6 +289,7 @@ struct win_kernel_state : kernel_state
 
 		win::seed_registry(*this);
 		win::seed_filesystem(*this);
+		seed_object_namespace();
 
 		space.mmu_->map_virt(space, kuser_shared_data_kernel_va,
 			sizeof(_KUSER_SHARED_DATA), prot_rw | prot_supervisor);
@@ -368,6 +487,270 @@ struct win_kernel_state : kernel_state
 		return it != ldr_entries_.end() ? it->second : 0;
 	}
 
+	// A notify routine is guest code, so it is entered the way a dispatch routine is: on the cpu
+	// whose event it is, with the arguments the kernel passes and its return read back.
+	void notify_process_create(vcpu& cpu, const addr_t eprocess, const addr_t parent_eprocess,
+		const std::uint32_t parent_pid, const std::uint32_t pid, const bool create)
+	{
+		if (!notify_routines)
+			return;
+
+		if (notify_routines->process.empty() && notify_routines->process_ex.empty())
+			return;
+
+		// The plain signature carries ids, not objects, and is the one an older driver registered.
+		for (const auto routine : notify_routines->process)
+		{
+			THREAD_LOG_INFO("create-process notify 0x{:X}: parent={} pid={} create={}",
+				routine, parent_pid, pid, create);
+
+			const std::uint64_t args[] = {
+				static_cast<std::uint64_t>(parent_pid),
+				static_cast<std::uint64_t>(pid),
+				static_cast<std::uint64_t>(create),
+			};
+
+			calls.call(cpu, routine, args);
+		}
+
+		if (notify_routines->process_ex.empty())
+			return;
+
+		auto& space = kernel_space();
+
+		ps_create_notify_info_t info{};
+		info.size = sizeof(ps_create_notify_info_t);
+		info.parent_process_id = parent_pid;
+		info.creating_process_id = pid;
+		info.creation_status = create ? 0 : static_cast<std::int32_t>(STATUS_PROCESS_IS_TERMINATING);
+
+		auto info_obj = emu_object<ps_create_notify_info_t>::allocate(
+			space, "PS_CREATE_NOTIFY_INFO");
+
+		if (!info_obj)
+			return;
+
+		info_obj.write(info);
+
+		for (const auto routine : notify_routines->process_ex)
+		{
+			THREAD_LOG_INFO("create-process ex notify 0x{:X}: process=0x{:X} pid={} create={}",
+				routine, eprocess, pid, create);
+
+			const std::uint64_t args[] = {
+				eprocess,
+				static_cast<std::uint64_t>(pid),
+				create ? info_obj.address() : addr_t{ 0 },
+			};
+
+			calls.call(cpu, routine, args);
+		}
+	}
+
+	void notify_thread_create(vcpu& cpu, const std::uint32_t pid, const std::uint32_t tid,
+		const bool create)
+	{
+		if (!notify_routines)
+			return;
+
+		for (const auto routine : notify_routines->thread)
+		{
+			THREAD_LOG_INFO("create-thread notify 0x{:X}: pid={} tid={} create={}",
+				routine, pid, tid, create);
+
+			const std::uint64_t args[] = {
+				static_cast<std::uint64_t>(pid),
+				static_cast<std::uint64_t>(tid),
+				static_cast<std::uint64_t>(create),
+			};
+
+			calls.call(cpu, routine, args);
+		}
+	}
+
+	// The name is what the kernel reports, so it is a fully qualified system path rather than the
+	// section or file name the mapping itself was reached through.
+	void notify_image_load(vcpu& cpu, const addr_t base, const std::uint64_t size,
+		const std::string_view name, const std::uint32_t pid)
+	{
+		if (!base || !notify_routines || notify_routines->image.empty())
+			return;
+
+		auto& space = kernel_space();
+
+		const auto wide = std::u16string(u"\\SystemRoot\\System32\\") + widen_string(name);
+		const auto name_obj = win::allocate_unicode_string(space, wide, "ImageNotifyName");
+
+		image_info_t value{};
+		value.properties = image_system_mode_image;
+		value.image_address = base;
+		value.image_size = size;
+
+		auto info = emu_object<image_info_t>::allocate(space, "IMAGE_INFO");
+
+		if (!info)
+			return;
+
+		info.write(value);
+
+		for (const auto routine : notify_routines->image)
+		{
+			THREAD_LOG_INFO("load-image notify 0x{:X}: '{}' at 0x{:X} ({} bytes), pid={}",
+				routine, narrow_wstring(wide), base, size, pid);
+
+			const std::uint64_t args[] = {
+				name_obj.address(),
+				static_cast<std::uint64_t>(pid),
+				info.address(),
+			};
+
+			calls.call(cpu, routine, args);
+		}
+	}
+
+	// The object type a driver names when it registers, read out of the kernel global that holds
+	// it -- PsProcessType, PsThreadType -- so a registration can be matched against an object.
+	addr_t object_type_pointer(const std::string_view symbol)
+	{
+		if (!sys_proc)
+			return 0;
+
+		const auto nt = sys_proc->find_module("ntoskrnl.exe");
+
+		if (!nt)
+			return 0;
+
+		const auto global = nt->find_symbol(symbol);
+
+		if (!global)
+			return 0;
+
+		return kernel_space().read_mem<addr_t>(*global);
+	}
+
+	// Runs every pre callback registered for the object's type and returns the access that is
+	// left. A callback that is not SUCCESS denies the open outright, which is reported as zero.
+	std::uint32_t ob_pre_handle(vcpu& cpu, const addr_t object, const addr_t object_type,
+		const std::uint32_t operation, const std::uint32_t desired_access,
+		const addr_t source_process = 0, const addr_t target_process = 0)
+	{
+		std::vector<ob_registration> matches;
+
+		{
+			std::scoped_lock lock(ob_mtx_);
+
+			for (const auto& r : ob_registrations)
+			{
+				if (r.pre && (r.operations & operation) && r.object_type == object_type)
+					matches.push_back(r);
+			}
+		}
+
+		if (matches.empty())
+			return desired_access;
+
+		auto& space = kernel_space();
+
+		auto params = emu_object<ob_pre_handle_parameters_t>::allocate(space, "OB_PRE_PARAMS");
+		auto info = emu_object<ob_pre_operation_information_t>::allocate(space, "OB_PRE_INFO");
+
+		if (!params || !info)
+			return desired_access;
+
+		ob_pre_handle_parameters_t value{};
+		value.desired_access = desired_access;
+		value.original_desired_access = desired_access;
+		value.source_process = source_process;
+		value.target_process = target_process;
+
+		ob_pre_operation_information_t header{};
+		header.flags = operation << 1;
+		header.object = object;
+		header.object_type = object_type;
+		header.parameters = params.address();
+
+		auto access = desired_access;
+
+		for (const auto& r : matches)
+		{
+			value.desired_access = access;
+			params.write(value);
+			info.write(header);
+
+			THREAD_LOG_INFO("Ob pre callback 0x{:X}: object=0x{:X} type=0x{:X} op={} "
+				"access=0x{:X}", r.pre, object, object_type, operation, access);
+
+			const std::uint64_t args[] = { r.context, info.address() };
+
+			calls.call(cpu, r.pre, args);
+
+			const auto updated = params.read();
+
+			if (updated.desired_access == 0)
+			{
+				THREAD_LOG_WARN("Ob pre callback 0x{:X}: access stripped to nothing, so the "
+					"open is refused", r.pre);
+				return 0;
+			}
+
+			access = updated.desired_access;
+		}
+
+		return access;
+	}
+
+	void ob_post_handle(vcpu& cpu, const addr_t object, const addr_t object_type,
+		const std::uint32_t operation, const std::int32_t status,
+		const std::uint32_t granted_access)
+	{
+		std::vector<ob_registration> matches;
+
+		{
+			std::scoped_lock lock(ob_mtx_);
+
+			for (const auto& r : ob_registrations)
+			{
+				if (r.post && (r.operations & operation) && r.object_type == object_type)
+					matches.push_back(r);
+			}
+		}
+
+		if (matches.empty())
+			return;
+
+		auto& space = kernel_space();
+
+		auto params = emu_object<ob_post_handle_parameters_t>::allocate(
+			space, "OB_POST_PARAMS");
+		auto info = emu_object<ob_post_operation_information_t>::allocate(
+			space, "OB_POST_INFO");
+
+		if (!params || !info)
+			return;
+
+		ob_post_handle_parameters_t value{};
+		value.granted_access = granted_access;
+		params.write(value);
+
+		ob_post_operation_information_t header{};
+		header.operation = operation;
+		header.object = object;
+		header.object_type = object_type;
+		header.return_status = status;
+		header.parameters = params.address();
+		info.write(header);
+
+		for (const auto& r : matches)
+		{
+			THREAD_LOG_INFO("Ob post callback 0x{:X}: object=0x{:X} op={} status=0x{:X}",
+				r.post, object, operation, status);
+
+			const std::uint64_t args[] = { r.context, info.address() };
+
+			calls.call(cpu, r.post, args);
+		}
+	}
+
 	struct driver_entry_args
 	{
 		emu_object<_DRIVER_OBJECT> driver_object;
@@ -393,6 +776,11 @@ struct win_kernel_state : kernel_state
 
 		emu_object<_DRIVER_OBJECT> obj(space, body,
 			std::format("DRIVER_OBJECT[{}]", mod.name), true);
+
+		// The driver object is what \Driver\<service> names, which is where a walk over \Driver
+		// opens it -- so the object behind the name is the real one, not a placeholder.
+		objs.register_named_object(object_namespace_key(
+			"\\Driver\\" + narrow_wstring(std::u16string(service_name))), body);
 
 		const std::u16string reg_path_str =
 			std::u16string(driver_services_key) + std::u16string(service_name);
@@ -471,6 +859,10 @@ struct win_kernel_state : kernel_state
 		if (!name.empty())
 			objs.unregister_named_object(object_namespace_key(name));
 	}
+
+	// The object namespace entries a real machine has: \Device\PhysicalMemory and the
+	// filesystem directory a driver walks to see what is mounted.
+	void seed_object_namespace();
 
 	// A name in the device namespace, which is a device object or a link standing for one. Links
 	// are followed rather than resolved once, so a link to a link still lands on the device; the
@@ -917,6 +1309,11 @@ public:
 		}
 
 		proc->set_image_base(image->addr);
+
+		// Announced before its loader thread starts, the way a process notify routine is titled:
+		// it is told about the process, and a thread of it only exists afterwards.
+		kernel_.notify_process_create(cpu, proc->eprocess().address(),
+			kernel_.sys_proc->eprocess().address(), kernel_.sys_proc->id(), proc->id(), true);
 
 		const auto ldr_init = ntdll->find_symbol(loader_thread_startup);
 
