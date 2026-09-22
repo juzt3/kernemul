@@ -6,6 +6,9 @@
 #include "../../sym/symbol.hpp"
 #include "../../emu/emu.hpp"
 #include "../../util/log.hpp"
+#include <mutex>
+#include <unordered_map>
+#include <vector>
 
 namespace win
 {
@@ -35,6 +38,51 @@ bool is_gs_handler(addr_space& space, const addr_t handler)
 	}
 
 	return true;
+}
+
+// A single-step probe raises the same trap again and again at the same /GS frame, and each one
+// fails the cookie check the same way, so repeats are one entry with a count rather than a line
+// per attempt. The first is logged in full, a heartbeat keeps a long run alive, and the count is
+// closed when the handler changes.
+struct gs_mismatch_state
+{
+	std::uint32_t tid = 0;
+	addr_t handler = 0;
+	std::size_t count = 0;
+};
+
+std::mutex gs_mismatch_mtx;
+std::unordered_map<std::uint32_t, gs_mismatch_state> gs_mismatches;
+
+void note_gs_mismatch(const std::uint32_t tid, const addr_t handler, const std::size_t depth)
+{
+	std::lock_guard lock(gs_mismatch_mtx);
+
+	auto& g = gs_mismatches[tid];
+
+	if (g.tid == tid && g.handler == handler && g.count)
+	{
+		++g.count;
+
+		if ((g.count % 256) == 0)
+		{
+			LOG_WARN("  frame[{}]: GS cookie mismatch at 0x{:X} ({} so far) -- a real machine "
+				"would fastfail, so the walk moves on", depth, handler, g.count);
+		}
+	}
+	else
+	{
+		if (g.tid != 0 && g.count > 1)
+		{
+			LOG_WARN("  GS cookie mismatch at 0x{:X}: {} frames -- a real machine would fastfail "
+				"on the first, so the walk moves on", g.handler, g.count);
+		}
+
+		g = gs_mismatch_state{ tid, handler, 1 };
+
+		LOG_WARN("  frame[{}]: GS cookie mismatch at 0x{:X} -- a real machine would fastfail, "
+			"so the walk moves on", depth, handler);
+	}
 }
 
 }
@@ -220,8 +268,7 @@ bool win_exception::handle(vcpu& cpu, const cpu_exception ex)
 			}
 			else
 			{
-				LOG_ERR("  frame[{}]: GS cookie mismatch at 0x{:X}; the walk moves on, where a "
-					"real machine would fault on the check", depth, result.handler);
+				note_gs_mismatch(t ? t->id() : 0u, result.handler, depth);
 			}
 
 			continue;
