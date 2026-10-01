@@ -140,6 +140,23 @@ enum sid_attributes : std::uint32_t
 constexpr std::uint8_t security_mandatory_label_authority = 16;
 constexpr std::uint32_t security_mandatory_high_rid = 12288;
 
+// A WDK struct the generated types do not carry. The layout is the x64 one.
+struct token_statistics
+{
+	_LUID token_id;
+	_LUID authentication_id;
+	std::uint64_t expiration_time;
+	std::int32_t token_type;
+	std::int32_t impersonation_level;
+	std::uint32_t dynamic_charged;
+	std::uint32_t dynamic_available;
+	std::uint32_t group_count;
+	std::uint32_t privilege_count;
+	_LUID modified_id;
+};
+
+static_assert(sizeof(token_statistics) == 0x38, "TOKEN_STATISTICS");
+
 // Recovered from the binary -- SeRegisterImageVerificationCallback has no documented prototype.
 enum image_verification_type : std::uint32_t
 {
@@ -808,6 +825,181 @@ void modules::register_ntoskrnl_misc_ops(win_kernel_state& state, proc_module& m
 				token, token_information_class);
 
 			return STATUS_INVALID_INFO_CLASS;
+		});
+
+	// There is no real token behind a handle here, so every answer is a fixed shape: a
+	// high-integrity system user. Only the classes a loader or a client reads are answered.
+	state.redirect_ntzw(mod, "QueryInformationToken",
+		[st](vcpu& cpu, const std::uint64_t token_handle, const std::uint32_t info_class,
+			const addr_t token_information, const std::uint32_t token_length,
+			emu_object<std::uint32_t> return_length) -> NTSTATUS
+		{
+			if (return_length)
+				return_length.write(0);
+
+			auto& space = *cpu.curr_addr_space();
+
+			const auto sid_bytes = sizeof(_SID);
+			const auto sid_and_attributes_bytes = sizeof(_SID_AND_ATTRIBUTES) + sid_bytes;
+
+			const auto write_sid = [&](const addr_t at, const std::uint8_t authority,
+				const std::uint32_t rid)
+			{
+				_SID sid{};
+				sid.Revision = 1;
+				sid.SubAuthorityCount = 1;
+				sid.IdentifierAuthority.Value[5] = authority;
+				sid.SubAuthority[0] = rid;
+
+				emu_object<_SID>(space, at).write(sid);
+			};
+
+			const auto write_label = [&](const addr_t at, const std::uint8_t authority,
+				const std::uint32_t rid, const std::uint32_t attributes)
+			{
+				const auto sid_addr = at + sizeof(_SID_AND_ATTRIBUTES);
+				write_sid(sid_addr, authority, rid);
+
+				_SID_AND_ATTRIBUTES entry{};
+				entry.Sid = guest_ptr<void>(sid_addr);
+				entry.Attributes = attributes;
+
+				emu_object<_SID_AND_ATTRIBUTES>(space, at).write(entry);
+			};
+
+			const auto emit = [&](const std::size_t need, auto&& write) -> NTSTATUS
+			{
+				if (return_length)
+					return_length.write(static_cast<std::uint32_t>(need));
+
+				if (!token_information || token_length < need)
+					return STATUS_BUFFER_TOO_SMALL;
+
+				write();
+				return STATUS_SUCCESS;
+			};
+
+			NTSTATUS status = STATUS_INVALID_INFO_CLASS;
+
+			switch (info_class)
+			{
+			case 1: // TokenUser
+			case 4: // TokenOwner
+			case 5: // TokenPrimaryGroup
+				status = emit(sid_and_attributes_bytes, [&]
+				{ write_label(token_information, 5, 18, 0); });
+				break;
+
+			case 2:  // TokenGroups
+			case 3:  // TokenPrivileges
+			case 11: // TokenRestrictedSids
+			case 30: // TokenCapabilities
+				status = emit(sizeof(std::uint32_t), [&]
+				{ space.write_mem<std::uint32_t>(token_information, 0); });
+				break;
+
+			case 6: // TokenDefaultDacl
+				status = emit(sizeof(addr_t), [&]
+				{ space.write_mem<addr_t>(token_information, 0); });
+				break;
+
+			case 7: // TokenSource
+				status = emit(sizeof(_TOKEN_SOURCE), [&]
+				{
+					_TOKEN_SOURCE source{};
+					space.write_mem(token_information, source);
+				});
+				break;
+
+			case 8: // TokenType -> TokenPrimary
+				status = emit(sizeof(std::uint32_t), [&]
+				{ space.write_mem<std::uint32_t>(token_information, 1); });
+				break;
+
+			case 9: // TokenImpersonationLevel
+				status = emit(sizeof(std::uint32_t), [&]
+				{ space.write_mem<std::uint32_t>(token_information, 2); });
+				break;
+
+			case 10: // TokenStatistics
+				status = emit(sizeof(token_statistics), [&]
+				{
+					token_statistics stats{};
+					stats.token_type = 1;
+					stats.impersonation_level = 2;
+					stats.modified_id.LowPart = 1;
+					space.write_mem(token_information, stats);
+				});
+				break;
+
+			case 12: // TokenSessionId
+				status = emit(sizeof(std::uint32_t), [&]
+				{ space.write_mem<std::uint32_t>(token_information, 1); });
+				break;
+
+			case 17: // TokenOrigin
+				status = emit(sizeof(_LUID), [&]
+				{
+					_LUID origin{};
+					space.write_mem(token_information, origin);
+				});
+				break;
+
+			case 18: // TokenElevationType -> TokenElevationTypeFull
+				status = emit(sizeof(std::uint32_t), [&]
+				{ space.write_mem<std::uint32_t>(token_information, 2); });
+				break;
+
+			case 19: // TokenLinkedToken
+				status = emit(sizeof(addr_t), [&]
+				{ space.write_mem<addr_t>(token_information, 0); });
+				break;
+
+			case 20: // TokenElevation
+				status = emit(sizeof(std::uint32_t), [&]
+				{ space.write_mem<std::uint32_t>(token_information, 1); });
+				break;
+
+			case 21: // TokenHasRestrictions
+			case 23: // TokenVirtualizationAllowed
+			case 24: // TokenVirtualizationEnabled
+			case 26: // TokenUIAccess
+			case 29: // TokenIsAppContainer
+			case 32: // TokenAppContainerNumber
+			case 40: // TokenIsRestricted
+				status = emit(sizeof(std::uint32_t), [&]
+				{ space.write_mem<std::uint32_t>(token_information, 0); });
+				break;
+
+			case 25: // TokenIntegrityLevel
+				status = emit(sid_and_attributes_bytes, [&]
+				{
+					write_label(token_information, security_mandatory_label_authority,
+						security_mandatory_high_rid, se_group_integrity);
+				});
+				break;
+
+			case 27: // TokenMandatoryPolicy
+				status = emit(sizeof(std::uint32_t), [&]
+				{ space.write_mem<std::uint32_t>(token_information, 1); });
+				break;
+
+			case 28: // TokenLogonSid
+				status = emit(sid_and_attributes_bytes, [&]
+				{ write_label(token_information, 5, 18, 0); });
+				break;
+
+			default:
+				THREAD_LOG_WARN("NtQueryInformationToken(handle=0x{:X}, class={}): unhandled class",
+					token_handle, info_class);
+				return STATUS_INVALID_INFO_CLASS;
+			}
+
+			THREAD_LOG_INFO("NtQueryInformationToken(handle=0x{:X}, class={}, buffer={}/{}): {} bytes",
+				token_handle, info_class, token_information, token_length,
+				return_length ? return_length.read() : 0);
+
+			return status;
 		});
 
 	state.redirect(mod, "SeRegisterImageVerificationCallback",

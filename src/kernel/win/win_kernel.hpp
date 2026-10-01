@@ -363,6 +363,61 @@ struct win_kernel_state : kernel_state
 	void set_emulator(windows_emulator* e) { emulator_ = e; }
 	[[nodiscard]] windows_emulator* emulator() const noexcept { return emulator_; }
 
+	// A driver callback is guest code in a supervisor page, but a user thread's syscall is what
+	// often reaches it. The emulator owns the mode switch (only it knows the arch), so it hands
+	// the pair here and a callback is invoked with the kernel's selectors, then the caller's put
+	// back. Both are empty on an emulator that never changes mode, and a callback is then only
+	// ever reached from code already in kernel mode.
+	std::function<bool(vcpu&)> in_kernel_mode;
+	std::function<void(vcpu&, bool)> switch_kernel_mode;
+	// A supervisor stack top for a callback a user thread reached, empty when there is none.
+	std::function<addr_t(vcpu&)> guest_kernel_stack;
+
+	// The callback stack is guarded here, at the call, because only this layer takes the stack.
+	std::function<addr_t(vcpu&)> acquire_guest_kernel_stack;
+	std::function<void(vcpu&)> release_guest_kernel_stack_fn;
+
+	std::uint64_t call_guest_kernel(vcpu& cpu, const addr_t routine,
+		const std::span<const std::uint64_t> args, const std::size_t scratch = 0)
+	{
+		const bool already = !in_kernel_mode || in_kernel_mode(cpu);
+		const auto saved_sp = cpu.sp();
+		bool stack_taken = false;
+
+		if (!already)
+		{
+			if (switch_kernel_mode)
+				switch_kernel_mode(cpu, true);
+
+			// The stack the user thread is on is a user page, which SMAP forbids a ring-0
+			// callback from writing, so the callback gets a supervisor stack of its own.
+			if (guest_kernel_stack)
+				if (const auto top = guest_kernel_stack(cpu))
+				{
+					cpu.set_sp(top);
+					stack_taken = true;
+				}
+		}
+
+		const auto result = calls.call(cpu, routine, args, scratch);
+
+		if (!already)
+		{
+			if (stack_taken)
+			{
+				cpu.set_sp(saved_sp);
+
+				if (release_guest_kernel_stack_fn)
+					release_guest_kernel_stack_fn(cpu);
+			}
+
+			if (switch_kernel_mode)
+				switch_kernel_mode(cpu, false);
+		}
+
+		return result;
+	}
+
 	// KUSER_SHARED_DATA is built before any cpu exists, so its count starts as a placeholder.
 	// So do ntoskrnl's two copies of the same fact, which is why they are finished here too.
 	void publish_processor_count(const std::size_t processors)
@@ -510,7 +565,7 @@ struct win_kernel_state : kernel_state
 				static_cast<std::uint64_t>(create),
 			};
 
-			calls.call(cpu, routine, args);
+			call_guest_kernel(cpu, routine, args);
 		}
 
 		if (notify_routines->process_ex.empty())
@@ -543,7 +598,7 @@ struct win_kernel_state : kernel_state
 				create ? info_obj.address() : addr_t{ 0 },
 			};
 
-			calls.call(cpu, routine, args);
+			call_guest_kernel(cpu, routine, args);
 		}
 	}
 
@@ -564,7 +619,7 @@ struct win_kernel_state : kernel_state
 				static_cast<std::uint64_t>(create),
 			};
 
-			calls.call(cpu, routine, args);
+			call_guest_kernel(cpu, routine, args);
 		}
 	}
 
@@ -604,7 +659,7 @@ struct win_kernel_state : kernel_state
 				info.address(),
 			};
 
-			calls.call(cpu, routine, args);
+			call_guest_kernel(cpu, routine, args);
 		}
 	}
 
@@ -682,7 +737,7 @@ struct win_kernel_state : kernel_state
 
 			const std::uint64_t args[] = { r.context, info.address() };
 
-			calls.call(cpu, r.pre, args);
+			call_guest_kernel(cpu, r.pre, args);
 
 			const auto updated = params.read();
 
@@ -747,7 +802,7 @@ struct win_kernel_state : kernel_state
 
 			const std::uint64_t args[] = { r.context, info.address() };
 
-			calls.call(cpu, r.post, args);
+			call_guest_kernel(cpu, r.post, args);
 		}
 	}
 
@@ -1030,6 +1085,16 @@ public:
 		kernel_.sys_proc->set_scheduler(&scheduler_);
 		kernel_.sys_proc->set_emulator(this);
 		kernel_.set_emulator(this);
+		kernel_.in_kernel_mode = [this](vcpu& cpu) { return is_kernel_mode(cpu); };
+		kernel_.switch_kernel_mode = [this](vcpu& cpu, const bool kernel)
+		{
+			set_kernel_mode(cpu, kernel);
+		};
+		kernel_.guest_kernel_stack = [this](vcpu& cpu) { return kernel_callback_stack(cpu); };
+		kernel_.release_guest_kernel_stack_fn = [this](vcpu& cpu)
+		{
+			release_guest_kernel_stack(cpu);
+		};
 		excp_ = std::make_shared<win::win_exception>(kernel_);
 
 		emu_->hook_insn(0, std::numeric_limits<addr_t>::max(), hook_insn_t::syscall,
@@ -1147,6 +1212,56 @@ public:
 	// at CPL 3, but whp runs the guest on the real cpu and does, so the mode is raised either way.
 	virtual void set_kernel_mode(vcpu&, bool) {}
 
+	// The other half: whether the cpu is currently running with those selectors. A callback
+	// reached from a user thread's syscall needs the switch; one reached from code already in
+	// the kernel does not, and switching it back would put the caller in the wrong mode.
+	[[nodiscard]] virtual bool is_kernel_mode(vcpu&) const { return true; }
+
+	// A supervisor stack for a driver callback reached from a user thread's syscall. One per cpu,
+	// made on demand in the kernel's own space, whose kernel half every space aliases.
+	addr_t kernel_callback_stack(vcpu& cpu)
+	{
+		// Kernel callbacks and IRP dispatch both run on the cpu's stack, and neither nests (the
+		// guest does not recursively dispatch an irp), so one holder per cpu keeps a second
+		// caller off a stack already in use rather than letting the two walk over each other.
+		const auto id = static_cast<std::size_t>(cpu.id());
+
+		if (id >= kernel_callback_stacks_.size())
+			kernel_callback_stacks_.resize(id + 1, 0);
+
+		if (kernel_callback_stacks_[id])
+			return 0;
+
+		kernel_callback_stacks_[id] = 1;
+		return callback_stack_top(id);
+	}
+
+	void release_guest_kernel_stack(vcpu& cpu)
+	{
+		const auto id = static_cast<std::size_t>(cpu.id());
+
+		if (id < kernel_callback_stacks_.size())
+			kernel_callback_stacks_[id] = 0;
+	}
+
+private:
+	addr_t callback_stack_top(const std::size_t id)
+	{
+		if (callback_stack_tops_.size() <= id)
+			callback_stack_tops_.resize(id + 1, 0);
+
+		if (!callback_stack_tops_[id])
+		{
+			constexpr std::size_t size = 0x8000;
+			const auto base = emu_->default_addr_space()->alloc(size, prot_rw | prot_supervisor);
+			callback_stack_tops_[id] = base ? base + size : 0;
+		}
+
+		return callback_stack_tops_[id];
+	}
+
+public:
+
 	// Builds a request the way the io manager does, hands it to the driver's dispatch routine and
 	// reads the result back out of it. It runs on the calling thread's own cpu: driver code and
 	// device objects live in the kernel half, which every address space aliases, so there is
@@ -1257,11 +1372,9 @@ public:
 		emu_object<_IRP>(space, irp).write(body);
 		emu_object<_IO_STACK_LOCATION>(space, stack_addr).write(stack);
 
-		// Driver code lives in supervisor pages, so the dispatch runs in kernel mode and the
-		// caller's thread goes back to user mode after it.
-		set_kernel_mode(cpu, true);
-		kernel_.calls.call(cpu, routine, { { req.device_object, irp } });
-		set_kernel_mode(cpu, false);
+		// Driver code lives in supervisor pages, so the dispatch runs in kernel mode on a
+		// supervisor stack and the caller's thread goes back to user mode after it.
+		kernel_.call_guest_kernel(cpu, routine, { { req.device_object, irp } });
 
 		const emu_object<_IRP> done(space, irp);
 		const auto io_status = done.field(&_IRP::IoStatus).read();
@@ -1362,6 +1475,8 @@ public:
 
 private:
 	win_kernel_state kernel_;
+	std::vector<addr_t> kernel_callback_stacks_;
+	std::vector<addr_t> callback_stack_tops_;
 };
 
 inline std::shared_ptr<process> win_kernel_state::create_process(const std::string_view name)

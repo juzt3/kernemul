@@ -128,6 +128,15 @@ public:
 			x86_win_seg::swap_to_kernel_segments(cpu);
 		else
 			x86_win_seg::swap_to_usermode_segments(cpu);
+
+		// A ring change mid-run has to reach the backend that keys on it, or the next
+		// usermode syscall would run natively instead of being dispatched.
+		emu().sync_syscall_enable(cpu);
+	}
+
+	[[nodiscard]] bool is_kernel_mode(vcpu& cpu) const override
+	{
+		return (cpu.reg<x86::seg_reg>(x86::cs).selector & 3) == 0;
 	}
 
 	void init_thread_teb(thread& t, vcpu& cpu, addr_t teb_addr) override

@@ -217,6 +217,11 @@ public:
 	virtual hook_handle hook_exception(exception_hk_cb) = 0;
 	virtual void remove_hook(hook_handle handle) = 0;
 
+	// The ring a cpu is about to run in can decide backend state (whp ties EFER.SCE to it).
+	// A ring change that happens inside a run -- a kernel callback a user thread reached --
+	// has to say so; a backend with no such state does nothing.
+	virtual void sync_syscall_enable(vcpu&) {}
+
 	// Run fn with no cpu executing guest code.
 	virtual void run_on_all(const std::function<void()>& fn) { fn(); }
 

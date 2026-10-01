@@ -176,12 +176,23 @@ struct kernel_state
 		auto a = emu_->arch();
 
 		emu_->hook_code(mod.addr, mod.addr + mod.size - 1,
-			[redirections, m, a](vcpu& cpu, addr_t addr, std::size_t)
+			[this, redirections, m, a](vcpu& cpu, addr_t addr, std::size_t)
 			{
 				const auto it = redirections->find(addr);
 
 				if (it != redirections->end())
 				{
+					// Observed before the handler runs: the VM's current handler pointer (rbp)
+					// and the guest return address are only valid at the call site.
+					if (on_redirect)
+					{
+						const auto& nm = redirect_names_.contains(addr)
+							? redirect_names_[addr]
+							: name_at(*m, addr);
+
+						on_redirect(cpu, m->name, nm, addr);
+					}
+
 					// The throw would otherwise unwind through the emulator's own C frames.
 					try
 					{
@@ -218,6 +229,7 @@ struct kernel_state
 			return false;
 
 		redirections_[*addr] = std::move(fn);
+		redirect_names_[*addr] = std::string(name);
 
 		return true;
 	}
@@ -248,9 +260,15 @@ struct kernel_state
 		return it != redirections_.end() ? &it->second : nullptr;
 	}
 
+	// Optional observer for every redirected kernel export call, for correlating the guest call
+	// site (and the VM handler pointer in rbp) with the API being invoked. Null unless a consumer
+	// installs one.
+	std::function<void(vcpu&, const std::string&, const std::string&, addr_t)> on_redirect;
+
 protected:
 	std::shared_ptr<class emu> emu_;
 	std::shared_mutex proc_mtx_;
 	std::map<process::id_type, std::shared_ptr<process>> processes;
 	std::unordered_map<addr_t, redirect_fn> redirections_;
+	std::unordered_map<addr_t, std::string> redirect_names_;
 };

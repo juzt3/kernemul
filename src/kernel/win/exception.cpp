@@ -144,6 +144,28 @@ bool win_exception::handle(vcpu& cpu, const cpu_exception ex)
 	LOG_INFO("exception dispatch: code=0x{:X}, rip={}, address=0x{:X}", code,
 		symbols::format_addr(proc, original_pc), cpu.arch()->fault_addr(cpu));
 
+	// For a user fault, show the top of the user stack so the failing call chain is visible.
+	if (dynamic_cast<win_user_proc*>(&proc))
+	{
+		const auto sp = cpu.sp();
+
+		for (int i = 0; i < 20; ++i)
+		{
+			addr_t w = 0;
+
+			try
+			{
+				w = cpu.read_virt_mem<addr_t>(sp + i * 8);
+			}
+			catch (const std::exception&)
+			{
+				break;
+			}
+
+			LOG_INFO("  user stack[{:2}] 0x{:X} {}", i, w, symbols::format_addr(proc, w));
+		}
+	}
+
 	exception_info info{};
 	info.code = code;
 	info.exception_address = original_pc;

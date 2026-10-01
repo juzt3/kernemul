@@ -645,6 +645,58 @@ void modules::register_ntoskrnl_vm_ops(win_kernel_state& state, proc_module& mod
 			}
 		}
 
+		// The loader resolves KnownDlls through the object namespace as image sections. There is no
+		// \KnownDlls tree here, so a bare DLL name (or one under \KnownDlls) is resolved to the
+		// System32 file and opened as an image section, which is what the loader maps.
+		{
+			std::string base = name;
+			const auto slash = base.find_last_of("/\\");
+
+			if (slash != std::string::npos)
+				base = base.substr(slash + 1);
+
+			std::string lower = base;
+
+			for (auto& c : lower)
+				c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+			if (lower.size() > 4 && lower.ends_with(".dll"))
+			{
+				const auto path = "c:/windows/system32/" + lower;
+
+				if (auto file = st->fs.open(path))
+				{
+					auto host = std::make_shared<section_host>();
+					host->path = path;
+					host->is_image = true;
+					host->size = static_cast<std::uint64_t>(file->size());
+					host->file = std::move(file);
+
+					const auto size = static_cast<std::int64_t>(host->size);
+
+					std::array<std::uint8_t, section_body_size> body{};
+					std::memcpy(body.data() + section_body_size_offset, &size, sizeof(size));
+
+					const auto addr = st->objs.create_object(0, body.data(), body.size(),
+						std::move(host), prot_rw | prot_supervisor);
+
+					if (addr)
+					{
+						const auto handle =
+							st->sys_proc->handle_table().create_handle(addr, desired_access);
+
+						if (section_handle)
+							section_handle.write(handle);
+
+						THREAD_LOG_INFO("NtOpenSection('{}'): KnownDlls -> '{}' -> handle=0x{:X} "
+							"({} bytes)", name, path, handle, size);
+
+						return STATUS_SUCCESS;
+					}
+				}
+			}
+		}
+
 		THREAD_LOG_WARN("NtOpenSection('{}', access=0x{:X}): nothing here gives a section "
 			"that name", name, desired_access);
 
@@ -750,7 +802,9 @@ void modules::register_ntoskrnl_vm_ops(win_kernel_state& state, proc_module& mod
 
 			if (mem)
 			{
-				if (preferred)
+				// Preferred base honoring disabled for this analysis run so that kernel32 does
+				// not take 0x180000000 and the protection DLL can be mapped at its own base.
+				if (false && preferred)
 				{
 					addr_t at = preferred;
 					auto region = static_cast<std::size_t>(size);

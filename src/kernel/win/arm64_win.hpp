@@ -77,6 +77,11 @@ public:
 		cpu.reg(arm64::pstate, pstate | (kernel ? pstate_el1h : pstate_el0t));
 	}
 
+	[[nodiscard]] bool is_kernel_mode(vcpu& cpu) const override
+	{
+		return (cpu.reg<std::uint64_t>(arm64::pstate) & pstate_mode_mask) == pstate_el1h;
+	}
+
 	void init_thread_teb(thread& t, vcpu& cpu, addr_t teb_addr) override
 	{
 		t.set_reg(cpu, arm64::tpidr_el0, teb_addr);

@@ -60,7 +60,7 @@ public:
 	// ring, and the ring only moves between entries: a thread switch restores cs with the
 	// cpu stopped, and nothing inside a run loop leaves ring 3 -- syscall no longer can,
 	// and apply_context only ever writes a usermode cs.
-	void sync_syscall_enable(vcpu& cpu);
+	void sync_syscall_enable(vcpu& cpu) override;
 
 protected:
 	std::shared_ptr<vcpu> create_vcpu(std::size_t id) override;

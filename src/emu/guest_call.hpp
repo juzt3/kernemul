@@ -64,7 +64,11 @@ private:
 	{
 		std::call_once(once_, [&]
 		{
-			trampoline_ = cpu.curr_addr_space()->alloc(0x1000, prot_rx | prot_supervisor);
+			// The kernel's own space, not the calling one: a fresh user space starts its
+			// supervisor cursor at the kernel image base, so allocating there would land the
+			// trampoline on the loaded kernel. The kernel half is aliased into every space.
+			trampoline_ = cpu.emu()->default_addr_space()->alloc(0x1000,
+				prot_rx | prot_supervisor);
 
 			cpu.emu()->hook_code(trampoline_, trampoline_,
 				[](vcpu& c, addr_t, std::size_t) { c.stop(); });

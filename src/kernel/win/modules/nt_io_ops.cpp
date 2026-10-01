@@ -175,6 +175,32 @@ open_result open_device(vcpu& cpu, win_kernel_state& state, const addr_t device,
 	body.Size = static_cast<short>(sizeof(_FILE_OBJECT));
 	body.DeviceObject = reinterpret_cast<_DEVICE_OBJECT*>(static_cast<std::uintptr_t>(device));
 
+	// A driver's create routine reads the opened name off the file object, so an empty FileName
+	// with a null buffer dereferences through it. The name is put where the file object points.
+	const auto name_length = static_cast<std::uint16_t>(path.size() * sizeof(wchar_t));
+
+	if (name_length)
+	{
+		const auto name_buffer = state.pool.allocate(name_length + sizeof(wchar_t),
+			pool_tag("Name"), true);
+
+		if (name_buffer)
+		{
+			std::vector<std::uint8_t> name_bytes(name_length + sizeof(wchar_t), 0);
+
+			for (std::size_t i = 0; i < path.size(); ++i)
+			{
+				name_bytes[i * 2] = static_cast<std::uint8_t>(path[i]);
+			}
+
+			cpu.curr_addr_space()->write_mem(name_buffer, name_bytes.data(), name_bytes.size());
+
+			body.FileName.Length = name_length;
+			body.FileName.MaximumLength = static_cast<std::uint16_t>(name_length + sizeof(wchar_t));
+			body.FileName.Buffer = guest_ptr<char16_t>(name_buffer);
+		}
+	}
+
 	emu_object<_FILE_OBJECT>(*cpu.curr_addr_space(), file_object).write(body);
 
 	const auto result = emulator->dispatch_irp(cpu, {
